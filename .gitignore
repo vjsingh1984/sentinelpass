@@ -1,0 +1,39 @@
+# Rust
+/target/
+**/*.rs.bk
+*.pdb
+Cargo.lock
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Environment
+.env
+.env.local
+
+# Database
+*.db
+*.db-shm
+*.db-wal
+*.kdbx
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Native messaging (local dev)
+native-host/local/
+
+# Build artifacts
+*.o
+*.so
+*.dylib
+*.dll
+*.exe

@@ -1,0 +1,23 @@
+[package]
+name = "sentinelpass-cli"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[[bin]]
+name = "sentinelpass"
+path = "src/main.rs"
+
+[dependencies]
+sentinelpass-core = { path = "../sentinelpass-core" }
+clap = { workspace = true }
+tokio = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }

@@ -3,5 +3,7 @@
 pub mod native_messaging;
 pub mod ipc;
 pub mod autolock;
+pub mod vault_state;
 
 pub use native_messaging::{NativeMessagingHost, NativeMessage};
+pub use vault_state::{DaemonVault, VaultState, CredentialResponse};

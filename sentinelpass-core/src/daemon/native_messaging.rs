@@ -2,9 +2,17 @@
 
 use serde::{Deserialize, Serialize};
 use std::io::{self, Read, Write};
+use tracing::{info, error};
 
 /// Native messaging protocol version
 pub const PROTOCOL_VERSION: u32 = 1;
+
+/// Message types
+pub const MSG_GET_CREDENTIAL: &str = "get_credential";
+pub const MSG_CREDENTIAL_RESPONSE: &str = "credential_response";
+pub const MSG_SAVE_CREDENTIAL: &str = "save_credential";
+pub const MSG_CHECK_VAULT: &str = "check_vault_status";
+pub const MSG_VAULT_STATUS: &str = "vault_status";
 
 /// A native message from the browser extension
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -27,12 +35,15 @@ pub struct NativeResponse {
     pub request_id: String,
     pub success: bool,
     pub data: Option<CredentialData>,
+    pub error: Option<String>,
+    pub unlocked: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CredentialData {
     pub username: String,
     pub password: String,
+    pub title: Option<String>,
 }
 
 /// Native messaging host for communication with browser
@@ -48,13 +59,20 @@ impl NativeMessagingHost {
         // Read message from stdin
         let message = Self::read_message()?;
 
-        // Process message (placeholder)
+        info!("Received native message: type={}, domain={:?}",
+            message.msg_type, message.domain);
+
+        // For now, return error response (daemon integration will be added next)
         let response = NativeResponse {
             version: PROTOCOL_VERSION,
-            msg_type: "credential_response".to_string(),
-            request_id: message.request_id.unwrap_or_default(),
+            msg_type: format!("{}_response", message.msg_type),
+            request_id: message.request_id.unwrap_or_else(|| {
+                uuid::Uuid::new_v4().to_string()
+            }),
             success: false,
             data: None,
+            error: Some("Daemon integration not yet implemented".to_string()),
+            unlocked: None,
         };
 
         // Write response to stdout
@@ -70,6 +88,10 @@ impl NativeMessagingHost {
             .map_err(|e| format!("Failed to read length: {}", e))?;
 
         let length = u32::from_le_bytes(length_bytes) as usize;
+
+        if length == 0 || length > 1024 * 1024 { // Max 1MB
+            return Err("Invalid message length".to_string());
+        }
 
         let mut buffer = vec![0u8; length];
         io::stdin().read_exact(&mut buffer)
@@ -95,5 +117,52 @@ impl NativeMessagingHost {
             .map_err(|e| format!("Failed to flush: {}", e))?;
 
         Ok(())
+    }
+
+    /// Send error response
+    pub fn send_error(request_id: String, error_msg: &str) -> Result<(), String> {
+        let response = NativeResponse {
+            version: PROTOCOL_VERSION,
+            msg_type: MSG_CREDENTIAL_RESPONSE.to_string(),
+            request_id,
+            success: false,
+            data: None,
+            error: Some(error_msg.to_string()),
+            unlocked: None,
+        };
+        Self::write_response(&response)
+    }
+
+    /// Send success response with credential
+    pub fn send_credential(
+        request_id: String,
+        username: String,
+        password: String,
+        title: Option<String>,
+    ) -> Result<(), String> {
+        let response = NativeResponse {
+            version: PROTOCOL_VERSION,
+            msg_type: MSG_CREDENTIAL_RESPONSE.to_string(),
+            request_id,
+            success: true,
+            data: Some(CredentialData { username, password, title }),
+            error: None,
+            unlocked: None,
+        };
+        Self::write_response(&response)
+    }
+
+    /// Send vault status response
+    pub fn send_vault_status(request_id: String, unlocked: bool) -> Result<(), String> {
+        let response = NativeResponse {
+            version: PROTOCOL_VERSION,
+            msg_type: MSG_VAULT_STATUS.to_string(),
+            request_id,
+            success: true,
+            data: None,
+            error: None,
+            unlocked: Some(unlocked),
+        };
+        Self::write_response(&response)
     }
 }

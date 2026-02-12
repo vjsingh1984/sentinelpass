@@ -6,7 +6,18 @@
       "Bash(ls:*)",
       "Bash(gh:*)",
       "Bash(git init:*)",
-      "Bash(git add:*)"
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git branch:*)",
+      "Bash(git checkout:*)",
+      "Bash(/mnt/c/Users/vjsin/scoop/apps/gh/current/gh.exe repo create vjsingh1984/sentinelpass --public --source=. --remote=upstream --push)",
+      "Bash(wsl which:*)",
+      "Bash(wsl ls:*)",
+      "Bash(wsl gh repo create:*)",
+      "Bash(git push:*)",
+      "Bash(wsl git push:*)",
+      "Bash(wsl gh repo edit:*)",
+      "Bash(wsl gh api:*)"
     ]
   }
 }

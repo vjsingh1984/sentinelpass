@@ -1,5 +1,5 @@
 use anyhow::Result;
-use pm_core::daemon::NativeMessagingHost;
+use sentinelpass_core::daemon::NativeMessagingHost;
 use tracing::{error, info};
 use tracing_subscriber::FmtSubscriber;
 
@@ -14,7 +14,7 @@ fn main() -> Result<()> {
     tracing::subscriber::set_global_default(subscriber)
         .expect("setting default subscriber failed");
 
-    info!("Starting Password Manager Native Messaging Host v{}", VERSION);
+    info!("Starting SentinelPass Native Messaging Host v{}", VERSION);
 
     // Run the native messaging host
     let mut host = NativeMessagingHost::new();

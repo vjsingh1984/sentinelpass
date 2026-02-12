@@ -20,6 +20,7 @@ pub use platform::{
     get_data_dir, get_config_dir, get_default_vault_path, ensure_data_dir, ensure_config_dir,
     get_binary_name, get_platform, get_arch,
 };
+pub use vault::{VaultManager, Entry, EntrySummary};
 
 // Re-export common types
 use thiserror::Error;

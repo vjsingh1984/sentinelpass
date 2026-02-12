@@ -21,3 +21,7 @@ tokio = { workspace = true }
 anyhow = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
+chrono = { workspace = true }
+rpassword = { workspace = true }
+dialoguer = { workspace = true }
+home = { workspace = true }

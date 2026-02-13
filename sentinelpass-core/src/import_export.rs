@@ -1,0 +1,305 @@
+//! Import/export functionality for password vault
+
+use crate::{VaultManager, Entry, Result, PasswordManagerError};
+use serde::{Deserialize, Serialize};
+use std::io::{BufRead, BufReader, Write};
+use std::path::Path;
+
+/// Export format for vault data
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExportEntry {
+    pub title: String,
+    pub username: String,
+    pub password: String,
+    pub url: Option<String>,
+    pub notes: Option<String>,
+    pub created_at: String,
+    pub modified_at: String,
+    pub favorite: bool,
+}
+
+impl From<Entry> for ExportEntry {
+    fn from(entry: Entry) -> Self {
+        Self {
+            title: entry.title,
+            username: entry.username,
+            password: entry.password,
+            url: entry.url,
+            notes: entry.notes,
+            created_at: entry.created_at.to_rfc3339(),
+            modified_at: entry.modified_at.to_rfc3339(),
+            favorite: entry.favorite,
+        }
+    }
+}
+
+/// Export vault to JSON format
+pub fn export_to_json(vault: &VaultManager, output: &Path) -> Result<()> {
+    if !vault.is_unlocked() {
+        return Err(PasswordManagerError::VaultLocked);
+    }
+
+    let entries = vault.list_entries()?;
+    let mut export_entries = Vec::new();
+
+    for summary in entries {
+        match vault.get_entry(summary.entry_id) {
+            Ok(entry) => {
+                export_entries.push(ExportEntry::from(entry));
+            }
+            Err(e) => {
+                return Err(PasswordManagerError::Database(format!(
+                    "Failed to export entry {}: {}",
+                    summary.entry_id, e
+                )));
+            }
+        }
+    }
+
+    let json = serde_json::to_string_pretty(&export_entries)
+        .map_err(|e| PasswordManagerError::Database(e.to_string()))?;
+
+    let mut file = std::fs::File::create(output)
+        .map_err(|e| PasswordManagerError::Database(format!("Failed to create export file: {}", e)))?;
+
+    file.write_all(json.as_bytes())
+        .map_err(|e| PasswordManagerError::Database(format!("Failed to write export: {}", e)))?;
+
+    Ok(())
+}
+
+/// Export vault to CSV format
+pub fn export_to_csv(vault: &VaultManager, output: &Path) -> Result<()> {
+    if !vault.is_unlocked() {
+        return Err(PasswordManagerError::VaultLocked);
+    }
+
+    let entries = vault.list_entries()?;
+    let mut file = std::fs::File::create(output)
+        .map_err(|e| PasswordManagerError::Database(format!("Failed to create export file: {}", e)))?;
+
+    // Write CSV header
+    writeln!(
+        file,
+        "Title,Username,Password,URL,Notes,Created At,Modified At,Favorite"
+    )
+    .map_err(|e| PasswordManagerError::Database(format!("Failed to write CSV: {}", e)))?;
+
+    for summary in entries {
+        let entry = vault.get_entry(summary.entry_id)?;
+
+        // Escape CSV fields
+        let escape = |s: &str| {
+            let needs_quotes = s.contains(',') || s.contains('"') || s.contains('\n');
+            let escaped = s.replace('"', "\"\"");
+            if needs_quotes {
+                format!("\"{}\"", escaped)
+            } else {
+                escaped.to_string()
+            }
+        };
+
+        writeln!(
+            file,
+            "{},{},{},{},{},{},{},{}",
+            escape(&entry.title),
+            escape(&entry.username),
+            escape(&entry.password),
+            entry.url.as_ref().map(|s| escape(s)).unwrap_or_else(|| "".to_string()),
+            entry.notes.as_ref().map(|s| escape(s)).unwrap_or_else(|| "".to_string()),
+            escape(&entry.created_at.to_rfc3339()),
+            escape(&entry.modified_at.to_rfc3339()),
+            entry.favorite
+        )
+        .map_err(|e| PasswordManagerError::Database(format!("Failed to write CSV: {}", e)))?;
+    }
+
+    Ok(())
+}
+
+/// Import entries from JSON format
+pub fn import_from_json(vault: &mut VaultManager, input: &Path) -> Result<usize> {
+    if !vault.is_unlocked() {
+        return Err(PasswordManagerError::VaultLocked);
+    }
+
+    let file = std::fs::File::open(input)
+        .map_err(|e| PasswordManagerError::Database(format!("Failed to open import file: {}", e)))?;
+
+    let reader = BufReader::new(file);
+    let export_entries: Vec<ExportEntry> = serde_json::from_reader(reader)
+        .map_err(|e| PasswordManagerError::Database(format!("Failed to parse JSON: {}", e)))?;
+
+    let mut imported = 0;
+    for export_entry in export_entries {
+        let entry = Entry {
+            entry_id: None,
+            title: export_entry.title,
+            username: export_entry.username,
+            password: export_entry.password,
+            url: export_entry.url,
+            notes: export_entry.notes,
+            created_at: export_entry.created_at.parse()
+                .map_err(|e| PasswordManagerError::Database(format!("Invalid created_at date: {}", e)))?,
+            modified_at: export_entry.modified_at.parse()
+                .map_err(|e| PasswordManagerError::Database(format!("Invalid modified_at date: {}", e)))?,
+            favorite: export_entry.favorite,
+        };
+
+        vault.add_entry(&entry)?;
+        imported += 1;
+    }
+
+    Ok(imported)
+}
+
+/// Import entries from CSV format
+pub fn import_from_csv(vault: &mut VaultManager, input: &Path) -> Result<usize> {
+    if !vault.is_unlocked() {
+        return Err(PasswordManagerError::VaultLocked);
+    }
+
+    let file = std::fs::File::open(input)
+        .map_err(|e| PasswordManagerError::Database(format!("Failed to open import file: {}", e)))?;
+
+    let reader = BufReader::new(file);
+    let mut lines = reader.lines();
+
+    // Skip header line
+    let _header = lines.next()
+        .ok_or_else(|| PasswordManagerError::Database("Empty CSV file".to_string()))?
+        .map_err(|e| PasswordManagerError::Database(format!("Failed to read CSV header: {}", e)))?;
+
+    let mut imported = 0;
+
+    for (line_num, line_result) in lines.enumerate().take(10000) {
+        let line = line_result
+            .map_err(|e| PasswordManagerError::Database(format!("Failed to read line {}: {}", line_num + 2, e)))?;
+
+        if line.trim().is_empty() {
+            continue;
+        }
+
+        let record = parse_csv_line(&line)
+            .map_err(|e| PasswordManagerError::Database(format!("Failed to parse line {}: {}", line_num + 2, e)))?;
+
+        let empty = &String::new();
+        let entry = Entry {
+            entry_id: None,
+            title: record.first().unwrap_or(empty).to_string(),
+            username: record.get(1).unwrap_or(empty).to_string(),
+            password: record.get(2).unwrap_or(empty).to_string(),
+            url: {
+                let url_str = record.get(3).unwrap_or(empty);
+                if url_str.is_empty() { None } else { Some(url_str.to_string()) }
+            },
+            notes: {
+                let notes_str = record.get(4).unwrap_or(empty);
+                if notes_str.is_empty() { None } else { Some(notes_str.to_string()) }
+            },
+            created_at: chrono::Utc::now(),
+            modified_at: chrono::Utc::now(),
+            favorite: record.get(7).map(|s| s == "true").unwrap_or(false),
+        };
+
+        vault.add_entry(&entry)?;
+        imported += 1;
+    }
+
+    Ok(imported)
+}
+
+/// Parse a CSV line, handling quoted fields
+fn parse_csv_line(line: &str) -> Result<Vec<String>> {
+    let mut fields = Vec::new();
+    let mut current = String::new();
+    let mut in_quotes = false;
+    let mut chars = line.chars().peekable();
+
+    while let Some(c) = chars.next() {
+        match c {
+            '"' => {
+                if in_quotes {
+                    // Check for escaped quote ("")
+                    if chars.peek() == Some(&'"') {
+                        current.push('"');
+                        chars.next();
+                    } else {
+                        in_quotes = false;
+                    }
+                } else {
+                    in_quotes = true;
+                }
+            }
+            ',' if !in_quotes => {
+                fields.push(current.clone());
+                current.clear();
+            }
+            _ => {
+                current.push(c);
+            }
+        }
+    }
+
+    fields.push(current);
+
+    // Unescape quoted fields
+    let unescaped: Vec<String> = fields.into_iter()
+        .map(|s| s.replace("\"\"", "\""))
+        .collect();
+
+    Ok(unescaped)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_csv_simple() {
+        let line = r#"title,username,password,url,notes,2024-01-01T00:00:00Z,2024-01-01T00:00:00Z,false"#;
+        let result = parse_csv_line(line).unwrap();
+        assert_eq!(result.len(), 8);
+        assert_eq!(result[0], "title");
+        assert_eq!(result[1], "username");
+    }
+
+    #[test]
+    fn test_parse_csv_with_comma() {
+        let line = r#""Last, First",user,pass,"https://example.com/path?param=value",note,2024-01-01T00:00:00Z,2024-01-01T00:00:00Z,false"#;
+        let result = parse_csv_line(line).unwrap();
+        assert_eq!(result.len(), 8);
+        assert_eq!(result[0], "Last, First");
+        assert_eq!(result[3], "https://example.com/path?param=value");
+    }
+
+    #[test]
+    fn test_parse_csv_with_quotes() {
+        let line = r#"title,user,"pass""word",url,note,2024-01-01T00:00:00Z,2024-01-01T00:00:00Z,false"#;
+        let result = parse_csv_line(line).unwrap();
+        assert_eq!(result.len(), 8);
+        assert_eq!(result[2], "pass\"word");
+    }
+
+    #[test]
+    fn test_export_entry_from_entry() {
+        use chrono::TimeZone;
+
+        let entry = Entry {
+            entry_id: Some(1),
+            title: "Test".to_string(),
+            username: "user@example.com".to_string(),
+            password: "password123".to_string(),
+            url: Some("https://example.com".to_string()),
+            notes: Some("Test notes".to_string()),
+            created_at: chrono::Utc.ymd_opt(2024, 1, 1).unwrap().and_hms_opt(0, 0, 0).unwrap(),
+            modified_at: chrono::Utc.ymd_opt(2024, 1, 1).unwrap().and_hms_opt(0, 0, 0).unwrap(),
+            favorite: true,
+        };
+
+        let export = ExportEntry::from(entry);
+        assert_eq!(export.title, "Test");
+        assert_eq!(export.username, "user@example.com");
+        assert_eq!(export.favorite, true);
+    }
+}

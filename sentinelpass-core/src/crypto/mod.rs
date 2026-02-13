@@ -5,16 +5,22 @@
 //! - AES-256-GCM encryption/decryption
 //! - Secure key management
 //! - Zeroization utilities
+//! - Password generation
+//! - Password strength analysis
 
 pub mod kdf;
 pub mod cipher;
 pub mod keyring;
 pub mod zero;
+pub mod password;
+pub mod strength;
 
 pub use kdf::{KdfParams, derive_master_key, verify_master_password};
 pub use cipher::{EncryptedEntry, encrypt_entry, decrypt_entry, DataEncryptionKey};
 pub use keyring::{MasterKey, WrappedKey, KeyHierarchy};
 pub use zero::{SecureBuffer, zeroize_bytes};
+pub use password::{generate_password, generate_simple_password, generate_passphrase, PasswordGeneratorConfig, CharacterSets};
+pub use strength::{analyze_password, calculate_shannon_entropy, PasswordAnalysis, PasswordStrength};
 
 use thiserror::Error;
 

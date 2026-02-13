@@ -7,3 +7,4 @@ pub mod vault_state;
 
 pub use native_messaging::{NativeMessagingHost, NativeMessage};
 pub use vault_state::{DaemonVault, VaultState, CredentialResponse};
+pub use ipc::{IpcServer, IpcClient, IpcMessage, default_ipc_socket_path};

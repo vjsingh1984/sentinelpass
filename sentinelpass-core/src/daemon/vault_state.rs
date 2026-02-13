@@ -28,7 +28,7 @@ pub struct DaemonVault {
 impl DaemonVault {
     /// Create a new daemon vault manager
     pub fn new(vault_path: Option<PathBuf>, inactivity_timeout_sec: u64) -> Result<Self> {
-        let vault_path = vault_path.unwrap_or_else(|| get_default_vault_path());
+        let vault_path = vault_path.unwrap_or_else(get_default_vault_path);
 
         if !vault_path.exists() {
             return Err(PasswordManagerError::NotFound(format!("No vault found at {:?}", vault_path)));

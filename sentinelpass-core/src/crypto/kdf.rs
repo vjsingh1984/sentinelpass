@@ -179,25 +179,26 @@ mod tests {
 
     #[test]
     fn test_kdf_params_validation() {
-        let mut params = KdfParams::default();
-
         // Test too low memory
-        params.mem_cost = 1000;
+        let params = KdfParams { mem_cost: 1000, ..Default::default() };
         assert!(params.validate().is_err());
 
         // Test too low time
-        params.mem_cost = 262_144;
-        params.time_cost = 0;
+        let params = KdfParams { mem_cost: 262_144, time_cost: 0, ..Default::default() };
         assert!(params.validate().is_err());
 
         // Test too low parallelism
-        params.time_cost = 3;
-        params.parallelism = 0;
+        let params = KdfParams { mem_cost: 262_144, time_cost: 3, parallelism: 0, ..Default::default() };
         assert!(params.validate().is_err());
 
         // Test too short output
-        params.parallelism = 4;
-        params.output_length = 16;
+        let params = KdfParams {
+            mem_cost: 262_144,
+            time_cost: 3,
+            parallelism: 4,
+            output_length: 16,
+            ..Default::default()
+        };
         assert!(params.validate().is_err());
     }
 

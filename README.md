@@ -1,4 +1,4 @@
-# Password Manager
+# SentinelPass
 
 A secure, local-first password manager with browser autofill support.
 
@@ -32,75 +32,92 @@ A secure, local-first password manager with browser autofill support.
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/passwordmanager.git
-cd passwordmanager
+git clone https://github.com/vjsingh1984/sentinelpass.git
+cd sentinelpass
 
 # Build the project
-just build
+cargo build --release
 
-# Install the native messaging host
-just install-host-windows  # Windows
-# or
-just install-host-unix     # macOS/Linux
+# Install (Windows - run PowerShell as Administrator)
+.\installation\install.ps1
+
+# Install (macOS/Linux)
+sudo ./installation/install.sh
 ```
 
 ### Initial Setup
 
 ```bash
 # Create a new vault
-pm-cli init
-
-# Unlock your vault
-pm-cli unlock
+sentinelpass init
 
 # Add a credential
-pm-cli add --title "GitHub" --username "user@example.com" --url "https://github.com"
+sentinelpass add --title "GitHub" --username "user@example.com" --url "https://github.com"
 
 # List all credentials
-pm-cli list
+sentinelpass list
 
 # Search credentials
-pm-cli search github
+sentinelpass search github
 ```
+
+### Running the Daemon
+
+The daemon must be running for browser autofill to work:
+
+```bash
+sentinelpass-daemon
+```
+
+The daemon will:
+- Prompt for your master password to unlock the vault
+- Start the IPC server for communication with the browser extension
+- Auto-lock after 5 minutes of inactivity (configurable)
 
 ### Browser Extension
 
-1. Open Chrome and navigate to `chrome://extensions/`
-2. Enable "Developer mode"
-3. Click "Load unpacked"
-4. Select the `browser-extension/chrome/` directory
-5. The extension is now ready to use
+1. Start the daemon: `sentinelpass-daemon`
+2. Open Chrome and navigate to `chrome://extensions/`
+3. Enable "Developer mode"
+4. Click "Load unpacked"
+5. Select the `browser-extension/chrome/` directory
+6. The extension is now ready to use
+
+**Using Autofill:**
+- Navigate to a login page
+- Click the autofill button (🔒) that appears next to password fields
+- Or use the keyboard shortcut: `Ctrl+Shift+U` (Windows/Linux) or `Cmd+Shift+U` (macOS)
+- Credentials will be filled automatically
 
 ## Development
 
 ```bash
 # Run tests
-just test
+cargo test --workspace
 
 # Run Clippy
-just clippy
+cargo clippy --workspace --all-targets -- -D warnings
 
 # Format code
-just fmt
+cargo fmt --all
 
 # Run the daemon
-just daemon
+cargo run --bin sentinelpass-daemon
 
 # Build everything
-just build
+cargo build --workspace
 ```
 
 ## Project Structure
 
 ```
-passwordmanager/
-├── pm-core/              # Core library (crypto, database, IPC)
-├── pm-cli/               # Command-line interface
-├── pm-daemon/            # Background service for vault management
-├── pm-host/              # Native messaging host for browser extension
-├── browser-extension/    # Chrome extension
-├── migrations/           # Database migrations
-└── installation/         # Installation scripts
+sentinelpass/
+├── sentinelpass-core/     # Core library (crypto, database, IPC)
+├── sentinelpass-cli/      # Command-line interface
+├── sentinelpass-daemon/   # Background service for vault management
+├── sentinelpass-host/     # Native messaging host for browser extension
+├── browser-extension/     # Chrome extension
+└── installation/          # Installation scripts
 ```
 
 ## Security Architecture
@@ -109,8 +126,35 @@ See [SECURITY_ARCHITECTURE.md](SECURITY_ARCHITECTURE.md) for detailed security d
 
 ## License
 
-MIT License - see LICENSE file for details
+Apache-2.0 License - see LICENSE file for details
 
 ## Contributing
 
 Contributions are welcome! Please read SECURITY_ARCHITECTURE.md before making changes to security-critical code.
+
+## Architecture
+
+```
+┌─────────────────┐
+│  Chrome Browser │
+│                 │
+│  ┌───────────┐  │
+│  │ Extension │  │
+│  └─────┬─────┘  │
+└────────┼────────┘
+         │ native messaging
+         ▼
+┌─────────────────────────┐
+│   sentinelpass-host     │
+│  (Native Messaging)     │
+└────────┬────────────────┘
+         │ IPC (Unix socket / named pipe)
+         ▼
+┌─────────────────────────┐
+│  sentinelpass-daemon    │
+│   └── DaemonVault       │
+│       └── VaultManager  │
+│           ├── Crypto    │
+│           └── Database  │
+└─────────────────────────┘
+```

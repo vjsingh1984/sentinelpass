@@ -8,6 +8,7 @@ pub mod database;
 pub mod daemon;
 pub mod platform;
 pub mod vault;
+pub mod import_export;
 
 pub use crypto::{
     KdfParams, MasterKey, DataEncryptionKey, EncryptedEntry,
@@ -21,6 +22,7 @@ pub use platform::{
     get_binary_name, get_platform, get_arch,
 };
 pub use vault::{VaultManager, Entry, EntrySummary};
+pub use import_export::{export_to_json, export_to_csv, import_from_json, import_from_csv, ExportEntry};
 
 // Re-export common types
 use thiserror::Error;

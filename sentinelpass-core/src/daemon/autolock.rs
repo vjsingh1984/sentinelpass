@@ -63,7 +63,7 @@ mod tests {
 
     #[test]
     fn test_auto_lock_timeout() {
-        let mut manager = AutoLockManager::new(Duration::from_millis(100));
+        let manager = AutoLockManager::new(Duration::from_millis(100));
 
         // Should not lock immediately
         assert!(!manager.should_lock());

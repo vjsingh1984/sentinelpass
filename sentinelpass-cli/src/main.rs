@@ -1,7 +1,7 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use rpassword::prompt_password;
-use sentinelpass_core::{VaultManager, Entry as VaultEntry, EntrySummary};
+use sentinelpass_core::{VaultManager, Entry as VaultEntry, EntrySummary, crypto::{generate_password, PasswordGeneratorConfig, analyze_password}, export_to_json, export_to_csv, import_from_json, import_from_csv};
 use std::path::PathBuf;
 use tracing::{Level, error};
 use tracing_subscriber::FmtSubscriber;
@@ -90,6 +90,99 @@ enum Commands {
         /// Skip confirmation
         #[arg(long)]
         force: bool,
+    },
+
+    /// Edit an existing entry
+    Edit {
+        /// Entry ID
+        #[arg(long)]
+        id: i64,
+
+        /// New title
+        #[arg(long)]
+        title: Option<String>,
+
+        /// New username
+        #[arg(long)]
+        username: Option<String>,
+
+        /// New password (will prompt if --new-password flag is set without value)
+        #[arg(long)]
+        password: Option<String>,
+
+        /// Prompt for a new password
+        #[arg(long)]
+        new_password: bool,
+
+        /// New URL
+        #[arg(long)]
+        url: Option<String>,
+
+        /// New notes
+        #[arg(long)]
+        notes: Option<String>,
+
+        /// Toggle favorite status
+        #[arg(long)]
+        favorite: Option<bool>,
+    },
+
+    /// Generate a secure random password
+    Generate {
+        /// Password length (default: 16)
+        #[arg(short, long, default_value = "16")]
+        length: usize,
+
+        /// Include lowercase letters (default: true)
+        #[arg(long, default_value = "true")]
+        lowercase: bool,
+
+        /// Include uppercase letters (default: true)
+        #[arg(long, default_value = "true")]
+        uppercase: bool,
+
+        /// Include digits (default: true)
+        #[arg(long, default_value = "true")]
+        digits: bool,
+
+        /// Include symbols (default: true)
+        #[arg(long, default_value = "true")]
+        symbols: bool,
+
+        /// Exclude ambiguous characters like l, 1, I, O, 0
+        #[arg(long, default_value = "true")]
+        exclude_ambiguous: bool,
+
+        /// Number of passwords to generate
+        #[arg(short, long, default_value = "1")]
+        count: usize,
+    },
+
+    /// Check password strength
+    Check {
+        /// Password to check (will prompt if not provided)
+        #[arg(short, long)]
+        password: Option<String>,
+    },
+
+    /// Export vault to file
+    Export {
+        /// Output file path
+        output: PathBuf,
+
+        /// Export format (json or csv)
+        #[arg(short, long, default_value = "json")]
+        format: String,
+    },
+
+    /// Import entries from file
+    Import {
+        /// Input file path
+        input: PathBuf,
+
+        /// Import format (json or csv)
+        #[arg(short, long, default_value = "json")]
+        format: String,
     },
 }
 
@@ -240,7 +333,7 @@ fn main() -> Result<()> {
                         println!("No entries found. Add one with 'sentinelpass add'");
                     } else {
                         println!();
-                        println!("{:<5} {:<30} {:<30} {}", "ID", "Title", "Username", "Fav");
+                        println!("{:<5} {:<30} {:<30} Fav", "ID", "Title", "Username");
                         println!("{}", "-".repeat(80));
                         for entry in &entries {
                             let fav = if entry.favorite { "⭐" } else { "" };
@@ -254,12 +347,9 @@ fn main() -> Result<()> {
                             println!("WARNING: Showing passwords (be careful of shoulder surfing!)");
                             println!();
                             for summary in &entries {
-                                match vault.get_entry(summary.entry_id) {
-                                    Ok(entry) => {
-                                        println!("--- ID {} ---", summary.entry_id);
-                                        println!("Password: {}", entry.password);
-                                    }
-                                    Err(_) => {}
+                                if let Ok(entry) = vault.get_entry(summary.entry_id) {
+                                    println!("--- ID {} ---", summary.entry_id);
+                                    println!("Password: {}", entry.password);
                                 }
                             }
                         }
@@ -351,16 +441,213 @@ fn main() -> Result<()> {
             }
         }
 
-        Commands::Delete { id, force: _ } => {
+        Commands::Delete { id, force } => {
             let vault_path = get_vault_path(&cli, false);
 
             if !vault_path.exists() {
                 anyhow::bail!("No vault found. Use 'sentinelpass init' to create a new vault");
             }
 
-            // Note: Delete functionality not yet implemented in VaultManager
-            println!("Delete functionality will be implemented in the next phase");
-            println!("Entry ID to delete: {}", id);
+            let master_password = prompt_password("Enter master password: ")?;
+            let master_password_bytes = master_password.as_bytes();
+
+            let vault = VaultManager::open(&vault_path, master_password_bytes)?;
+
+            // Get entry details for confirmation
+            let entry = vault.get_entry(id)?;
+
+            if !force {
+                println!("Entry to delete:");
+                println!("  Title: {}", entry.title);
+                println!("  Username: {}", entry.username);
+                println!();
+                print!("Are you sure you want to delete this entry? [y/N]: ");
+                use std::io::Write;
+                std::io::stdout().flush()?;
+                let mut confirmation = String::new();
+                std::io::stdin().read_line(&mut confirmation)?;
+                if !confirmation.trim().to_lowercase().starts_with('y') {
+                    println!("Delete cancelled");
+                    return Ok(());
+                }
+            }
+
+            vault.delete_entry(id)?;
+            println!("Entry deleted successfully");
+        }
+
+        Commands::Edit { id, ref title, ref username, ref password, new_password, ref url, ref notes, favorite } => {
+            let vault_path = get_vault_path(&cli, false);
+
+            if !vault_path.exists() {
+                anyhow::bail!("No vault found. Use 'sentinelpass init' to create a new vault");
+            }
+
+            let master_password = prompt_password("Enter master password: ")?;
+            let master_password_bytes = master_password.as_bytes();
+
+            let vault = VaultManager::open(&vault_path, master_password_bytes)?;
+
+            // Get existing entry
+            let existing_entry = vault.get_entry(id)?;
+
+            // Determine new values (use existing if not provided)
+            let new_title = title.as_ref().map(|x| x.as_str()).unwrap_or_else(|| existing_entry.title.as_str()).to_string();
+            let new_username = username.as_ref().map(|x| x.as_str()).unwrap_or_else(|| existing_entry.username.as_str()).to_string();
+
+            // Handle password
+            let new_password = if new_password {
+                prompt_password("Enter new password: ")?
+            } else {
+                password.as_ref().map(|x| x.as_str()).unwrap_or_else(|| existing_entry.password.as_str()).to_string()
+            };
+
+            let new_url = url.clone().or_else(|| existing_entry.url.clone());
+            let new_notes = notes.clone().or_else(|| existing_entry.notes.clone());
+            let new_favorite = favorite.unwrap_or(existing_entry.favorite);
+
+            // Create updated entry
+            use chrono::Utc;
+            let updated_entry = VaultEntry {
+                entry_id: Some(id),
+                title: new_title,
+                username: new_username,
+                password: new_password,
+                url: new_url,
+                notes: new_notes,
+                created_at: existing_entry.created_at,
+                modified_at: Utc::now(),
+                favorite: new_favorite,
+            };
+
+            vault.update_entry(id, &updated_entry)?;
+            println!("Entry updated successfully");
+        }
+
+        Commands::Generate { length, lowercase, uppercase, digits, symbols, exclude_ambiguous, count } => {
+            let config = PasswordGeneratorConfig {
+                length,
+                include_lowercase: lowercase,
+                include_uppercase: uppercase,
+                include_digits: digits,
+                include_symbols: symbols,
+                exclude_ambiguous,
+            };
+
+            // Validate config
+            if let Err(e) = config.validate() {
+                anyhow::bail!("Invalid password generator configuration: {}", e);
+            }
+
+            println!();
+            println!("Generated passwords:");
+            println!();
+
+            for i in 0..count {
+                let password = generate_password(&config)?;
+                println!("  {}: {}", i + 1, password);
+            }
+
+            println!();
+        }
+
+        Commands::Check { password } => {
+            let password = password.map(Ok).unwrap_or_else(|| {
+                prompt_password("Enter password to check: ")
+            })?;
+
+            let analysis = analyze_password(&password)?;
+
+            println!();
+            println!("Password Analysis");
+            println!("================");
+            println!();
+
+            // Print strength with color
+            let color = analysis.strength.color_code();
+            let reset = "\x1b[0m";
+            println!("Strength:  {}{}{}", color, analysis.strength.as_str(), reset);
+            println!("Score:     {}/5", analysis.strength.score());
+            println!();
+
+            println!("Details:");
+            println!("  Length:       {} characters", analysis.length);
+            println!("  Entropy:      {:.2} bits", analysis.entropy_bits);
+            println!("  Crack time:   {}", analysis.crack_time_human());
+            println!();
+
+            println!("Character types:");
+            println!("  Lowercase:    {}", if analysis.has_lowercase { "✓" } else { "✗" });
+            println!("  Uppercase:    {}", if analysis.has_uppercase { "✓" } else { "✗" });
+            println!("  Digits:       {}", if analysis.has_digits { "✓" } else { "✗" });
+            println!("  Symbols:      {}", if analysis.has_symbols { "✓" } else { "✗" });
+            println!();
+
+            if !analysis.warnings.is_empty() {
+                println!("Warnings:");
+                for warning in &analysis.warnings {
+                    println!("  ⚠ {}", warning);
+                }
+                println!();
+            }
+
+            if !analysis.suggestions.is_empty() {
+                println!("Suggestions:");
+                for suggestion in &analysis.suggestions {
+                    println!("  → {}", suggestion);
+                }
+                println!();
+            }
+        }
+
+        Commands::Export { ref output, ref format } => {
+            let vault_path = get_vault_path(&cli, false);
+
+            if !vault_path.exists() {
+                anyhow::bail!("No vault found. Use 'sentinelpass init' to create a new vault");
+            }
+
+            let master_password = prompt_password("Enter master password: ")?;
+            let master_password_bytes = master_password.as_bytes();
+
+            let vault = VaultManager::open(&vault_path, master_password_bytes)?;
+
+            match format.as_str() {
+                "json" => {
+                    export_to_json(&vault, output)?;
+                    println!("Exported {} entries to {}", vault.list_entries()?.len(), output.display());
+                }
+                "csv" => {
+                    export_to_csv(&vault, output)?;
+                    println!("Exported {} entries to {}", vault.list_entries()?.len(), output.display());
+                }
+                _ => anyhow::bail!("Unsupported format: {}. Use 'json' or 'csv'", format),
+            }
+        }
+
+        Commands::Import { ref input, ref format } => {
+            let vault_path = get_vault_path(&cli, false);
+
+            if !vault_path.exists() {
+                anyhow::bail!("No vault found. Use 'sentinelpass init' to create a new vault");
+            }
+
+            let master_password = prompt_password("Enter master password: ")?;
+            let master_password_bytes = master_password.as_bytes();
+
+            let mut vault = VaultManager::open(&vault_path, master_password_bytes)?;
+
+            match format.as_str() {
+                "json" => {
+                    let count = import_from_json(&mut vault, input)?;
+                    println!("Imported {} entries from {}", count, input.display());
+                }
+                "csv" => {
+                    let count = import_from_csv(&mut vault, input)?;
+                    println!("Imported {} entries from {}", count, input.display());
+                }
+                _ => anyhow::bail!("Unsupported format: {}. Use 'json' or 'csv'", format),
+            }
         }
     }
 

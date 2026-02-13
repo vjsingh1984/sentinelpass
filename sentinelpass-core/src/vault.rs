@@ -244,10 +244,10 @@ impl VaultManager {
         let db = self.db.lock().map_err(|_| PasswordManagerError::Database("Failed to lock database".to_string()))?;
 
         let mut stmt = db.conn().prepare(
-            "SELECT entry_id, title, username, favorite FROM entries ORDER BY title"
+            "SELECT entry_id, title, username, favorite FROM entries"
         ).map_err(|e| PasswordManagerError::Database(e.to_string()))?;
 
-        let entries = stmt.query_map([], |row| {
+        let mut entries = stmt.query_map([], |row| {
             let entry_id: i64 = row.get(0)?;
             let title_blob: Vec<u8> = row.get(1)?;
             let username_blob: Vec<u8> = row.get(2)?;
@@ -278,7 +278,107 @@ impl VaultManager {
         .collect::<std::result::Result<Vec<_>, _>>()
         .map_err(|e| PasswordManagerError::Database(e.to_string()))?;
 
+        // Sort entries alphabetically by title
+        entries.sort_by(|a, b| a.title.cmp(&b.title));
+
         Ok(entries)
+    }
+
+    /// Delete an entry
+    pub fn delete_entry(&self, entry_id: i64) -> Result<()> {
+        if !self.is_unlocked() {
+            return Err(PasswordManagerError::VaultLocked);
+        }
+
+        let db = self.db.lock().map_err(|_| PasswordManagerError::Database("Failed to lock database".to_string()))?;
+
+        // First, delete associated domain mappings
+        db.conn().execute(
+            "DELETE FROM domain_mappings WHERE entry_id = ?1",
+            [entry_id],
+        ).map_err(|e| PasswordManagerError::Database(e.to_string()))?;
+
+        // Then delete the entry
+        let rows_affected = db.conn().execute(
+            "DELETE FROM entries WHERE entry_id = ?1",
+            [entry_id],
+        ).map_err(|e| PasswordManagerError::Database(e.to_string()))?;
+
+        if rows_affected == 0 {
+            return Err(PasswordManagerError::NotFound(format!("Entry {}", entry_id)));
+        }
+
+        Ok(())
+    }
+
+    /// Update an existing entry
+    pub fn update_entry(&self, entry_id: i64, entry: &Entry) -> Result<()> {
+        if !self.is_unlocked() {
+            return Err(PasswordManagerError::VaultLocked);
+        }
+
+        let dek = self.key_hierarchy.dek()?;
+        let db = self.db.lock().map_err(|_| PasswordManagerError::Database("Failed to lock database".to_string()))?;
+
+        // Encrypt the entry data
+        let title_encrypted = encrypt_string(dek, &entry.title)?;
+        let username_encrypted = encrypt_string(dek, &entry.username)?;
+        let password_encrypted = encrypt_string(dek, &entry.password)?;
+
+        let url_encrypted = entry.url.as_ref()
+            .map(|u| encrypt_string(dek, u))
+            .transpose()?;
+
+        let notes_encrypted = entry.notes.as_ref()
+            .map(|n| encrypt_string(dek, n))
+            .transpose()?;
+
+        // Serialize encrypted entries
+        let title_blob = bincode::serialize(&title_encrypted)
+            .map_err(|e| PasswordManagerError::Database(e.to_string()))?;
+        let username_blob = bincode::serialize(&username_encrypted)
+            .map_err(|e| PasswordManagerError::Database(e.to_string()))?;
+        let password_blob = bincode::serialize(&password_encrypted)
+            .map_err(|e| PasswordManagerError::Database(e.to_string()))?;
+        let url_blob = url_encrypted.as_ref()
+            .map(|e| bincode::serialize(e).map_err(|e| PasswordManagerError::Database(e.to_string())))
+            .transpose()?;
+        let notes_blob = notes_encrypted.as_ref()
+            .map(|e| bincode::serialize(e).map_err(|e| PasswordManagerError::Database(e.to_string())))
+            .transpose()?;
+
+        let nonce_blob = bincode::serialize(&title_encrypted.nonce)
+            .map_err(|e| PasswordManagerError::Database(e.to_string()))?;
+        let auth_tag_blob = bincode::serialize(&title_encrypted.auth_tag)
+            .map_err(|e| PasswordManagerError::Database(e.to_string()))?;
+
+        let now = Utc::now().timestamp();
+
+        // Update the entry
+        let rows_affected = db.conn().execute(
+            "UPDATE entries
+             SET title = ?1, username = ?2, password = ?3, url = ?4, notes = ?5,
+                 entry_nonce = ?6, auth_tag = ?7, modified_at = ?8, favorite = ?9
+             WHERE entry_id = ?10",
+            (
+                &title_blob,
+                &username_blob,
+                &password_blob,
+                url_blob.as_deref(),
+                notes_blob.as_deref(),
+                &nonce_blob,
+                &auth_tag_blob,
+                now,
+                entry.favorite as i32,
+                entry_id,
+            ),
+        ).map_err(|e| PasswordManagerError::Database(e.to_string()))?;
+
+        if rows_affected == 0 {
+            return Err(PasswordManagerError::NotFound(format!("Entry {}", entry_id)));
+        }
+
+        Ok(())
     }
 
     /// Store vault metadata in database

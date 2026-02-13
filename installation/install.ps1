@@ -10,11 +10,11 @@ if (-NOT ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdenti
 $ErrorActionPreference = "Stop"
 
 # Configuration
-$InstallDir = "C:\Program Files\PasswordManager"
+$InstallDir = "C:\Program Files\SentinelPass"
 $NativeHostFileName = "com.passwordmanager.host.json"
 $RegistryPath = "HKCU:\Software\Google\Chrome\NativeMessagingHosts\com.passwordmanager.host"
 
-Write-Host "Installing Password Manager..." -ForegroundColor Green
+Write-Host "Installing SentinelPass..." -ForegroundColor Green
 
 # Create installation directory
 if (!(Test-Path $InstallDir)) {
@@ -31,22 +31,22 @@ if (!(Test-Path $BinaryDir)) {
     exit 1
 }
 
-Copy-Item (Join-Path $BinaryDir "pm-host.exe") -Destination $InstallDir -Force
-Copy-Item (Join-Path $BinaryDir "pm-daemon.exe") -Destination $InstallDir -Force
-Copy-Item (Join-Path $BinaryDir "pm-cli.exe") -Destination $InstallDir -Force
+Copy-Item (Join-Path $BinaryDir "sentinelpass-host.exe") -Destination $InstallDir -Force
+Copy-Item (Join-Path $BinaryDir "sentinelpass-daemon.exe") -Destination $InstallDir -Force
+Copy-Item (Join-Path $BinaryDir "sentinelpass.exe") -Destination $InstallDir -Force
 
 Write-Host "Copied binaries to $InstallDir" -ForegroundColor Cyan
 
 # Generate native messaging host manifest with correct path
 $ManifestDest = Join-Path $InstallDir $NativeHostFileName
-$BinaryPath = Join-Path $InstallDir "pm-host.exe"
+$BinaryPath = Join-Path $InstallDir "sentinelpass-host.exe"
 
 $ManifestContent = @{
     name = "com.passwordmanager.host"
-    description = "Password Manager Native Messaging Host"
+    description = "SentinelPass Native Messaging Host"
     path = $BinaryPath
     type = "stdio"
-    allowed_origins = @("chrome-extension://YOUR_EXTENSION_ID_HERE/")
+    allowed_origins = @("chrome-extension://*/")
 }
 
 $ManifestContent | ConvertTo-Json -Depth 10 | Out-File -FilePath $ManifestDest -Encoding UTF8
@@ -79,6 +79,6 @@ if ($PathEnv -notlike "*$InstallDir*") {
 Write-Host "`nInstallation completed successfully!" -ForegroundColor Green
 Write-Host "`nNext steps:" -ForegroundColor Yellow
 Write-Host "1. Load the browser extension from browser-extension\chrome" -ForegroundColor White
-Write-Host "2. Update the extension ID in: $ManifestDest" -ForegroundColor White
-Write-Host "3. Run 'pm-cli init' to create a new vault" -ForegroundColor White
-Write-Host "4. Start the daemon: pm-daemon" -ForegroundColor White
+Write-Host "2. Run 'sentinelpass init' to create a new vault" -ForegroundColor White
+Write-Host "3. Start the daemon: sentinelpass-daemon" -ForegroundColor White
+Write-Host "4. Use the browser extension to autofill passwords" -ForegroundColor White

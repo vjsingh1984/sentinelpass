@@ -11,6 +11,7 @@ pub mod platform;
 pub mod vault;
 pub mod import_export;
 pub mod lockout;
+pub mod biometric;
 
 pub use audit::{AuditLogger, AuditEntry, AuditEventType, get_audit_log_dir, get_audit_log_path};
 pub use crypto::{
@@ -27,6 +28,7 @@ pub use platform::{
 pub use vault::{VaultManager, Entry, EntrySummary};
 pub use import_export::{export_to_json, export_to_csv, import_from_json, import_from_csv, ExportEntry};
 pub use lockout::{LockoutManager, LockoutConfig, DEFAULT_MAX_ATTEMPTS};
+pub use biometric::{BiometricManager, BiometricResult};
 
 // Re-export common types
 use thiserror::Error;

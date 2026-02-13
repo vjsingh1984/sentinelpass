@@ -17,7 +17,16 @@
       "Bash(git push:*)",
       "Bash(wsl git push:*)",
       "Bash(wsl gh repo edit:*)",
-      "Bash(wsl gh api:*)"
+      "Bash(wsl gh api:*)",
+      "Bash(\"error\\\\[could\")",
+      "Bash(\"error:\")",
+      "Bash(\"error\\\\[\")",
+      "Bash(findstr:*)",
+      "Bash(.\\\\target\\\\release\\\\sentinelpass.exe generate:*)",
+      "Bash(\"C:\\\\Users\\\\vjsin\\\\code\\\\passwordmanager\\\\target\\\\release\\\\sentinelpass.exe\" generate --help)",
+      "Bash(\"C:\\\\Users\\\\vjsin\\\\code\\\\passwordmanager\\\\target\\\\release\\\\sentinelpass.exe\" generate --length 20 --count 3)",
+      "Bash(\"C:\\\\Users\\\\vjsin\\\\code\\\\passwordmanager\\\\target\\\\release\\\\sentinelpass.exe\" check --password \"MyP@ssw0rd\")",
+      "Bash(git reset:*)"
     ]
   }
 }

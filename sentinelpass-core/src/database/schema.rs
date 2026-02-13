@@ -38,6 +38,7 @@ impl Database {
         self.create_db_metadata_table()?;
         self.create_entries_table()?;
         self.create_domain_mappings_table()?;
+        self.create_failed_attempts_table()?;
         Ok(())
     }
 
@@ -93,6 +94,18 @@ impl Database {
         Ok(())
     }
 
+    fn create_failed_attempts_table(&self) -> Result<()> {
+        self.conn.execute(
+            "CREATE TABLE IF NOT EXISTS failed_attempts (
+                attempt_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                attempt_time INTEGER NOT NULL,
+                ip_address TEXT
+            )",
+            [],
+        ).map_err(|e| CryptoError::EncryptionFailed(format!("Failed to create failed_attempts: {}", e)))?;
+        Ok(())
+    }
+
     /// Get a reference to the underlying connection
     pub fn conn(&self) -> &Connection {
         &self.conn
@@ -120,5 +133,6 @@ mod tests {
         assert!(table_names.contains(&"db_metadata".to_string()));
         assert!(table_names.contains(&"entries".to_string()));
         assert!(table_names.contains(&"domain_mappings".to_string()));
+        assert!(table_names.contains(&"failed_attempts".to_string()));
     }
 }

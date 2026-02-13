@@ -3,13 +3,16 @@
 //! This library provides the core functionality for the password manager,
 //! including cryptographic operations, database management, and IPC.
 
+pub mod audit;
 pub mod crypto;
 pub mod database;
 pub mod daemon;
 pub mod platform;
 pub mod vault;
 pub mod import_export;
+pub mod lockout;
 
+pub use audit::{AuditLogger, AuditEntry, AuditEventType, get_audit_log_dir, get_audit_log_path};
 pub use crypto::{
     KdfParams, MasterKey, DataEncryptionKey, EncryptedEntry,
     KeyHierarchy, WrappedKey, CryptoError, CryptoResult,
@@ -23,6 +26,7 @@ pub use platform::{
 };
 pub use vault::{VaultManager, Entry, EntrySummary};
 pub use import_export::{export_to_json, export_to_csv, import_from_json, import_from_csv, ExportEntry};
+pub use lockout::{LockoutManager, LockoutConfig, DEFAULT_MAX_ATTEMPTS};
 
 // Re-export common types
 use thiserror::Error;
@@ -41,6 +45,9 @@ pub enum PasswordManagerError {
 
     #[error("Vault is locked")]
     VaultLocked,
+
+    #[error("Vault is locked out due to too many failed attempts. Try again in {0} seconds")]
+    LockedOut(i64),
 
     #[error("Invalid input: {0}")]
     InvalidInput(String),

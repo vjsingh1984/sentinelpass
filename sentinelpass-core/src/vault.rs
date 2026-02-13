@@ -5,6 +5,7 @@ use crate::{
     crypto::cipher::{encrypt_string, decrypt_to_string},
     platform::{get_default_vault_path, ensure_data_dir},
     database::Database,
+    audit::{AuditLogger, AuditEventType, get_audit_log_dir},
     PasswordManagerError, Result,
 };
 use chrono::{DateTime, Utc};
@@ -16,6 +17,7 @@ use std::sync::{Arc, Mutex};
 pub struct VaultManager {
     key_hierarchy: KeyHierarchy,
     db: Arc<Mutex<Database>>,
+    audit_logger: Option<Arc<AuditLogger>>,
 }
 
 impl VaultManager {
@@ -35,10 +37,23 @@ impl VaultManager {
         // Store vault metadata
         Self::store_vault_metadata(&db, &kdf_params, &wrapped_dek)?;
 
-        Ok(Self {
+        // Initialize audit logger
+        let audit_logger = AuditLogger::new(get_audit_log_dir())
+            .map(Arc::new)
+            .ok();
+
+        let vault_manager = Self {
             key_hierarchy,
             db: Arc::new(Mutex::new(db)),
-        })
+            audit_logger,
+        };
+
+        // Log vault creation
+        if let Some(ref logger) = vault_manager.audit_logger {
+            let _ = logger.log(AuditEventType::VaultCreated, "Vault created successfully");
+        }
+
+        Ok(vault_manager)
     }
 
     /// Open an existing vault
@@ -52,10 +67,23 @@ impl VaultManager {
         let mut key_hierarchy = KeyHierarchy::new();
         key_hierarchy.unlock_vault(master_password, &kdf_params, &wrapped_dek)?;
 
-        Ok(Self {
+        // Initialize audit logger
+        let audit_logger = AuditLogger::new(get_audit_log_dir())
+            .map(Arc::new)
+            .ok();
+
+        let vault_manager = Self {
             key_hierarchy,
             db: Arc::new(Mutex::new(db)),
-        })
+            audit_logger,
+        };
+
+        // Log vault unlock
+        if let Some(ref logger) = vault_manager.audit_logger {
+            let _ = logger.log(AuditEventType::VaultUnlocked { success: true }, "Vault unlocked successfully");
+        }
+
+        Ok(vault_manager)
     }
 
     /// Create a new vault at the default path
@@ -71,6 +99,11 @@ impl VaultManager {
     /// Lock the vault (clear keys from memory)
     pub fn lock(&mut self) {
         self.key_hierarchy.lock_vault();
+
+        // Log vault lock event
+        if let Some(ref logger) = self.audit_logger {
+            let _ = logger.log(AuditEventType::VaultLocked, "Vault locked");
+        }
     }
 
     /// Check if vault is unlocked
@@ -146,7 +179,17 @@ impl VaultManager {
             ),
         ).map_err(|e| PasswordManagerError::Database(e.to_string()))?;
 
-        Ok(db.conn().last_insert_rowid())
+        let entry_id = db.conn().last_insert_rowid();
+
+        // Log credential creation
+        if let Some(ref logger) = self.audit_logger {
+            let _ = logger.log(
+                AuditEventType::CredentialCreated { entry_id },
+                &format!("Created credential: {}", entry.title),
+            );
+        }
+
+        Ok(entry_id)
     }
 
     /// Get an entry by ID
@@ -218,6 +261,14 @@ impl VaultManager {
                     None
                 };
 
+                // Log credential viewing
+                if let Some(ref logger) = self.audit_logger {
+                    let _ = logger.log(
+                        AuditEventType::CredentialViewed { entry_id },
+                        &format!("Viewed credential: {}", title),
+                    );
+                }
+
                 Ok(Entry {
                     entry_id: Some(entry_id),
                     title,
@@ -281,6 +332,14 @@ impl VaultManager {
         // Sort entries alphabetically by title
         entries.sort_by(|a, b| a.title.cmp(&b.title));
 
+        // Log credentials list operation
+        if let Some(ref logger) = self.audit_logger {
+            let _ = logger.log(
+                AuditEventType::CredentialsListed { count: entries.len() },
+                &format!("Listed {} credentials", entries.len()),
+            );
+        }
+
         Ok(entries)
     }
 
@@ -306,6 +365,14 @@ impl VaultManager {
 
         if rows_affected == 0 {
             return Err(PasswordManagerError::NotFound(format!("Entry {}", entry_id)));
+        }
+
+        // Log credential deletion
+        if let Some(ref logger) = self.audit_logger {
+            let _ = logger.log(
+                AuditEventType::CredentialDeleted { entry_id },
+                &format!("Deleted credential: {}", entry_id),
+            );
         }
 
         Ok(())
@@ -376,6 +443,14 @@ impl VaultManager {
 
         if rows_affected == 0 {
             return Err(PasswordManagerError::NotFound(format!("Entry {}", entry_id)));
+        }
+
+        // Log credential modification
+        if let Some(ref logger) = self.audit_logger {
+            let _ = logger.log(
+                AuditEventType::CredentialModified { entry_id },
+                &format!("Modified credential: {}", entry.title),
+            );
         }
 
         Ok(())

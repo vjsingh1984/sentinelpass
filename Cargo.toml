@@ -4,6 +4,7 @@ members = [
     "sentinelpass-cli",
     "sentinelpass-daemon",
     "sentinelpass-host",
+    "sentinelpass-ui",
 ]
 resolver = "2"
 

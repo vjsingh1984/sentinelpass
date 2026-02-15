@@ -332,8 +332,7 @@ pub fn seconds_remaining(period: u32, timestamp: i64) -> u32 {
 fn normalize_secret(secret_base32: &str) -> Result<String> {
     let normalized = secret_base32
         .trim()
-        .replace(' ', "")
-        .replace('-', "")
+        .replace([' ', '-'], "")
         .to_ascii_uppercase();
 
     if normalized.is_empty() {
@@ -349,8 +348,7 @@ fn normalize_secret(secret_base32: &str) -> Result<String> {
 fn decode_secret(secret_base32: &str) -> Result<Vec<u8>> {
     let normalized = secret_base32
         .trim()
-        .replace(' ', "")
-        .replace('-', "")
+        .replace([' ', '-'], "")
         .to_ascii_uppercase();
 
     let decoded = BASE32_NOPAD

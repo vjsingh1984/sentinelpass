@@ -336,7 +336,7 @@ mod macos {
     use block::ConcreteBlock;
     use cocoa::base::{id, nil, BOOL, YES};
     use cocoa::foundation::NSString;
-    use objc::{class, msg_send, sel, sel_impl};
+    use objc::{msg_send, runtime::Class, sel, sel_impl};
     use std::sync::mpsc;
     use std::time::Duration;
 
@@ -363,7 +363,10 @@ mod macos {
     fn can_evaluate_policy() -> std::result::Result<(), i64> {
         // SAFETY: Objective-C calls target LocalAuthentication API on macOS.
         unsafe {
-            let context: id = msg_send![class!(LAContext), new];
+            let Some(context_class) = Class::get("LAContext") else {
+                return Err(LA_ERROR_BIOMETRY_NOT_AVAILABLE);
+            };
+            let context: id = msg_send![context_class, new];
             if context == nil {
                 return Err(LA_ERROR_BIOMETRY_NOT_AVAILABLE);
             }
@@ -439,7 +442,10 @@ mod macos {
 
         // SAFETY: Objective-C calls target LocalAuthentication API on macOS.
         unsafe {
-            let context: id = msg_send![class!(LAContext), new];
+            let Some(context_class) = Class::get("LAContext") else {
+                return BiometricResult::NotAvailable;
+            };
+            let context: id = msg_send![context_class, new];
             if context == nil {
                 return BiometricResult::NotAvailable;
             }

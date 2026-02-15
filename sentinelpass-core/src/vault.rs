@@ -838,6 +838,7 @@ impl VaultManager {
     // TOTP Secret Management
 
     /// Add or update a TOTP secret for an entry.
+    #[allow(clippy::too_many_arguments)]
     pub fn add_totp_secret(
         &self,
         entry_id: i64,
@@ -1077,6 +1078,7 @@ impl VaultManager {
     // SSH Key Management
 
     /// Add an SSH key to the vault from plaintext key material.
+    #[allow(clippy::too_many_arguments)]
     pub fn add_ssh_key_plaintext(
         &self,
         name: String,
@@ -1093,7 +1095,7 @@ impl VaultManager {
 
         let dek = self.key_hierarchy.dek()?;
         let ssh_key = crate::ssh::SshKey::create_encrypted(
-            &dek,
+            dek,
             name,
             comment,
             key_type,
@@ -1349,7 +1351,7 @@ impl VaultManager {
         match result {
             Ok((private_key_encrypted, nonce, auth_tag)) => {
                 crate::ssh::SshKey::decrypt_private_key(
-                    &dek,
+                    dek,
                     &private_key_encrypted,
                     &nonce,
                     &auth_tag,

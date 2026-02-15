@@ -64,6 +64,7 @@ pub struct SshKeySummary {
 
 impl SshKey {
     /// Create a new SSH key entry
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         name: String,
         comment: Option<String>,
@@ -101,8 +102,8 @@ impl SshKey {
     ) -> Result<(Vec<u8>, Vec<u8>, Vec<u8>)> {
         use crate::crypto::cipher::encrypt_entry;
 
-        let encrypted = encrypt_entry(dek, private_key.as_bytes())
-            .map_err(|e| PasswordManagerError::Crypto(e))?;
+        let encrypted =
+            encrypt_entry(dek, private_key.as_bytes()).map_err(PasswordManagerError::Crypto)?;
 
         Ok((
             encrypted.ciphertext,
@@ -133,8 +134,7 @@ impl SshKey {
             auth_tag: auth_tag_arr,
         };
 
-        let decrypted =
-            decrypt_entry(dek, &encrypted).map_err(|e| PasswordManagerError::Crypto(e))?;
+        let decrypted = decrypt_entry(dek, &encrypted).map_err(PasswordManagerError::Crypto)?;
 
         String::from_utf8(decrypted).map_err(|_| {
             PasswordManagerError::InvalidInput("Invalid UTF-8 in private key".to_string())
@@ -142,6 +142,7 @@ impl SshKey {
     }
 
     /// Create an SshKey with encrypted private key
+    #[allow(clippy::too_many_arguments)]
     pub fn create_encrypted(
         dek: &crate::crypto::DataEncryptionKey,
         name: String,
@@ -180,7 +181,7 @@ impl SshKeyImporter {
     pub fn import_public_key<P: AsRef<Path>>(path: P) -> Result<(String, SshKeyType)> {
         let path = path.as_ref();
 
-        let key_data = std::fs::read_to_string(path).map_err(|e| PasswordManagerError::Io(e))?;
+        let key_data = std::fs::read_to_string(path).map_err(PasswordManagerError::Io)?;
 
         let line = key_data.trim();
         if !line.starts_with("ssh-") {
@@ -495,7 +496,7 @@ impl SshAgentClient {
 
 impl Default for SshAgentClient {
     fn default() -> Self {
-        Self::new().unwrap_or_else(|_| Self)
+        Self::new().unwrap_or(Self)
     }
 }
 

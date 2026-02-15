@@ -1624,7 +1624,7 @@ mod tests {
         // Create an encrypted SSH key
         let dek = vault.key_hierarchy.dek().unwrap();
         let ssh_key = crate::ssh::SshKey::create_encrypted(
-            &dek,
+            dek,
             "test-key".to_string(),
             Some("test comment".to_string()),
             crate::ssh::SshKeyType::Ed25519,
@@ -1658,7 +1658,7 @@ mod tests {
             "-----BEGIN OPENSSH PRIVATE KEY-----\ntest content\n-----END OPENSSH PRIVATE KEY-----";
 
         let ssh_key = crate::ssh::SshKey::create_encrypted(
-            &dek,
+            dek,
             "export-test".to_string(),
             None,
             crate::ssh::SshKeyType::Rsa,
@@ -1691,7 +1691,7 @@ mod tests {
         // Create and add an SSH key
         let dek = vault.key_hierarchy.dek().unwrap();
         let ssh_key = crate::ssh::SshKey::create_encrypted(
-            &dek,
+            dek,
             "to-delete".to_string(),
             None,
             crate::ssh::SshKeyType::Ed25519,

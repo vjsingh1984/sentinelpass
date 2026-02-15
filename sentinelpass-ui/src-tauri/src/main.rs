@@ -682,6 +682,7 @@ async fn get_totp_metadata(
 
 // Command: Add or update TOTP configuration for an entry
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 async fn set_totp(
     entry_id: i64,
     secret: Option<String>,

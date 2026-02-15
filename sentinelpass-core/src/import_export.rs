@@ -320,22 +320,14 @@ mod tests {
             password: "password123".to_string(),
             url: Some("https://example.com".to_string()),
             notes: Some("Test notes".to_string()),
-            created_at: chrono::Utc
-                .ymd_opt(2024, 1, 1)
-                .unwrap()
-                .and_hms_opt(0, 0, 0)
-                .unwrap(),
-            modified_at: chrono::Utc
-                .ymd_opt(2024, 1, 1)
-                .unwrap()
-                .and_hms_opt(0, 0, 0)
-                .unwrap(),
+            created_at: chrono::Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap(),
+            modified_at: chrono::Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap(),
             favorite: true,
         };
 
         let export = ExportEntry::from(entry);
         assert_eq!(export.title, "Test");
         assert_eq!(export.username, "user@example.com");
-        assert_eq!(export.favorite, true);
+        assert!(export.favorite);
     }
 }

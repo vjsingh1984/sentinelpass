@@ -2,40 +2,835 @@
 
 // Native messaging host configuration
 const HOST_NAME = 'com.passwordmanager.host';
+const NOTIFICATION_ICON_URL = chrome.runtime.getURL('icon128.png');
+
+console.log('[SentinelPass Background] ========== VERSION 0.1.19 - URL + CHANGE HEURISTIC HARDENING ==========');
+console.log('[SentinelPass Background] Service worker loaded');
+console.log('[SentinelPass Background] Host name:', HOST_NAME);
+console.log('[SentinelPass Background] Extension ID:', chrome.runtime.id);
+
+// ========================================
+// Helper Functions
+// ========================================
+
+const SENSITIVE_LOG_KEYS = new Set(['password', 'secret', 'token', 'passphrase', 'totp_code']);
+const NEVER_SAVE_DOMAINS_KEY = 'neverSaveDomains';
+const SAVE_NOTIFICATION_DEDUP_WINDOW_MS = 4000;
+const PENDING_UNLOCK_RETRY_KEY = 'pendingUnlockRetry';
+const PENDING_UNLOCK_RETRY_TTL_MS = 2 * 60 * 1000;
+const VAULT_LOCKED_NOTIFICATION_PREFIX = 'vault-locked-';
+const recentSaveNotificationRequests = new Map();
+const handledSaveNotifications = new Set();
+let lastVaultLockedNotificationAt = 0;
+
+function normalizeUsername(value) {
+  return typeof value === 'string' ? value.trim().toLowerCase() : '';
+}
+
+function generateRequestId() {
+  if (globalThis.crypto?.randomUUID) {
+    return globalThis.crypto.randomUUID();
+  }
+  return `req-${Date.now()}-${Math.random().toString(16).slice(2, 10)}`;
+}
+
+function isUsernameMatchOrUnknown(submittedUsername, existingUsername) {
+  if (!submittedUsername || !existingUsername) {
+    // Some login flows (e.g., post-submit MFA pages) do not expose username.
+    return true;
+  }
+  return submittedUsername === existingUsername;
+}
+
+function normalizeCredentialUrl(rawUrl, fallbackDomain) {
+  const domain = normalizeDomainForPolicy(fallbackDomain || '');
+  const raw = typeof rawUrl === 'string' ? rawUrl.trim() : '';
+
+  if (raw) {
+    try {
+      const withScheme = /^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(raw) ? raw : `https://${raw}`;
+      const parsed = new URL(withScheme);
+      if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
+        return parsed.origin;
+      }
+    } catch (_error) {
+      // Fall through to domain fallback below.
+    }
+  }
+
+  if (domain) {
+    return `https://${domain}`;
+  }
+
+  return null;
+}
+
+async function isCredentialUnchanged(data) {
+  if (!data?.domain || typeof data?.password !== 'string' || !data.password) {
+    return false;
+  }
+
+  try {
+    const response = await handleGetCredential(data.domain, generateRequestId());
+    if (!response?.success || !response?.data?.password) {
+      return false;
+    }
+
+    const existingPassword = response.data.password;
+    if (existingPassword !== data.password) {
+      return false;
+    }
+
+    const submittedUsername = normalizeUsername(data.username);
+    const existingUsername = normalizeUsername(response.data.username);
+    const inputMethod = typeof data?.input_method === 'string'
+      ? data.input_method
+      : 'manual_or_unknown';
+
+    if (isUsernameMatchOrUnknown(submittedUsername, existingUsername)) {
+      return true;
+    }
+
+    if (inputMethod === 'autofill_reuse') {
+      // Autofill provided this value in the same tab; password match is enough to treat as unchanged.
+      return true;
+    }
+
+    return false;
+  } catch (error) {
+    console.error('[SentinelPass Background] Failed unchanged-credential check:', error);
+    return false;
+  }
+}
+
+function redactForLog(value) {
+  if (!value || typeof value !== 'object') {
+    return value;
+  }
+
+  if (Array.isArray(value)) {
+    return value.map(redactForLog);
+  }
+
+  const redacted = {};
+  for (const [key, item] of Object.entries(value)) {
+    if (SENSITIVE_LOG_KEYS.has(key.toLowerCase())) {
+      redacted[key] = '[REDACTED]';
+    } else if (item && typeof item === 'object') {
+      redacted[key] = redactForLog(item);
+    } else {
+      redacted[key] = item;
+    }
+  }
+
+  return redacted;
+}
+
+function createNotification(notificationId, options) {
+  return new Promise((resolve, reject) => {
+    const payload = {
+      type: 'basic',
+      iconUrl: NOTIFICATION_ICON_URL,
+      ...options
+    };
+
+    chrome.notifications.create(notificationId, payload, (createdId) => {
+      if (chrome.runtime.lastError) {
+        reject(new Error(chrome.runtime.lastError.message));
+        return;
+      }
+      resolve(createdId);
+    });
+  });
+}
+
+function sessionGet(keys) {
+  return new Promise((resolve) => {
+    chrome.storage.session.get(keys, (result) => {
+      if (chrome.runtime.lastError) {
+        console.error('[SentinelPass Background] Session get failed:', chrome.runtime.lastError.message);
+        resolve({});
+        return;
+      }
+      resolve(result || {});
+    });
+  });
+}
+
+function sessionSet(items) {
+  return new Promise((resolve) => {
+    chrome.storage.session.set(items, () => {
+      if (chrome.runtime.lastError) {
+        console.error('[SentinelPass Background] Session set failed:', chrome.runtime.lastError.message);
+      }
+      resolve();
+    });
+  });
+}
+
+function sessionRemove(keys) {
+  return new Promise((resolve) => {
+    chrome.storage.session.remove(keys, () => {
+      if (chrome.runtime.lastError) {
+        console.error('[SentinelPass Background] Session remove failed:', chrome.runtime.lastError.message);
+      }
+      resolve();
+    });
+  });
+}
+
+function isVaultLockedError(errorMessage) {
+  return typeof errorMessage === 'string' && errorMessage.toLowerCase().includes('vault is locked');
+}
+
+async function queuePendingSaveRetry(data) {
+  const pending = {
+    action: 'save_credential',
+    data: {
+      username: data?.username,
+      password: data?.password,
+      domain: data?.domain,
+      url: data?.url || null,
+      submitted_url: data?.submitted_url || null,
+      save_trigger: data?.save_trigger || 'unknown'
+    },
+    createdAt: Date.now(),
+    expiresAt: Date.now() + PENDING_UNLOCK_RETRY_TTL_MS
+  };
+  await sessionSet({ [PENDING_UNLOCK_RETRY_KEY]: pending });
+}
+
+async function notifyVaultLockedAndQueueRetry(data) {
+  await queuePendingSaveRetry(data);
+
+  const now = Date.now();
+  if ((now - lastVaultLockedNotificationAt) < 1500) {
+    return;
+  }
+  lastVaultLockedNotificationAt = now;
+
+  await createNotification(`${VAULT_LOCKED_NOTIFICATION_PREFIX}${now}`, {
+    title: 'SentinelPass Vault Locked',
+    message: 'Unlock SentinelPass app, then click Retry save.',
+    buttons: [
+      { title: 'Retry save' }
+    ],
+    requireInteraction: true,
+    silent: false
+  });
+}
+
+async function retryPendingSaveAfterUnlock() {
+  const pending = (await sessionGet([PENDING_UNLOCK_RETRY_KEY]))[PENDING_UNLOCK_RETRY_KEY];
+  if (!pending || pending.action !== 'save_credential') {
+    await createNotification(`save-retry-none-${Date.now()}`, {
+      title: 'SentinelPass',
+      message: 'No pending save request to retry.',
+      requireInteraction: false
+    });
+    return;
+  }
+
+  if (!pending.expiresAt || Date.now() > pending.expiresAt) {
+    await sessionRemove([PENDING_UNLOCK_RETRY_KEY]);
+    await createNotification(`save-retry-expired-${Date.now()}`, {
+      title: 'SentinelPass',
+      message: 'Pending save request expired. Submit the login form again to save.',
+      requireInteraction: false
+    });
+    return;
+  }
+
+  const status = await handleCheckVaultStatus();
+  if (!status.success || !status.unlocked) {
+    await createNotification(`${VAULT_LOCKED_NOTIFICATION_PREFIX}${Date.now()}`, {
+      title: 'SentinelPass Vault Locked',
+      message: 'Vault is still locked. Unlock SentinelPass app, then retry.',
+      buttons: [
+        { title: 'Retry save' }
+      ],
+      requireInteraction: true,
+      silent: false
+    });
+    return;
+  }
+
+  const retryResult = await handleSaveCredential({
+    ...pending.data,
+    save_trigger: 'locked_retry_button'
+  });
+
+  if (retryResult.success) {
+    await sessionRemove([PENDING_UNLOCK_RETRY_KEY]);
+    await createNotification(`save-success-${Date.now()}`, {
+      title: 'SentinelPass',
+      message: 'Password saved successfully!',
+      requireInteraction: false
+    });
+    return;
+  }
+
+  await createNotification(`save-error-${Date.now()}`, {
+    title: 'SentinelPass Error',
+    message: `Failed to save password: ${retryResult.error || 'Unknown error'}`,
+    requireInteraction: false
+  });
+}
+
+function buildSaveNotificationDedupKey(data) {
+  const domain = normalizeDomainForPolicy(data?.domain || data?.url || '') || 'unknown';
+  const username = typeof data?.username === 'string' ? data.username.trim().toLowerCase() : '';
+  const url = typeof data?.url === 'string' ? data.url.split('#')[0] : '';
+  const passwordLength = typeof data?.password === 'string' ? data.password.length : 0;
+  const requestSource = typeof data?.request_source === 'string' ? data.request_source : 'unknown';
+  const sourceBucket = requestSource === 'pending-login-check' ? 'pending-login-check' : 'submit-detection';
+  return `${sourceBucket}|${domain}|${username}|${url}|len:${passwordLength}`;
+}
+
+function isDuplicateSaveNotification(data) {
+  const now = Date.now();
+  const dedupKey = buildSaveNotificationDedupKey(data);
+
+  for (const [key, timestamp] of recentSaveNotificationRequests.entries()) {
+    if (now - timestamp > SAVE_NOTIFICATION_DEDUP_WINDOW_MS) {
+      recentSaveNotificationRequests.delete(key);
+    }
+  }
+
+  const previousTimestamp = recentSaveNotificationRequests.get(dedupKey);
+  recentSaveNotificationRequests.set(dedupKey, now);
+
+  return previousTimestamp !== undefined && (now - previousTimestamp) < SAVE_NOTIFICATION_DEDUP_WINDOW_MS;
+}
+
+function requestInlineSavePrompt(tabId, data) {
+  if (!tabId) {
+    return Promise.resolve(false);
+  }
+
+  return new Promise((resolve) => {
+    chrome.tabs.sendMessage(tabId, {
+      type: 'show_inline_save_prompt',
+      data
+    }, (response) => {
+      if (chrome.runtime.lastError) {
+        console.error('[SentinelPass Background] Failed sending inline save prompt message:', chrome.runtime.lastError.message);
+        resolve(false);
+        return;
+      }
+
+      resolve(response?.success === true);
+    });
+  });
+}
+
+function normalizeDomainForPolicy(value) {
+  if (!value || typeof value !== 'string') {
+    return null;
+  }
+
+  let normalized = value.trim().toLowerCase();
+  if (!normalized) {
+    return null;
+  }
+
+  if (normalized.startsWith('http://') || normalized.startsWith('https://')) {
+    try {
+      normalized = new URL(normalized).hostname.toLowerCase();
+    } catch (_error) {
+      // Keep original value if URL parsing fails.
+    }
+  }
+
+  normalized = normalized.replace(/^\.+|\.+$/g, '');
+  if (normalized.startsWith('www.')) {
+    normalized = normalized.slice(4);
+  }
+
+  return normalized || null;
+}
+
+function domainMatchesPolicy(domain, policyDomain) {
+  return domain === policyDomain || domain.endsWith(`.${policyDomain}`);
+}
+
+function getNeverSaveDomains() {
+  return new Promise((resolve) => {
+    chrome.storage.local.get([NEVER_SAVE_DOMAINS_KEY], (result) => {
+      if (chrome.runtime.lastError) {
+        console.error('[SentinelPass Background] Failed reading never-save domains:', chrome.runtime.lastError.message);
+        resolve({});
+        return;
+      }
+      resolve(result[NEVER_SAVE_DOMAINS_KEY] || {});
+    });
+  });
+}
+
+function setNeverSaveDomains(domains) {
+  return new Promise((resolve, reject) => {
+    chrome.storage.local.set({ [NEVER_SAVE_DOMAINS_KEY]: domains }, () => {
+      if (chrome.runtime.lastError) {
+        reject(new Error(chrome.runtime.lastError.message));
+      } else {
+        resolve();
+      }
+    });
+  });
+}
+
+async function shouldSuppressSavePrompt(domainOrUrl) {
+  const normalized = normalizeDomainForPolicy(domainOrUrl);
+  if (!normalized) {
+    return false;
+  }
+
+  const domains = await getNeverSaveDomains();
+  return Object.keys(domains).some((policyDomain) =>
+    domainMatchesPolicy(normalized, policyDomain)
+  );
+}
+
+async function addNeverSaveDomain(domainOrUrl) {
+  const normalized = normalizeDomainForPolicy(domainOrUrl);
+  if (!normalized) {
+    return false;
+  }
+
+  const domains = await getNeverSaveDomains();
+  domains[normalized] = { createdAt: Date.now() };
+  await setNeverSaveDomains(domains);
+  return true;
+}
+
+// Handle get_credential request
+async function handleGetCredential(domain, requestId) {
+  console.log('[SentinelPass Background] handleGetCredential called for domain:', domain);
+
+  try {
+    const response = await chrome.runtime.sendNativeMessage(HOST_NAME, {
+      type: 'get_credential',
+      domain: domain,
+      request_id: requestId
+    });
+
+    console.log('[SentinelPass Background] Got credential response from native host:', redactForLog(response));
+    return response;
+  } catch (error) {
+    console.error('[SentinelPass Background] Error getting credential:', error);
+    return {
+      success: false,
+      error: error.message
+    };
+  }
+}
+
+// Handle get_totp_code request
+async function handleGetTotpCode(domain, requestId) {
+  console.log('[SentinelPass Background] handleGetTotpCode called for domain:', domain);
+
+  try {
+    const response = await chrome.runtime.sendNativeMessage(HOST_NAME, {
+      type: 'get_totp_code',
+      domain: domain,
+      request_id: requestId
+    });
+
+    console.log('[SentinelPass Background] Got TOTP response from native host:', redactForLog(response));
+    return response;
+  } catch (error) {
+    console.error('[SentinelPass Background] Error getting TOTP code:', error);
+    return {
+      success: false,
+      error: error.message
+    };
+  }
+}
+
+// Handle save_credential request
+async function handleSaveCredential(data) {
+  console.log('[SentinelPass Background] handleSaveCredential called');
+  console.log('[SentinelPass Background] Save request payload:', redactForLog(data));
+
+  try {
+    if (await isCredentialUnchanged(data)) {
+      console.log('[SentinelPass Background] Credential unchanged; skipping save write');
+      await sessionRemove([PENDING_UNLOCK_RETRY_KEY]);
+      return { success: true, unchanged: true };
+    }
+
+    // Send to native host for saving
+    console.log('[SentinelPass Background] Sending save request to native host...');
+    const canonicalUrl = normalizeCredentialUrl(data?.submitted_url || data?.url, data?.domain);
+    console.log('[SentinelPass Background] Canonical URL selected for save:', canonicalUrl);
+
+    const response = await chrome.runtime.sendNativeMessage(HOST_NAME, {
+      type: 'save_credential',
+      domain: data.domain,
+      data: {
+        username: data.username,
+        password: data.password,
+        title: data.domain || data.url || 'Unknown', // Backward compatibility
+        url: canonicalUrl
+      }
+    });
+
+    console.log('[SentinelPass Background] Native host response:', redactForLog(response));
+
+    if (response && response.success) {
+      console.log('[SentinelPass Background] Credential saved successfully');
+      await sessionRemove([PENDING_UNLOCK_RETRY_KEY]);
+      return { success: true };
+    } else {
+      console.error('[SentinelPass Background] Failed to save credential:', redactForLog(response));
+      const errorMessage = response?.error
+        || (response?.unlocked === false ? 'Vault is locked. Please unlock SentinelPass daemon and try again.' : null)
+        || 'Unknown error';
+
+      if (isVaultLockedError(errorMessage)) {
+        try {
+          await notifyVaultLockedAndQueueRetry(data);
+        } catch (lockedFlowError) {
+          console.error('[SentinelPass Background] Failed preparing locked-vault retry flow:', lockedFlowError);
+        }
+      }
+
+      return {
+        success: false,
+        error: errorMessage,
+        code: isVaultLockedError(errorMessage) ? 'vault_locked' : 'save_failed'
+      };
+    }
+  } catch (error) {
+    console.error('[SentinelPass Background] Error in handleSaveCredential:', error);
+    const message = String(error?.message || error || '');
+    if (message.includes('Access to the specified native messaging host is forbidden')) {
+      console.error('[SentinelPass Background] Native host permission denied for extension ID:', chrome.runtime.id);
+      console.error('[SentinelPass Background] Update native host manifest allowed_origins to include:', `chrome-extension://${chrome.runtime.id}/`);
+    }
+    // Create a notification to inform the user about the error
+    await createNotification('save-error-' + Date.now(), {
+      title: 'SentinelPass Error',
+      message: message.includes('forbidden')
+        ? 'Native host permission denied. Re-register extension ID in native host manifest.'
+        : 'Failed to save password. Ensure daemon is running and vault is unlocked.',
+      requireInteraction: false
+    });
+    return {
+      success: false,
+      error: error.message,
+      code: message.includes('forbidden') ? 'native_host_forbidden' : 'native_host_error'
+    };
+  }
+}
+
+// Handle check_credential_exists request
+async function handleCheckCredentialExists(domain) {
+  console.log('[SentinelPass Background] handleCheckCredentialExists called for domain:', domain);
+
+  try {
+    const response = await chrome.runtime.sendNativeMessage(HOST_NAME, {
+      type: 'check_credential_exists',
+      domain: domain
+    });
+
+    console.log('[SentinelPass Background] Credential exists check result:', redactForLog(response));
+    return response.exists || false;
+  } catch (error) {
+    console.error('[SentinelPass Background] Error checking credential exists:', error);
+    return false;
+  }
+}
+
+// Handle check_vault_status request
+async function handleCheckVaultStatus() {
+  console.log('[SentinelPass Background] handleCheckVaultStatus called');
+
+  try {
+    const response = await chrome.runtime.sendNativeMessage(HOST_NAME, {
+      type: 'check_vault_status'
+    });
+
+    console.log('[SentinelPass Background] Vault status:', redactForLog(response));
+    return {
+      success: response?.success === true,
+      unlocked: response?.unlocked === true
+    };
+  } catch (error) {
+    console.error('[SentinelPass Background] Error checking vault status:', error);
+    return {
+      success: false,
+      unlocked: false,
+      error: error.message
+    };
+  }
+}
+
+// Handle lock_vault request
+async function handleLockVault() {
+  console.log('[SentinelPass Background] handleLockVault called');
+
+  try {
+    const response = await chrome.runtime.sendNativeMessage(HOST_NAME, {
+      type: 'lock_vault'
+    });
+
+    return {
+      success: response?.success === true,
+      unlocked: response?.unlocked === true
+    };
+  } catch (error) {
+    console.error('[SentinelPass Background] Error locking vault:', error);
+    return {
+      success: false,
+      unlocked: true,
+      error: error.message
+    };
+  }
+}
+
+// Handle save notification request from content script
+async function handleSaveNotification(data, sender) {
+  console.log('[SentinelPass Background] ========== HANDLE SAVE NOTIFICATION ==========');
+  console.log('[SentinelPass Background] Notification payload:', redactForLog(data));
+
+  try {
+    const requestSource = typeof data?.request_source === 'string' ? data.request_source : 'unknown';
+    console.log('[SentinelPass Background] Save request source:', requestSource);
+
+    const suppressPrompt = await shouldSuppressSavePrompt(data?.domain || data?.url || '');
+    if (suppressPrompt) {
+      console.log('[SentinelPass Background] Skipping save notification due to never-save policy');
+      return true;
+    }
+
+    if (await isCredentialUnchanged(data)) {
+      console.log('[SentinelPass Background] Skipping save notification because credential is unchanged');
+      return true;
+    }
+
+    if (isDuplicateSaveNotification(data)) {
+      console.log('[SentinelPass Background] Skipping duplicate save notification request');
+      return true;
+    }
+
+    const shouldUseInlineFirst = requestSource === 'pending-login-check';
+    if (shouldUseInlineFirst) {
+      // Inline-first is safe on post-navigation pages where the tab is stable.
+      const inlinePromptShown = await requestInlineSavePrompt(sender?.tab?.id, data);
+      if (inlinePromptShown) {
+        console.log('[SentinelPass Background] Inline save prompt shown');
+        console.log('[SentinelPass Background] Awaiting explicit user action before any save');
+        return true;
+      }
+    } else {
+      console.log('[SentinelPass Background] Using persistent notification path for source:', requestSource);
+    }
+
+    // Create notification to ask user to save
+    const notificationId = 'save-password-' + Date.now();
+    const storageKey = `pendingSaveCredential:${notificationId}`;
+
+    // Store credential data keyed to notification ID for button click handling.
+    // Do this before creating the notification to avoid races on very fast clicks.
+    const pendingData = {
+      ...data,
+      _sender_tab_id: sender?.tab?.id ?? null
+    };
+    chrome.storage.session.set({ [storageKey]: pendingData }, () => {
+      if (chrome.runtime.lastError) {
+        console.error('[SentinelPass Background] Failed to store pending save credential:', chrome.runtime.lastError.message);
+      } else {
+        console.log('[SentinelPass Background] Stored pending save credential for notification:', notificationId);
+      }
+    });
+
+    let createdId = null;
+    try {
+      createdId = await createNotification(notificationId, {
+        title: 'SentinelPass - Save Password?',
+        message: `Do you want to save the password for ${data.domain}?`,
+        buttons: [
+          { title: 'Save' },
+          { title: 'Never for this site' }
+        ],
+        requireInteraction: true,
+        silent: false
+      });
+    } catch (notificationError) {
+      console.error('[SentinelPass Background] Notification creation failed, attempting inline fallback:', notificationError);
+      const inlinePromptShown = await requestInlineSavePrompt(sender?.tab?.id, data);
+      if (inlinePromptShown) {
+        chrome.storage.session.remove(storageKey);
+        console.log('[SentinelPass Background] Inline save prompt shown as fallback');
+        return true;
+      }
+      chrome.storage.session.remove(storageKey);
+      throw notificationError;
+    }
+
+    console.log('[SentinelPass Background] ========== SAVE NOTIFICATION CREATED ==========');
+    console.log('[SentinelPass Background] Notification ID:', createdId || notificationId);
+    return true;
+  } catch (error) {
+    console.error('[SentinelPass Background] ========== ERROR IN HANDLE SAVE NOTIFICATION ==========');
+    console.error('[SentinelPass Background] Error:', error);
+    throw error;
+  }
+}
+
+// ========================================
+// Event Listeners
+// ========================================
 
 // Listen for messages from content scripts
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-  console.log('Background received message:', request);
+  console.log('[SentinelPass Background] Received message:', request.type);
+  console.log('[SentinelPass Background] Request details:', redactForLog(request));
 
   if (request.type === 'get_credential') {
+    console.log('[SentinelPass Background] Handling get_credential for domain:', request.domain);
     handleGetCredential(request.domain, request.request_id)
-      .then(response => sendResponse(response))
-      .catch(error => sendResponse({
-        success: false,
-        error: error.message
-      }));
-    return true; // Keep message channel open for async response
-  }
+          .then(response => {
+            console.log('[SentinelPass Background] Get credential response:', redactForLog(response));
+            sendResponse(response);
+          })
+          .catch(error => {
+            console.error('[SentinelPass Background] Get credential error:', error);
+            sendResponse({
+              success: false,
+              error: error.message
+            });
+          });
+        return true; // Keep message channel open for async response
+      }
+
+  if (request.type === 'get_totp_code') {
+    console.log('[SentinelPass Background] Handling get_totp_code for domain:', request.domain);
+    handleGetTotpCode(request.domain, request.request_id)
+          .then(response => {
+            console.log('[SentinelPass Background] Get TOTP response:', redactForLog(response));
+            sendResponse(response);
+          })
+          .catch(error => {
+            console.error('[SentinelPass Background] Get TOTP error:', error);
+            sendResponse({
+              success: false,
+              error: error.message
+            });
+          });
+        return true;
+      }
 
   if (request.type === 'save_credential') {
+    console.log('[SentinelPass Background] Handling save_credential');
+    console.log('[SentinelPass Background] Domain:', request.data?.domain);
+    console.log('[SentinelPass Background] URL:', request.data?.url);
+    console.log('[SentinelPass Background] Save trigger:', request.data?.save_trigger || 'unknown');
     handleSaveCredential(request.data)
-      .then(response => sendResponse(response))
-      .catch(error => sendResponse({
-        success: false,
-        error: error.message
-      }));
+          .then(response => {
+            console.log('[SentinelPass Background] Save credential response:', redactForLog(response));
+            sendResponse(response);
+          })
+          .catch(error => {
+            console.error('[SentinelPass Background] Save credential error:', error);
+            sendResponse({
+              success: false,
+              error: error.message
+            });
+          });
+        return true;
+      }
+
+  if (request.type === 'check_credential_exists') {
+    console.log('[SentinelPass Background] Handling check_credential_exists for domain:', request.domain);
+    handleCheckCredentialExists(request.domain)
+          .then(exists => {
+              console.log('[SentinelPass Background] Credential exists:', exists);
+              sendResponse({ exists: exists });
+          })
+          .catch(error => {
+            console.error('[SentinelPass Background] Check credential exists error:', error);
+            sendResponse({
+              success: false,
+              error: error.message
+            });
+          });
+        return true;
+      }
+
+  if (request.type === 'check_vault_status') {
+    console.log('[SentinelPass Background] Handling check_vault_status');
+    handleCheckVaultStatus()
+          .then(statusResponse => {
+              console.log('[SentinelPass Background] Vault status:', redactForLog(statusResponse));
+              sendResponse(statusResponse);
+          })
+          .catch(error => {
+            console.error('[SentinelPass Background] Check vault status error:', error);
+            sendResponse({
+              success: false,
+              unlocked: false,
+              error: error.message
+            });
+          });
+        return true;
+      }
+
+  if (request.type === 'lock_vault') {
+    console.log('[SentinelPass Background] Handling lock_vault');
+    handleLockVault()
+          .then(response => {
+            console.log('[SentinelPass Background] Lock vault response:', redactForLog(response));
+            sendResponse(response);
+          })
+          .catch(error => {
+            console.error('[SentinelPass Background] Lock vault error:', error);
+            sendResponse({
+              success: false,
+              unlocked: true,
+              error: error.message
+            });
+          });
+        return true;
+      }
+
+  if (request.type === 'save_prompt_outcome') {
+    const outcome = request.data?.outcome || 'unknown';
+    const domain = request.data?.domain || 'unknown';
+    const source = request.data?.source || 'unknown';
+    const promptId = request.data?.promptId || 'n/a';
+    console.log('[SentinelPass Background] SAVE_PROMPT_OUTCOME', {
+      outcome: outcome,
+      source: source,
+      domain: domain,
+      promptId: promptId
+    });
+    if (outcome.startsWith('no_save_')) {
+      console.log(`[SentinelPass Background] NO_SAVE: ${outcome} (${domain})`);
+    } else if (outcome === 'save_clicked') {
+      console.log(`[SentinelPass Background] SAVE_INTENT_CONFIRMED: ${domain}`);
+    }
+    sendResponse({ success: true });
     return true;
   }
 
-  if (request.type === 'check_vault_status') {
-    handleCheckVaultStatus()
-      .then(status => sendResponse({ success: true, status }))
-      .catch(error => sendResponse({
-        success: false,
-        error: error.message
-      }));
-    return true;
-  }
+  if (request.type === 'request_save_notification') {
+    console.log('[SentinelPass Background] Handling request_save_notification');
+    handleSaveNotification(request.data, sender)
+          .then(result => {
+              console.log('[SentinelPass Background] Save notification result:', result);
+              sendResponse({ success: result });
+          })
+          .catch(error => {
+            console.error('[SentinelPass Background] Save notification error:', error);
+            sendResponse({
+              success: false,
+              error: error.message
+            });
+          });
+        return true;
+      }
 });
 
 // Handle keyboard shortcut for autofill
@@ -51,79 +846,129 @@ chrome.commands.onCommand.addListener((command) => {
   }
 });
 
-// Get credential from native messaging host
-async function handleGetCredential(domain, requestId) {
-  try {
-    const response = await sendNativeMessage({
-      version: 1,
-      type: 'get_credential',
-      domain: domain,
-      request_id: requestId || generateUUID()
-    });
+// Handle notification button clicks
+chrome.notifications.onButtonClicked.addListener((notificationId, buttonIndex) => {
+  console.log('[SentinelPass Background] ========== NOTIFICATION BUTTON CLICKED ==========');
+  console.log('[SentinelPass Background] Notification ID:', notificationId);
+  console.log('[SentinelPass Background] Button Index:', buttonIndex);
 
-    if (response.success && response.data) {
-      // Store in session storage for content script to access
-      await chrome.storage.session.set({
-        pendingCredential: response.data
-      });
+  if (notificationId.startsWith(VAULT_LOCKED_NOTIFICATION_PREFIX)) {
+    chrome.notifications.clear(notificationId);
+    if (buttonIndex === 0) {
+      void retryPendingSaveAfterUnlock();
+    }
+    return;
+  }
+
+  // Check if this is a save password notification
+  if (notificationId.startsWith('save-password-')) {
+    handledSaveNotifications.add(notificationId);
+    const storageKey = `pendingSaveCredential:${notificationId}`;
+    void (async () => {
+      const result = await sessionGet([storageKey]);
+      if (!result || !result[storageKey]) {
+        return;
+      }
+
+      const data = result[storageKey];
+
+      if (buttonIndex === 0) {
+        // Save button clicked
+        console.log(`[SentinelPass Background] SAVE_INTENT_CONFIRMED: ${data.domain || 'unknown'} (notification_button)`);
+        console.log('[SentinelPass Background] Save button clicked, saving credential...');
+        console.log('[SentinelPass Background] Domain:', data.domain);
+
+        const saveResult = await handleSaveCredential({
+          username: data.username,
+          password: data.password,
+          domain: data.domain,
+          url: data.url || null,
+          submitted_url: data.submitted_url || data.url || null,
+          save_trigger: 'notification_button'
+        });
+
+        if (saveResult.success) {
+          if (saveResult.unchanged) {
+            console.log('[SentinelPass Background] Credential already up to date');
+          } else {
+            console.log('[SentinelPass Background] Credential saved successfully!');
+          }
+          await createNotification('save-success-' + Date.now(), {
+            title: 'SentinelPass',
+            message: saveResult.unchanged ? 'Password already up to date.' : 'Password saved successfully!',
+            requireInteraction: false
+          });
+        } else {
+          console.error('[SentinelPass Background] Failed to save credential from notification path:', saveResult.error);
+          if (saveResult.code !== 'vault_locked') {
+            await createNotification('save-error-' + Date.now(), {
+              title: 'SentinelPass Error',
+              message: `Failed to save password: ${saveResult.error || 'Unknown error'}`,
+              requireInteraction: false
+            });
+          }
+        }
+      } else {
+        // Never button clicked
+        console.log(`[SentinelPass Background] NO_SAVE: no_save_never_for_site (${data.domain || 'unknown'})`);
+        console.log('[SentinelPass Background] Never for this site clicked');
+        try {
+          const stored = await addNeverSaveDomain(data.domain || data.url || '');
+          if (stored) {
+            console.log('[SentinelPass Background] Added never-save policy for domain:', data.domain);
+            await createNotification('never-save-' + Date.now(), {
+              title: 'SentinelPass',
+              message: `Will no longer prompt to save for ${data.domain || 'this site'}`,
+              requireInteraction: false
+            });
+          }
+        } catch (error) {
+          console.error('[SentinelPass Background] Failed to persist policy or notify user:', error);
+        }
+      }
+
+      // Clear the pending credential
+      await sessionRemove([storageKey]);
+    })().catch((error) => {
+      console.error('[SentinelPass Background] Error handling notification button click:', error);
+    });
+  }
+});
+
+// Handle notification closed (clicked X or dismissed)
+chrome.notifications.onClosed.addListener((notificationId) => {
+  console.log('[SentinelPass Background] Notification closed:', notificationId);
+
+  // Clean up any pending data for this specific save prompt
+  if (notificationId.startsWith('save-password-')) {
+    const storageKey = `pendingSaveCredential:${notificationId}`;
+    if (handledSaveNotifications.has(notificationId)) {
+      handledSaveNotifications.delete(notificationId);
+      chrome.storage.session.remove(storageKey);
+      return;
     }
 
-    return response;
-  } catch (error) {
-    console.error('Failed to get credential:', error);
-    return { success: false, error: error.message };
-  }
-}
+    chrome.storage.session.get([storageKey], (result) => {
+      const pending = result ? result[storageKey] : null;
+      const domain = pending?.domain || 'unknown';
+      const tabId = Number.isInteger(pending?._sender_tab_id) ? pending._sender_tab_id : null;
 
-// Save credential via native messaging host
-async function handleSaveCredential(data) {
-  try {
-    const response = await sendNativeMessage({
-      version: 1,
-      type: 'save_credential',
-      data: data
-    });
-    return response;
-  } catch (error) {
-    console.error('Failed to save credential:', error);
-    return { success: false, error: error.message };
-  }
-}
-
-// Check if vault is unlocked
-async function handleCheckVaultStatus() {
-  try {
-    const response = await sendNativeMessage({
-      version: 1,
-      type: 'check_vault_status'
-    });
-    return response;
-  } catch (error) {
-    console.error('Failed to check vault status:', error);
-    return { unlocked: false };
-  }
-}
-
-// Send message to native messaging host
-function sendNativeMessage(message) {
-  return new Promise((resolve, reject) => {
-    chrome.runtime.sendNativeMessage(HOST_NAME, message, (response) => {
-      if (chrome.runtime.lastError) {
-        reject(new Error(chrome.runtime.lastError.message));
-      } else {
-        resolve(response);
+      if (tabId !== null) {
+        void requestInlineSavePrompt(tabId, pending).then((inlineShown) => {
+          if (inlineShown) {
+            console.log(`[SentinelPass Background] Reopened inline save prompt after notification close (${domain})`);
+          } else {
+            console.log(`[SentinelPass Background] NO_SAVE: no_save_notification_closed (${domain})`);
+          }
+          chrome.storage.session.remove(storageKey);
+        });
+        return;
       }
+
+      console.log(`[SentinelPass Background] NO_SAVE: no_save_notification_closed (${domain})`);
+      chrome.storage.session.remove(storageKey);
     });
-  });
-}
+  }
+});
 
-// Generate a UUID for request tracking
-function generateUUID() {
-  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
-    const r = Math.random() * 16 | 0;
-    const v = c === 'x' ? r : (r & 0x3 | 0x8);
-    return v.toString(16);
-  });
-}
-
-console.log('Password Manager background service worker loaded');
+console.log('Password Manager background service worker initialized');

@@ -1,0 +1,314 @@
+name: Release CI
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  bundles:
+    name: Build Bundles (${{ matrix.platform }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            platform: linux
+          - os: macos-latest
+            platform: macos
+          - os: windows-latest
+            platform: windows
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf
+
+      - name: Build release binaries
+        run: cargo build --release --locked --bin sentinelpass --bin sentinelpass-daemon --bin sentinelpass-host --bin sentinelpass-ui
+
+      - name: Package archives (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          portable_name="sentinelpass-${GITHUB_REF_NAME}-${{ matrix.platform }}.tar.gz"
+          installer_name="sentinelpass-installer-${GITHUB_REF_NAME}-${{ matrix.platform }}.tar.gz"
+
+          mkdir -p dist/portable/root
+          cp target/release/sentinelpass dist/portable/root/
+          cp target/release/sentinelpass-daemon dist/portable/root/
+          cp target/release/sentinelpass-host dist/portable/root/
+          cp target/release/sentinelpass-ui dist/portable/root/
+          cp README.md LICENSE dist/portable/root/
+          tar -czf "dist/${portable_name}" -C dist/portable/root .
+
+          mkdir -p dist/installer/root/target/release
+          cp target/release/sentinelpass dist/installer/root/target/release/
+          cp target/release/sentinelpass-daemon dist/installer/root/target/release/
+          cp target/release/sentinelpass-host dist/installer/root/target/release/
+          cp target/release/sentinelpass-ui dist/installer/root/target/release/
+          cp install.sh install-user.sh install-user.command README.md LICENSE dist/installer/root/
+          cp -R installation dist/installer/root/
+          mkdir -p dist/installer/root/browser-extension
+          cp -R browser-extension/chrome dist/installer/root/browser-extension/
+          if [ -d browser-extension/firefox ]; then
+            cp -R browser-extension/firefox dist/installer/root/browser-extension/
+          fi
+          tar -czf "dist/${installer_name}" -C dist/installer/root .
+
+          tar -tzf "dist/${installer_name}" | grep -E '(^|\\./)target/release/sentinelpass-host$' >/dev/null
+          tar -tzf "dist/${installer_name}" | grep -E '(^|\\./)install-user' >/dev/null
+
+      - name: Package archives (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $portableName = "sentinelpass-$env:GITHUB_REF_NAME-${{ matrix.platform }}.zip"
+          $installerName = "sentinelpass-installer-$env:GITHUB_REF_NAME-${{ matrix.platform }}.zip"
+
+          New-Item -ItemType Directory -Force -Path dist/portable/root | Out-Null
+          Copy-Item target/release/sentinelpass.exe dist/portable/root/
+          Copy-Item target/release/sentinelpass-daemon.exe dist/portable/root/
+          Copy-Item target/release/sentinelpass-host.exe dist/portable/root/
+          Copy-Item target/release/sentinelpass-ui.exe dist/portable/root/
+          Copy-Item README.md dist/portable/root/
+          Copy-Item LICENSE dist/portable/root/
+          Compress-Archive -Path dist/portable/root/* -DestinationPath "dist/$portableName" -Force
+
+          New-Item -ItemType Directory -Force -Path dist/installer/root/target/release | Out-Null
+          New-Item -ItemType Directory -Force -Path dist/installer/root/installation | Out-Null
+          New-Item -ItemType Directory -Force -Path dist/installer/root/browser-extension | Out-Null
+
+          Copy-Item target/release/sentinelpass.exe dist/installer/root/target/release/
+          Copy-Item target/release/sentinelpass-daemon.exe dist/installer/root/target/release/
+          Copy-Item target/release/sentinelpass-host.exe dist/installer/root/target/release/
+          Copy-Item target/release/sentinelpass-ui.exe dist/installer/root/target/release/
+
+          Copy-Item install.ps1 dist/installer/root/
+          Copy-Item install-user.cmd dist/installer/root/
+          Copy-Item register-chrome.ps1 dist/installer/root/
+          Copy-Item register-firefox.ps1 dist/installer/root/
+          Copy-Item update-extension-id.ps1 dist/installer/root/
+
+          Copy-Item installation/install.ps1 dist/installer/root/installation/
+          Copy-Item installation/com.passwordmanager.host.json dist/installer/root/installation/
+
+          Copy-Item -Recurse browser-extension/chrome dist/installer/root/browser-extension/
+          if (Test-Path browser-extension/firefox) {
+            Copy-Item -Recurse browser-extension/firefox dist/installer/root/browser-extension/
+          }
+
+          Copy-Item README.md dist/installer/root/
+          Copy-Item LICENSE dist/installer/root/
+          Compress-Archive -Path dist/installer/root/* -DestinationPath "dist/$installerName" -Force
+
+          $checkDir = Join-Path $env:RUNNER_TEMP "installer-check"
+          if (Test-Path $checkDir) {
+            Remove-Item -Path $checkDir -Recurse -Force
+          }
+          Expand-Archive -Path "dist/$installerName" -DestinationPath $checkDir
+          if (!(Test-Path "$checkDir/target/release/sentinelpass-host.exe")) {
+            throw "Installer bundle missing target/release/sentinelpass-host.exe"
+          }
+          if (!(Test-Path "$checkDir/install-user.cmd")) {
+            throw "Installer bundle missing install-user.cmd"
+          }
+
+      - name: Upload packaged artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-bundles-${{ matrix.platform }}
+          path: dist/*
+          if-no-files-found: error
+
+  native_installers:
+    name: Build Native Installers (${{ matrix.platform }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            platform: linux
+          - os: macos-latest
+            platform: macos
+          - os: windows-latest
+            platform: windows
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf
+
+      - name: Install Tauri CLI
+        run: cargo install tauri-cli --version '^2.0.0' --locked
+
+      - name: Build daemon and host binaries
+        run: cargo build --release --locked --bin sentinelpass-daemon --bin sentinelpass-host
+
+      - name: Prepare bundled runtime resources (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p sentinelpass-ui/src-tauri/resources/bin
+          cp target/release/sentinelpass-daemon sentinelpass-ui/src-tauri/resources/bin/
+          cp target/release/sentinelpass-host sentinelpass-ui/src-tauri/resources/bin/
+          chmod +x sentinelpass-ui/src-tauri/resources/bin/sentinelpass-daemon
+          chmod +x sentinelpass-ui/src-tauri/resources/bin/sentinelpass-host
+
+      - name: Prepare bundled runtime resources (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path sentinelpass-ui/src-tauri/resources/bin | Out-Null
+          Copy-Item target/release/sentinelpass-daemon.exe sentinelpass-ui/src-tauri/resources/bin/
+          Copy-Item target/release/sentinelpass-host.exe sentinelpass-ui/src-tauri/resources/bin/
+
+      - name: Build native installers (unsigned by default, signed when secrets are provided)
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+        run: cargo tauri build --manifest-path sentinelpass-ui/Cargo.toml --ci
+
+      - name: Collect native installers (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist/native
+          find sentinelpass-ui/src-tauri/target/release/bundle -type f \(
+            -name '*.AppImage' -o -name '*.deb' -o -name '*.rpm' -o -name '*.dmg' -o -name '*.pkg' -o -name '*.tar.gz'
+          \) -exec cp {} dist/native/ \;
+          ls -lah dist/native
+          test -n "$(ls -A dist/native)"
+
+      - name: Collect native installers (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist/native | Out-Null
+          Get-ChildItem sentinelpass-ui/src-tauri/target/release/bundle -Recurse -Include *.exe,*.msi |
+            Copy-Item -Destination dist/native
+          Get-ChildItem dist/native
+          if ((Get-ChildItem dist/native | Measure-Object).Count -eq 0) {
+            throw 'No native installer artifacts found'
+          }
+
+      - name: Upload native installer artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-installers-${{ matrix.platform }}
+          path: dist/native/*
+          if-no-files-found: error
+
+  extension_e2e:
+    name: Extension E2E Smoke
+    runs-on: ubuntu-latest
+    env:
+      PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.playwright-browsers
+      HEADLESS: "1"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: browser-extension/e2e/package-lock.json
+
+      - name: Install extension e2e dependencies
+        working-directory: browser-extension/e2e
+        run: npm ci
+
+      - name: Install Playwright Chromium
+        working-directory: browser-extension/e2e
+        run: npx playwright install chromium
+
+      - name: Run extension e2e smoke suite
+        working-directory: browser-extension/e2e
+        run: npm run test:e2e
+
+  publish:
+    name: Publish GitHub Release
+    runs-on: ubuntu-latest
+    needs:
+      - bundles
+      - native_installers
+      - extension_e2e
+    if: startsWith(github.ref, 'refs/tags/')
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Generate checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd dist
+          find . -maxdepth 1 -type f ! -name 'sha256sums.txt' -print0 \
+            | sort -z \
+            | xargs -0 sha256sum > sha256sums.txt
+
+      - name: Create GitHub release and upload assets
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            dist/*

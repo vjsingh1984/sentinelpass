@@ -7,6 +7,8 @@ A secure, local-first password manager with browser autofill support.
 - **Zero-Knowledge Architecture**: Master password never leaves your device
 - **Military-Grade Encryption**: Argon2id KDF + AES-256-GCM encryption
 - **Browser Autofill**: Chrome extension with seamless autofill
+- **TOTP Support**: RFC 6238 codes with `otpauth://` provisioning support
+- **Desktop TOTP Setup & Copy**: Configure/remove TOTP and copy current codes from entry details
 - **Offline-First**: No cloud dependencies, works completely offline
 - **Cross-Platform**: Windows, macOS, and Linux support
 
@@ -16,6 +18,7 @@ A secure, local-first password manager with browser autofill support.
 - **Encryption**: AES-256-GCM with unique nonces per entry
 - **Memory Safety**: Rust's memory safety guarantees + secure buffer handling
 - **Zero-Knowledge**: Your master password is never stored or transmitted
+- **Clipboard Hygiene**: Copied secrets are auto-cleared after 30 seconds when unchanged
 
 ## Getting Started
 
@@ -28,6 +31,30 @@ A secure, local-first password manager with browser autofill support.
 
 ### Installation
 
+#### One-Click Installer (Release Assets)
+
+Tagged GitHub releases include user-level installer bundles per platform:
+
+- Windows: `sentinelpass-installer-<tag>-windows.zip` → run `install-user.cmd`
+- macOS: `sentinelpass-installer-<tag>-macos.tar.gz` → run `install-user.command`
+- Linux: `sentinelpass-installer-<tag>-linux.tar.gz` → run `install-user.sh`
+
+These installers default to user-scope paths (no admin needed).
+
+#### Build Native Installers Locally
+
+To generate platform-native installers (NSIS/MSI, DMG, AppImage/DEB) locally:
+
+```bash
+# macOS/Linux
+./scripts/build-native-installers.sh
+
+# Windows (PowerShell)
+.\scripts\build-native-installers.ps1
+```
+
+Both scripts package `sentinelpass-daemon` and `sentinelpass-host` into UI bundle resources before `cargo tauri build`.
+
 #### From Source
 
 ```bash
@@ -38,11 +65,16 @@ cd sentinelpass
 # Build the project
 cargo build --release
 
-# Install (Windows - run PowerShell as Administrator)
-.\installation\install.ps1
+# Install (Windows, user-level one-stop)
+.\install.ps1
 
-# Install (macOS/Linux)
-sudo ./installation/install.sh
+# Install (macOS/Linux, user-level one-stop)
+./install.sh
+
+# Optional: preconfigure Chrome native host for your unpacked extension ID
+./install.sh --chrome-extension-id <YOUR_32_CHAR_EXTENSION_ID>
+# Windows:
+.\install.ps1 -ExtensionId <YOUR_32_CHAR_EXTENSION_ID>
 ```
 
 ### Initial Setup
@@ -59,24 +91,78 @@ sentinelpass list
 
 # Search credentials
 sentinelpass search github
+
+# Add TOTP from an otpauth URI (from QR payload)
+sentinelpass totp-add --entry-id 1 --otpauth-uri "otpauth://totp/Acme:user@example.com?secret=JBSWY3DPEHPK3PXP&issuer=Acme"
+
+# Get current TOTP code
+sentinelpass totp-code --entry-id 1
+
+# Check biometric unlock status
+sentinelpass biometric-status
+
+# Enable biometric unlock (if platform support is available)
+sentinelpass biometric-enable
+
+# Unlock with biometric
+sentinelpass unlock-biometric
+
+# Disable biometric unlock
+sentinelpass biometric-disable
+
+# Check SSH agent availability
+sentinelpass ssh-agent-status
+
+# Add private key to SSH agent
+sentinelpass ssh-agent-add ~/.ssh/id_ed25519
+
+# Add stored vault SSH key (by ID) to SSH agent without writing to disk
+sentinelpass ssh-agent-add-stored 1
+
+# Clear all identities from SSH agent
+sentinelpass ssh-agent-clear
+
+# Add an SSH key pair to vault
+sentinelpass ssh-key-add --name "Work Laptop" --private-key-file ~/.ssh/id_ed25519
+
+# List SSH keys in vault
+sentinelpass ssh-key-list
+
+# Show SSH key metadata (and optionally private key)
+sentinelpass ssh-key-get 1
+sentinelpass ssh-key-get 1 --show-private
+
+# Delete an SSH key
+sentinelpass ssh-key-delete 1
 ```
 
 ### Running the Daemon
 
-The daemon must be running for browser autofill to work:
+Browser autofill and save require the daemon:
+
+- `sentinelpass-ui` now auto-starts `sentinelpass-daemon` in locked mode on app launch.
+- Unlocking the vault in UI also unlocks the daemon for browser integration.
+- You can still run the daemon manually for CLI-only workflows:
 
 ```bash
 sentinelpass-daemon
+
+# Start daemon using biometric unlock flow
+sentinelpass-daemon --biometric
+
+# Start daemon without interactive prompt (for orchestration)
+sentinelpass-daemon --start-locked
 ```
 
 The daemon will:
-- Prompt for your master password to unlock the vault
+- Start locked when launched by UI (or with `--start-locked`)
+- Prompt for master password only in interactive mode (or use `--biometric`)
 - Start the IPC server for communication with the browser extension
 - Auto-lock after 5 minutes of inactivity (configurable)
 
 ### Browser Extension
 
-1. Start the daemon: `sentinelpass-daemon`
+1. Start `sentinelpass-ui` (it auto-starts the daemon)
 2. Open Chrome and navigate to `chrome://extensions/`
 3. Enable "Developer mode"
 4. Click "Load unpacked"

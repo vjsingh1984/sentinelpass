@@ -1,7 +1,7 @@
 // Background service worker for Password Manager Extension
 // Native messaging host configuration
 const HOST_NAME = 'com.passwordmanager.host';
-console.log('[SentinelPass Background] ========== VERSION 0.1.5 - REMOVED ICON URL ==========');
+console.log('[SentinelPass Background] ========== VERSION 0.1.0 - REMOVED ICON URL ==========');
 console.log('[SentinelPass Background] Service worker loaded');
 console.log('[SentinelPass Background] Host name:', HOST_NAME);
 // ========================================

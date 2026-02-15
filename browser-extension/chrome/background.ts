@@ -11,7 +11,7 @@ import {
 const HOST_NAME = 'com.passwordmanager.host';
 const NOTIFICATION_ICON_URL = chrome.runtime.getURL('icon128.png');
 
-console.log('[SentinelPass Background] ========== VERSION 0.1.19 - URL + CHANGE HEURISTIC HARDENING ==========');
+console.log('[SentinelPass Background] ========== VERSION 0.1.0 - URL + CHANGE HEURISTIC HARDENING ==========');
 console.log('[SentinelPass Background] Service worker loaded');
 console.log('[SentinelPass Background] Host name:', HOST_NAME);
 console.log('[SentinelPass Background] Extension ID:', chrome.runtime.id);

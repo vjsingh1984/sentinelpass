@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
   "name": "SentinelPass Password Manager",
-  "version": "0.1.5",
+  "version": "0.1.0",
   "description": "Secure, local-first password manager with browser autofill",
   "icons": {
     "16": "icon16.png",

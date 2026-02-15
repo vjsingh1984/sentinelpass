@@ -232,13 +232,7 @@ jobs:
           Copy-Item target/release/sentinelpass-daemon.exe sentinelpass-ui/src-tauri/resources/bin/
           Copy-Item target/release/sentinelpass-host.exe sentinelpass-ui/src-tauri/resources/bin/
 
-      - name: Build native installers (unsigned)
-        if: ${{ (runner.os != 'macOS' || secrets.APPLE_CERTIFICATE == '') && (runner.os != 'Windows' || secrets.WINDOWS_CERTIFICATE == '') }}
-        working-directory: sentinelpass-ui
-        run: cargo tauri build --ci
-
-      - name: Build native installers (signed)
-        if: ${{ (runner.os == 'macOS' && secrets.APPLE_CERTIFICATE != '') || (runner.os == 'Windows' && secrets.WINDOWS_CERTIFICATE != '') }}
+      - name: Build native installers (unsigned by default, signed when secrets are provided)
         working-directory: sentinelpass-ui
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
@@ -251,7 +245,22 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
           WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
-        run: cargo tauri build --ci
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # Avoid passing empty signing inputs, which can force failing import/sign paths.
+          if [ -z "${APPLE_CERTIFICATE:-}" ]; then
+            unset APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID
+          fi
+          if [ -z "${WINDOWS_CERTIFICATE:-}" ]; then
+            unset WINDOWS_CERTIFICATE WINDOWS_CERTIFICATE_PASSWORD
+          fi
+          if [ -z "${TAURI_SIGNING_PRIVATE_KEY:-}" ]; then
+            unset TAURI_SIGNING_PRIVATE_KEY TAURI_SIGNING_PRIVATE_KEY_PASSWORD
+          fi
+
+          cargo tauri build --ci
 
       - name: Collect native installers (Unix)
         if: runner.os != 'Windows'

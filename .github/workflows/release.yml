@@ -94,8 +94,8 @@ jobs:
           fi
           tar -czf "dist/${installer_name}" -C dist/installer/root .
 
-          tar -tzf "dist/${installer_name}" | grep -E '(^|\\./)target/release/sentinelpass-host$' >/dev/null
-          tar -tzf "dist/${installer_name}" | grep -E '(^|\\./)install-user' >/dev/null
+          tar -tzf "dist/${installer_name}" | grep -E '(^|\./)target/release/sentinelpass-host$' >/dev/null
+          tar -tzf "dist/${installer_name}" | grep -E '(^|\./)install-user' >/dev/null
 
       - name: Package archives (Windows)
         if: runner.os == 'Windows'

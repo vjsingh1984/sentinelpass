@@ -28,6 +28,10 @@ Thumbs.db
 # Logs
 *.log
 
+# Node/TypeScript
+node_modules/
+coverage/
+
 # Native messaging (local dev)
 native-host/local/
 

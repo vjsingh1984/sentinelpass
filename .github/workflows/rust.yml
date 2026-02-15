@@ -1,0 +1,138 @@
+name: Rust CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # Rust formatting check
+  format:
+    name: Check Rust Formatting
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+  # Rust linting with clippy
+  clippy:
+    name: Clippy Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - name: Install Linux UI build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libglib2.0-dev \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf
+      - name: Run clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+  # Rust tests
+  test:
+    name: Run Tests
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install Linux UI build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libglib2.0-dev \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf
+      - name: Run tests
+        run: cargo test --workspace --verbose
+
+  # Rust LLVM coverage
+  coverage:
+    name: Rust LLVM Coverage
+    runs-on: ubuntu-latest
+    env:
+      RUST_COVERAGE_MIN: "50"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+      - uses: taiki-e/install-action@cargo-llvm-cov
+      - name: Run Rust coverage
+        run: bash scripts/coverage-rust.sh
+      - name: Upload Rust coverage artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: rust-llvm-coverage
+          path: target/llvm-cov/lcov.info
+          if-no-files-found: error
+
+  # TypeScript TDD + coverage
+  web_tdd:
+    name: TypeScript TDD
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - name: Install web dependencies
+        run: npm ci
+      - name: Type-check web sources
+        run: npm run web:typecheck
+      - name: Run TypeScript unit tests with coverage
+        run: npm run test:ts
+      - name: Upload TypeScript coverage artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ts-coverage
+          path: coverage/ts/lcov.info
+          if-no-files-found: error
+
+  # Build check
+  build:
+    name: Build
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install Linux UI build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libglib2.0-dev \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf
+      - name: Build release
+        run: cargo build --release --workspace

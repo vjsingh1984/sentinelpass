@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+cd "$REPO_ROOT"
+
+STAGED_FILES="$(git diff --cached --name-only --diff-filter=ACMR)"
+if [[ -z "$STAGED_FILES" ]]; then
+  exit 0
+fi
+
+RUST_CHANGED="$(printf '%s\n' "$STAGED_FILES" | rg -N '(\.rs$|(^|/)Cargo\.toml$)' || true)"
+WEB_CHANGED="$(printf '%s\n' "$STAGED_FILES" | rg -N '\.(js|mjs|cjs|jsx|ts|tsx)$' || true)"
+
+if [[ -n "$RUST_CHANGED" ]]; then
+  echo "[pre-commit] Running Rust lint checks..."
+  bash scripts/lint-rust.sh
+  echo "[pre-commit] Running Rust tests..."
+  bash scripts/test-rust.sh
+fi
+
+if [[ -n "$WEB_CHANGED" ]]; then
+  echo "[pre-commit] Running JS/TS lint checks..."
+  bash scripts/lint-web.sh
+  echo "[pre-commit] Running TypeScript unit tests..."
+  bash scripts/test-web.sh
+fi

@@ -1,0 +1,24 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ES2022",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "moduleResolution": "Bundler",
+    "moduleDetection": "force",
+    "skipLibCheck": true,
+    "strict": false,
+    "allowJs": false,
+    "noEmitOnError": true
+  },
+  "include": [
+    "browser-extension/chrome/**/*.ts",
+    "browser-extension/firefox/**/*.ts",
+    "sentinelpass-ui/**/*.ts",
+    "types/**/*.d.ts"
+  ],
+  "exclude": [
+    "browser-extension/e2e/**",
+    "sentinelpass-ui/dist/**",
+    "sentinelpass-ui/src-tauri/**"
+  ]
+}

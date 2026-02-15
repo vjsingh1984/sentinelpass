@@ -1,116 +1,90 @@
-# Password Manager
+# SentinelPass
 
-A secure, local-first password manager with browser autofill support.
+Local-first password manager with a Rust core, Tauri desktop UI, and browser extension.
 
-## Features
+## At a Glance
 
-- **Zero-Knowledge Architecture**: Master password never leaves your device
-- **Military-Grade Encryption**: Argon2id KDF + AES-256-GCM encryption
-- **Browser Autofill**: Chrome extension with seamless autofill
-- **Offline-First**: No cloud dependencies, works completely offline
-- **Cross-Platform**: Windows, macOS, and Linux support
+| Area | What SentinelPass does |
+| --- | --- |
+| Secret model | Zero-knowledge, local vault; no cloud dependency |
+| Crypto | Argon2id key derivation + AES-256-GCM encryption |
+| App surfaces | CLI (`sentinelpass`), daemon, desktop UI, browser extension |
+| Platforms | Windows, macOS, Linux |
+| License | Apache License 2.0 |
 
-## Security
+## System Map
 
-- **Key Derivation**: Argon2id (m=256MB, t=3, p=4)
-- **Encryption**: AES-256-GCM with unique nonces per entry
-- **Memory Safety**: Rust's memory safety guarantees + secure buffer handling
-- **Zero-Knowledge**: Your master password is never stored or transmitted
+| Component | Path | Responsibility |
+| --- | --- | --- |
+| Core library | `sentinelpass-core/` | Crypto, vault, DB, IPC contracts |
+| CLI | `sentinelpass-cli/` | Vault operations from terminal |
+| Daemon | `sentinelpass-daemon/` | Background unlock/lock state + IPC |
+| Native host | `sentinelpass-host/` | Browser native messaging bridge |
+| Desktop app | `sentinelpass-ui/` | Tauri UI and user unlock workflow |
+| Browser extension | `browser-extension/` | Autofill + save prompts |
 
-## Getting Started
+## Runtime Flow
 
-### Prerequisites
+```text
+Browser Extension -> sentinelpass-host -> sentinelpass-daemon -> sentinelpass-core (vault)
+                         ^
+                         |
+                    sentinelpass-ui (unlock + state)
+```
 
-- Rust 1.70 or later
-- Chrome or Chromium-based browser
-- For Windows: PowerShell 5.1+
-- For Unix: Bash and standard Unix tools
+## Quick Start
 
-### Installation
-
-#### From Source
+### 1) Build
 
 ```bash
-# Clone the repository
-git clone https://github.com/yourusername/passwordmanager.git
-cd passwordmanager
-
-# Build the project
-just build
-
-# Install the native messaging host
-just install-host-windows  # Windows
-# or
-just install-host-unix     # macOS/Linux
+npm install
+npm run web:build
+cargo build --release
 ```
 
-### Initial Setup
+### 2) Install (user-level, no admin)
 
 ```bash
-# Create a new vault
-pm-cli init
+# Windows
+./install.ps1
 
-# Unlock your vault
-pm-cli unlock
-
-# Add a credential
-pm-cli add --title "GitHub" --username "user@example.com" --url "https://github.com"
-
-# List all credentials
-pm-cli list
-
-# Search credentials
-pm-cli search github
+# macOS / Linux
+./install.sh
 ```
 
-### Browser Extension
-
-1. Open Chrome and navigate to `chrome://extensions/`
-2. Enable "Developer mode"
-3. Click "Load unpacked"
-4. Select the `browser-extension/chrome/` directory
-5. The extension is now ready to use
-
-## Development
+### 3) Run
 
 ```bash
-# Run tests
-just test
-
-# Run Clippy
-just clippy
-
-# Format code
-just fmt
-
-# Run the daemon
-just daemon
-
-# Build everything
-just build
+sentinelpass-ui
 ```
 
-## Project Structure
+UI startup coordinates daemon startup; unlocking in UI enables browser save/autofill paths.
 
-```
-passwordmanager/
-├── pm-core/              # Core library (crypto, database, IPC)
-├── pm-cli/               # Command-line interface
-├── pm-daemon/            # Background service for vault management
-├── pm-host/              # Native messaging host for browser extension
-├── browser-extension/    # Chrome extension
-├── migrations/           # Database migrations
-└── installation/         # Installation scripts
-```
+## Developer Loop
 
-## Security Architecture
+| Task | Command |
+| --- | --- |
+| Rust format check | `cargo fmt --all -- --check` |
+| Rust lint (deny warnings) | `cargo clippy --workspace --all-targets -- -D warnings` |
+| Rust tests | `cargo test --workspace` |
+| TypeScript typecheck | `npm run web:typecheck` |
+| TypeScript tests + coverage | `npm run test:ts` |
+| Rust coverage (LLVM) | `bash scripts/coverage-rust.sh` |
 
-See [SECURITY_ARCHITECTURE.md](SECURITY_ARCHITECTURE.md) for detailed security documentation.
+## Release Artifacts
 
-## License
+| Trigger | Workflow | Output |
+| --- | --- | --- |
+| Git tag `v*` | `Release CI` | cross-platform binaries + installer bundles |
+| Push / PR | `Rust CI`, `Security CI`, `extension-e2e` | lint, tests, security scans, extension e2e |
 
-MIT License - see LICENSE file for details
+## OSS and Contribution Docs
 
-## Contributing
-
-Contributions are welcome! Please read SECURITY_ARCHITECTURE.md before making changes to security-critical code.
+| Topic | File |
+| --- | --- |
+| Contribution process | `CONTRIBUTING.md` |
+| Security reporting | `SECURITY.md` |
+| Code of conduct | `CODE_OF_CONDUCT.md` |
+| OSS release checklist | `docs/OSS_RELEASE_CHECKLIST.md` |
+| Build details | `BUILD.md` |
+| Security internals | `SECURITY_ARCHITECTURE.md` |

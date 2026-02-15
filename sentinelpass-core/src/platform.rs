@@ -10,7 +10,7 @@ use std::path::PathBuf;
 /// - Linux/Other: ~/.config/passwordmanager
 pub fn get_data_dir() -> PathBuf {
     let base = dirs::data_local_dir()
-        .or_else(|| dirs::data_dir())
+        .or_else(dirs::data_dir)
         .or_else(|| dirs::home_dir().map(|h| h.join(".data")))
         .unwrap_or_else(|| PathBuf::from("."));
 
@@ -25,7 +25,7 @@ pub fn get_data_dir() -> PathBuf {
 /// - Linux/Other: ~/.config/passwordmanager
 pub fn get_config_dir() -> PathBuf {
     let base = dirs::config_dir()
-        .or_else(|| dirs::data_dir())
+        .or_else(dirs::data_dir)
         .or_else(|| dirs::home_dir().map(|h| h.join(".config")))
         .unwrap_or_else(|| PathBuf::from("."));
 
@@ -60,7 +60,7 @@ pub fn get_install_dir() -> PathBuf {
 /// - macOS: ~/Library/Application Support/Google/Chrome/NativeMessagingHosts
 /// - Linux: ~/.config/google-chrome/NativeMessagingHosts
 pub fn get_chrome_native_messaging_dir() -> Option<PathBuf> {
-    let path = if cfg!(target_os = "windows") {
+    if cfg!(target_os = "windows") {
         // Windows: %LOCALAPPDATA%\Google\Chrome\User Data\Default\Native Messaging Hosts
         std::env::var("LOCALAPPDATA").ok().map(|p| {
             PathBuf::from(p)
@@ -86,9 +86,7 @@ pub fn get_chrome_native_messaging_dir() -> Option<PathBuf> {
                 .join("google-chrome")
                 .join("NativeMessagingHosts")
         })
-    };
-
-    path
+    }
 }
 
 /// Get the native messaging host manifest path
@@ -197,7 +195,12 @@ mod tests {
     fn test_get_platform() {
         let platform = get_platform();
         assert!(!platform.is_empty());
-        assert!(platform == "windows" || platform == "macos" || platform == "linux" || platform == "unknown");
+        assert!(
+            platform == "windows"
+                || platform == "macos"
+                || platform == "linux"
+                || platform == "unknown"
+        );
     }
 
     #[test]

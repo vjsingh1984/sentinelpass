@@ -1,0 +1,54 @@
+{
+  "manifest_version": 2,
+  "name": "SentinelPass Password Manager",
+  "version": "0.1.0",
+  "description": "Secure, local-first password manager with browser autofill",
+  "icons": {
+    "16": "icon16.png",
+    "48": "icon48.png",
+    "128": "icon128.png"
+  },
+  "permissions": [
+    "storage",
+    "tabs",
+    "activeTab",
+    "webNavigation",
+    "notifications",
+    "nativeMessaging",
+    "<all_urls>"
+  ],
+  "background": {
+    "scripts": ["background.js"]
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"],
+      "run_at": "document_idle",
+      "all_frames": true
+    }
+  ],
+  "browser_action": {
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icon16.png",
+      "48": "icon48.png",
+      "128": "icon128.png"
+    }
+  },
+  "commands": {
+    "autofill": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+U",
+        "mac": "Command+Shift+U"
+      },
+      "description": "Trigger autofill"
+    }
+  },
+  "applications": {
+    "gecko": {
+      "id": "sentinelpass@localhost",
+      "strict_min_version": "91.0"
+    }
+  }
+}

@@ -25,3 +25,19 @@ pub struct DomainMapping {
     pub domain: String,
     pub is_primary: bool,
 }
+
+/// Encrypted TOTP secret configuration linked to an entry
+#[derive(Debug, Clone)]
+pub struct TotpSecret {
+    pub totp_id: Option<i64>,
+    pub entry_id: i64,
+    pub secret_encrypted: Vec<u8>,
+    pub nonce: Vec<u8>,
+    pub auth_tag: Vec<u8>,
+    pub algorithm: String,
+    pub digits: u8,
+    pub period: u32,
+    pub issuer: Option<String>,
+    pub account_name: Option<String>,
+    pub created_at: DateTime<Utc>,
+}

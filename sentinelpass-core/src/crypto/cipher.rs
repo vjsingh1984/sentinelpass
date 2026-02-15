@@ -233,7 +233,10 @@ mod tests {
         assert_ne!(encrypted1.ciphertext, encrypted2.ciphertext);
 
         // But both should decrypt to the same plaintext
-        assert_eq!(decrypt_entry(&dek, &encrypted1).unwrap(), decrypt_entry(&dek, &encrypted2).unwrap());
+        assert_eq!(
+            decrypt_entry(&dek, &encrypted1).unwrap(),
+            decrypt_entry(&dek, &encrypted2).unwrap()
+        );
     }
 
     #[test]
@@ -269,10 +272,14 @@ mod tests {
         let dek = DataEncryptionKey::new().unwrap();
 
         assert!(encrypt_entry(&dek, b"").is_err());
-        assert!(decrypt_entry(&dek, &EncryptedEntry {
-            nonce: [0u8; 12],
-            ciphertext: vec![],
-            auth_tag: [0u8; 16],
-        }).is_err());
+        assert!(decrypt_entry(
+            &dek,
+            &EncryptedEntry {
+                nonce: [0u8; 12],
+                ciphertext: vec![],
+                auth_tag: [0u8; 16],
+            }
+        )
+        .is_err());
     }
 }

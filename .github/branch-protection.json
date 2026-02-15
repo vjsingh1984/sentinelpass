@@ -14,6 +14,12 @@
       "RustSec Audit",
       "Trivy Filesystem Scan",
       "TypeScript TDD",
+      "Release Bundle Smoke (linux)",
+      "Release Bundle Smoke (macos)",
+      "Release Bundle Smoke (windows)",
+      "Release Native Installer Smoke (linux)",
+      "Release Native Installer Smoke (macos)",
+      "Release Native Installer Smoke (windows)",
       "npm Audit (Extension E2E)",
       "npm Audit (Root)"
     ]

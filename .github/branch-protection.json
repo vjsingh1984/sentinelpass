@@ -1,13 +1,40 @@
 {
   "required_status_checks": {
     "strict": true,
-    "contexts": ["ci"]
+    "contexts": [
+      "Build (macos-latest)",
+      "Build (ubuntu-latest)",
+      "Build (windows-latest)",
+      "Check Python Formatting (black)",
+      "Check Rust Formatting",
+      "Clippy Lint",
+      "Ruff Lint",
+      "Run Browser Integration Tests",
+      "Run Tests (macos-latest)",
+      "Run Tests (ubuntu-latest)",
+      "Run Tests (windows-latest)",
+      "Rust LLVM Coverage",
+      "RustSec Audit",
+      "Trivy Filesystem Scan",
+      "Type Check (mypy)",
+      "TypeScript TDD",
+      "npm Audit (Extension E2E)",
+      "npm Audit (Root)"
+    ]
   },
   "enforce_admins": true,
   "required_pull_request_reviews": {
+    "dismiss_stale_reviews": true,
+    "require_code_owner_reviews": false,
+    "require_last_push_approval": false,
     "required_approving_review_count": 1
   },
   "restrictions": null,
+  "required_linear_history": true,
   "allow_force_pushes": false,
-  "allow_deletions": false
+  "allow_deletions": false,
+  "block_creations": false,
+  "required_conversation_resolution": true,
+  "lock_branch": false,
+  "allow_fork_syncing": true
 }

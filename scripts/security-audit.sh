@@ -17,8 +17,11 @@ if ! command -v cargo-audit >/dev/null 2>&1; then
   cargo install cargo-audit --locked
 fi
 
-echo "[security] cargo audit"
-cargo audit
+AUDIT_DB="${CARGO_AUDIT_DB:-/tmp/sentinelpass-advisory-db}"
+mkdir -p "$AUDIT_DB"
+
+echo "[security] cargo audit (db: $AUDIT_DB)"
+cargo audit --db "$AUDIT_DB"
 
 if [[ -f browser-extension/e2e/package-lock.json ]]; then
   echo "[security] npm audit (browser-extension/e2e)"

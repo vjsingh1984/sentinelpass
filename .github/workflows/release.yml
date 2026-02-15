@@ -245,7 +245,22 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
           WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
-        run: cargo tauri build --ci
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # Avoid passing empty signing inputs, which can force failing import/sign paths.
+          if [ -z "${APPLE_CERTIFICATE:-}" ]; then
+            unset APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID
+          fi
+          if [ -z "${WINDOWS_CERTIFICATE:-}" ]; then
+            unset WINDOWS_CERTIFICATE WINDOWS_CERTIFICATE_PASSWORD
+          fi
+          if [ -z "${TAURI_SIGNING_PRIVATE_KEY:-}" ]; then
+            unset TAURI_SIGNING_PRIVATE_KEY TAURI_SIGNING_PRIVATE_KEY_PASSWORD
+          fi
+
+          cargo tauri build --ci
 
       - name: Collect native installers (Unix)
         if: runner.os != 'Windows'
@@ -253,9 +268,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p dist/native
-          find sentinelpass-ui/src-tauri/target/release/bundle -type f \(
-            -name '*.AppImage' -o -name '*.deb' -o -name '*.rpm' -o -name '*.dmg' -o -name '*.pkg' -o -name '*.tar.gz'
-          \) -exec cp {} dist/native/ \;
+          find target/release/bundle -type f \( -name '*.AppImage' -o -name '*.deb' -o -name '*.rpm' -o -name '*.dmg' -o -name '*.pkg' -o -name '*.tar.gz' \) -exec cp {} dist/native/ \;
           ls -lah dist/native
           test -n "$(ls -A dist/native)"
 
@@ -264,7 +277,7 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path dist/native | Out-Null
-          Get-ChildItem sentinelpass-ui/src-tauri/target/release/bundle -Recurse -Include *.exe,*.msi |
+          Get-ChildItem target/release/bundle -Recurse -Include *.exe,*.msi |
             Copy-Item -Destination dist/native
           Get-ChildItem dist/native
           if ((Get-ChildItem dist/native | Measure-Object).Count -eq 0) {

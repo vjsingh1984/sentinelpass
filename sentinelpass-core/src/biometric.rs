@@ -331,6 +331,7 @@ mod windows {
 
 /// macOS-specific implementation using Touch ID
 #[cfg(target_os = "macos")]
+#[allow(unexpected_cfgs)]
 mod macos {
     use super::BiometricResult;
     use block::ConcreteBlock;

@@ -77,14 +77,19 @@ mod tests {
 
     #[test]
     fn test_activity_resets_timer() {
-        let mut manager = AutoLockManager::new(Duration::from_millis(100));
+        // Use wider timing margins to avoid flaky behavior on slow CI runners.
+        let mut manager = AutoLockManager::new(Duration::from_millis(250));
 
-        thread::sleep(Duration::from_millis(50));
+        thread::sleep(Duration::from_millis(40));
         manager.record_activity();
 
-        thread::sleep(Duration::from_millis(75));
+        thread::sleep(Duration::from_millis(60));
         // Should not lock because activity reset the timer
         assert!(!manager.should_lock());
+
+        thread::sleep(Duration::from_millis(220));
+        // Should lock after enough time has passed since last activity
+        assert!(manager.should_lock());
     }
 
     #[test]

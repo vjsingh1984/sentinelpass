@@ -11,8 +11,7 @@ fn main() -> Result<()> {
         .with_writer(std::io::stderr)
         .finish();
 
-    tracing::subscriber::set_global_default(subscriber)
-        .expect("setting default subscriber failed");
+    tracing::subscriber::set_global_default(subscriber).expect("setting default subscriber failed");
 
     info!("Starting SentinelPass Native Messaging Host v{}", VERSION);
 

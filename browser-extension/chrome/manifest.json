@@ -1,12 +1,14 @@
 {
   "manifest_version": 3,
   "name": "SentinelPass",
-  "version": "0.1.0",
+  "version": "0.1.5",
   "description": "Secure, local-first password manager with autofill support",
   "permissions": [
     "storage",
     "activeTab",
-    "scripting"
+    "scripting",
+    "notifications",
+    "nativeMessaging"
   ],
   "host_permissions": [
     "<all_urls>"
@@ -26,15 +28,15 @@
   "action": {
     "default_popup": "popup.html",
     "default_icon": {
-      "16": "icons/icon16.png",
-      "48": "icons/icon48.png",
-      "128": "icons/icon128.png"
+      "16": "icon16.png",
+      "48": "icon48.png",
+      "128": "icon128.png"
     }
   },
   "icons": {
-    "16": "icons/icon16.png",
-    "48": "icons/icon48.png",
-    "128": "icons/icon128.png"
+    "16": "icon16.png",
+    "48": "icon48.png",
+    "128": "icon128.png"
   },
   "commands": {
     "autofill": {

@@ -34,6 +34,13 @@
                             </svg>
                             Unlock Vault
                         </button>
+                        <button id="unlock-biometric-btn" class="btn btn-secondary hidden">
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M12 2a5 5 0 0 0-5 5v6a5 5 0 0 0 10 0V7a5 5 0 0 0-5-5z"/>
+                                <path d="M7 10h10M7 14h10M12 18v4"/>
+                            </svg>
+                            <span id="unlock-biometric-label">Unlock with Biometric</span>
+                        </button>
                     </div>
 
                     <!-- Password Input Form -->
@@ -74,6 +81,12 @@
                     <span id="entry-count" class="badge">0 entries</span>
                 </div>
                 <div class="header-right">
+                    <button id="refresh-entries-btn" class="btn-icon" title="Refresh Entries">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M21 12a9 9 0 1 1-2.64-6.36"/>
+                            <polyline points="21 3 21 9 15 9"/>
+                        </svg>
+                    </button>
                     <button id="lock-btn" class="btn-icon" title="Lock Vault">
                         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                             <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
@@ -170,12 +183,42 @@
                                         <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
                                     </svg>
                                 </button>
+                                <button id="copy-totp" class="btn-icon" title="No TOTP configured" disabled>
+                                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                        <circle cx="12" cy="12" r="8"/>
+                                        <path d="M12 8v5l3 2"/>
+                                    </svg>
+                                </button>
+                                <button id="configure-totp" class="btn-icon" title="Configure TOTP" disabled>
+                                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                        <circle cx="12" cy="12" r="3"/>
+                                        <path d="M12 1v4m0 14v4M4.22 4.22l2.83 2.83m9.9 9.9 2.83 2.83M1 12h4m14 0h4M4.22 19.78l2.83-2.83m9.9-9.9 2.83-2.83"/>
+                                    </svg>
+                                </button>
+                                <button id="remove-totp" class="btn-icon" title="Remove TOTP" disabled>
+                                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                        <path d="M3 6h18"/>
+                                        <path d="M8 6V4h8v2"/>
+                                        <path d="M19 6l-1 14H6L5 6"/>
+                                    </svg>
+                                </button>
                             </div>
                         </div>
 
                         <div class="form-group">
                             <label>URL</label>
-                            <input type="text" id="detail-url" class="input" placeholder="https://example.com">
+                            <div class="input-group">
+                                <input type="text" id="detail-url" class="input" placeholder="https://example.com">
+                                <button id="open-url-btn" class="btn-icon" title="Enter URL to open" disabled>
+                                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                        <path d="M14 3h7v7"/>
+                                        <path d="M10 14 21 3"/>
+                                        <path d="M21 14v7h-7"/>
+                                        <path d="M3 10V3h7"/>
+                                        <path d="M3 21 14 10"/>
+                                    </svg>
+                                </button>
+                            </div>
                         </div>
 
                         <div class="form-group">
@@ -197,6 +240,92 @@
             </div>
         </div>
     </div>
+
+    <!-- Secure Password Modal -->
+    <div id="secure-password-modal" class="modal-overlay hidden" aria-hidden="true">
+        <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="secure-password-title">
+            <h3 id="secure-password-title">Enable Biometric Unlock</h3>
+            <p id="secure-password-description" class="modal-description">
+                Enter your master password to continue.
+            </p>
+            <form id="secure-password-form">
+                <div class="form-group">
+                    <div class="input-group">
+                        <input
+                            type="password"
+                            id="secure-master-password"
+                            class="input"
+                            placeholder="Master password"
+                            autocomplete="current-password"
+                            required
+                        >
+                        <button type="button" id="toggle-secure-master-password" class="btn-icon" title="Show password">
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
+                                <circle cx="12" cy="12" r="3"/>
+                            </svg>
+                        </button>
+                    </div>
+                </div>
+                <div class="button-group">
+                    <button type="submit" class="btn btn-primary">Continue</button>
+                    <button type="button" id="cancel-secure-password" class="btn btn-secondary">Cancel</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- TOTP Setup Modal -->
+    <div id="totp-modal" class="modal-overlay hidden" aria-hidden="true">
+        <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="totp-modal-title">
+            <h3 id="totp-modal-title">Configure TOTP</h3>
+            <p class="modal-description">
+                Paste an <code>otpauth://</code> URI or provide a base32 secret.
+            </p>
+            <form id="totp-form">
+                <div class="form-group">
+                    <label for="totp-otpauth-uri">otpauth URI (optional)</label>
+                    <input type="text" id="totp-otpauth-uri" class="input" placeholder="otpauth://totp/...">
+                </div>
+                <div class="form-group">
+                    <label for="totp-secret">Secret (base32)</label>
+                    <input type="text" id="totp-secret" class="input" placeholder="JBSWY3DPEHPK3PXP">
+                </div>
+                <div class="form-group">
+                    <label for="totp-algorithm">Algorithm</label>
+                    <select id="totp-algorithm" class="input">
+                        <option value="sha1">SHA1</option>
+                        <option value="sha256">SHA256</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="totp-digits">Digits</label>
+                    <select id="totp-digits" class="input">
+                        <option value="6">6</option>
+                        <option value="8">8</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="totp-period">Period (seconds)</label>
+                    <input type="number" id="totp-period" class="input" min="1" value="30">
+                </div>
+                <div class="form-group">
+                    <label for="totp-issuer">Issuer (optional)</label>
+                    <input type="text" id="totp-issuer" class="input" placeholder="Acme">
+                </div>
+                <div class="form-group">
+                    <label for="totp-account-name">Account (optional)</label>
+                    <input type="text" id="totp-account-name" class="input" placeholder="user@example.com">
+                </div>
+                <div class="button-group">
+                    <button type="submit" class="btn btn-primary">Save TOTP</button>
+                    <button type="button" id="cancel-totp" class="btn btn-secondary">Cancel</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <div id="daemon-status-indicator" class="daemon-status hidden" role="status" aria-live="polite"></div>
 
     <!-- Toast Notifications -->
     <div id="toast-container"></div>

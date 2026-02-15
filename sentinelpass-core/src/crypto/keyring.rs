@@ -68,10 +68,7 @@ impl KeyHierarchy {
     ///
     /// # Returns
     /// (KDF params, wrapped DEK) for storage
-    pub fn initialize_vault(
-        &mut self,
-        master_password: &[u8],
-    ) -> Result<(KdfParams, WrappedKey)> {
+    pub fn initialize_vault(&mut self, master_password: &[u8]) -> Result<(KdfParams, WrappedKey)> {
         let kdf_params = KdfParams::new();
 
         // Derive master key from password
@@ -234,7 +231,9 @@ mod tests {
         assert!(!hierarchy.is_unlocked());
 
         // Unlock vault
-        hierarchy.unlock_vault(password, &kdf_params, &wrapped_dek).unwrap();
+        hierarchy
+            .unlock_vault(password, &kdf_params, &wrapped_dek)
+            .unwrap();
         assert!(hierarchy.is_unlocked());
     }
 
@@ -281,7 +280,9 @@ mod tests {
             hierarchy.lock_vault();
             assert!(!hierarchy.is_unlocked());
 
-            hierarchy.unlock_vault(password, &kdf_params, &wrapped_dek).unwrap();
+            hierarchy
+                .unlock_vault(password, &kdf_params, &wrapped_dek)
+                .unwrap();
             assert!(hierarchy.is_unlocked());
         }
     }

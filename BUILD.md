@@ -6,6 +6,12 @@
 Open **PowerShell** or **Command Prompt** and run:
 
 ```powershell
+# Install web toolchain
+npm install
+
+# Build TypeScript frontend/extension artifacts
+npm run web:build
+
 # Build all components
 cargo build --release
 
@@ -41,8 +47,10 @@ However, **building from native Windows is recommended** as it produces a proper
 ```bash
 # Install dependencies
 brew install openssl
+npm install
 
 # Build
+npm run web:build
 cargo build --release
 ```
 
@@ -60,8 +68,10 @@ sudo apt install -y libwebkit2gtk-4.1-dev \
     libgtk-3-dev \
     libayatana-appindicator3-dev \
     librsvg2-dev
+npm install
 
 # Build
+npm run web:build
 cargo build --release
 ```
 
@@ -79,6 +89,31 @@ For optimized release builds:
 
 ```bash
 cargo build --release --package sentinelpass-ui
+```
+
+## TypeScript Frontend/Extension Build
+
+SentinelPass web surfaces are TypeScript-first:
+
+- source files: `sentinelpass-ui/app.ts`, `browser-extension/*/*.ts`
+- emitted runtime JS: `sentinelpass-ui/app.js`, `sentinelpass-ui/dist/app.js`, `browser-extension/*/*.js`
+
+Use:
+
+```bash
+npm run web:typecheck
+npm run web:build
+npm run test:ts
+```
+
+### Rust LLVM Coverage
+
+```bash
+# One-time install
+cargo install cargo-llvm-cov --locked
+
+# Generate coverage + enforce minimum line coverage
+bash scripts/coverage-rust.sh
 ```
 
 The release binary will be at:

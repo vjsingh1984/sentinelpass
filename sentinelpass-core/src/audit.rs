@@ -1,6 +1,6 @@
 //! Audit logging for security events and operations
 
-use crate::{Result, PasswordManagerError};
+use crate::{PasswordManagerError, Result};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::fs::{File, OpenOptions};
@@ -14,28 +14,51 @@ use tracing::info;
 pub enum AuditEventType {
     /// Vault operations
     VaultCreated,
-    VaultUnlocked { success: bool },
+    VaultUnlocked {
+        success: bool,
+    },
     VaultLocked,
 
     /// Credential operations
-    CredentialCreated { entry_id: i64 },
-    CredentialViewed { entry_id: i64 },
-    CredentialModified { entry_id: i64 },
-    CredentialDeleted { entry_id: i64 },
-    CredentialsListed { count: usize },
+    CredentialCreated {
+        entry_id: i64,
+    },
+    CredentialViewed {
+        entry_id: i64,
+    },
+    CredentialModified {
+        entry_id: i64,
+    },
+    CredentialDeleted {
+        entry_id: i64,
+    },
+    CredentialsListed {
+        count: usize,
+    },
 
     /// Authentication events
-    AuthenticationAttempt { success: bool },
-    AuthenticationFailure { reason: String },
+    AuthenticationAttempt {
+        success: bool,
+    },
+    AuthenticationFailure {
+        reason: String,
+    },
 
     /// Security events
-    BruteForceDetected { ip_address: Option<String> },
+    BruteForceDetected {
+        ip_address: Option<String>,
+    },
     VaultAutoLocked,
     VaultLockedManually,
 
     /// Import/Export
-    DataExported { format: String },
-    DataImported { format: String, count: usize },
+    DataExported {
+        format: String,
+    },
+    DataImported {
+        format: String,
+        count: usize,
+    },
 
     /// System events
     DaemonStarted,
@@ -73,15 +96,18 @@ impl AuditLogger {
         let log_file = log_dir.join("audit.log");
 
         // Ensure log directory exists
-        std::fs::create_dir_all(&log_dir)
-            .map_err(|e| PasswordManagerError::Database(format!("Failed to create audit log directory: {}", e)))?;
+        std::fs::create_dir_all(&log_dir).map_err(|e| {
+            PasswordManagerError::Database(format!("Failed to create audit log directory: {}", e))
+        })?;
 
         // Open log file in append mode
         let file = OpenOptions::new()
             .create(true)
             .append(true)
             .open(&log_file)
-            .map_err(|e| PasswordManagerError::Database(format!("Failed to open audit log: {}", e)))?;
+            .map_err(|e| {
+                PasswordManagerError::Database(format!("Failed to open audit log: {}", e))
+            })?;
 
         info!("Audit logger initialized: {:?}", log_file);
 
@@ -104,16 +130,21 @@ impl AuditLogger {
             tid: None, // ThreadId cannot be converted to u64, using None
         };
 
-        let json = serde_json::to_string(&entry)
-            .map_err(|e| PasswordManagerError::Database(format!("Failed to serialize audit entry: {}", e)))?;
+        let json = serde_json::to_string(&entry).map_err(|e| {
+            PasswordManagerError::Database(format!("Failed to serialize audit entry: {}", e))
+        })?;
 
         let log_line = format!("{}\n", json);
 
-        if let Some(ref mut writer) = *self.writer.lock().map_err(|_| PasswordManagerError::Database("Failed to lock audit writer".to_string()))? {
-            writer.write_all(log_line.as_bytes())
-                .map_err(|e| PasswordManagerError::Database(format!("Failed to write audit log: {}", e)))?;
-            writer.flush()
-                .map_err(|e| PasswordManagerError::Database(format!("Failed to flush audit log: {}", e)))?;
+        if let Some(ref mut writer) = *self.writer.lock().map_err(|_| {
+            PasswordManagerError::Database("Failed to lock audit writer".to_string())
+        })? {
+            writer.write_all(log_line.as_bytes()).map_err(|e| {
+                PasswordManagerError::Database(format!("Failed to write audit log: {}", e))
+            })?;
+            writer.flush().map_err(|e| {
+                PasswordManagerError::Database(format!("Failed to flush audit log: {}", e))
+            })?;
         }
 
         Ok(())
@@ -123,43 +154,42 @@ impl AuditLogger {
     fn severity_for_event(event: &AuditEventType) -> u8 {
         match event {
             // Critical events (5)
-            AuditEventType::VaultCreated |
-            AuditEventType::DataExported { .. } => 5,
+            AuditEventType::VaultCreated | AuditEventType::DataExported { .. } => 5,
 
             // High severity (4)
-            AuditEventType::CredentialDeleted { .. } |
-            AuditEventType::BruteForceDetected { .. } => 4,
+            AuditEventType::CredentialDeleted { .. }
+            | AuditEventType::BruteForceDetected { .. } => 4,
 
             // Medium-high severity (3)
-            AuditEventType::VaultUnlocked { success: true } |
-            AuditEventType::CredentialModified { .. } => 3,
+            AuditEventType::VaultUnlocked { success: true }
+            | AuditEventType::CredentialModified { .. } => 3,
 
             // Medium severity (2)
-            AuditEventType::VaultLocked |
-            AuditEventType::CredentialCreated { .. } |
-            AuditEventType::CredentialViewed { .. } |
-            AuditEventType::VaultAutoLocked => 2,
+            AuditEventType::VaultLocked
+            | AuditEventType::CredentialCreated { .. }
+            | AuditEventType::CredentialViewed { .. }
+            | AuditEventType::VaultAutoLocked => 2,
 
             // Low severity (1)
-            AuditEventType::CredentialsListed { .. } |
-            AuditEventType::DataImported { .. } => 1,
+            AuditEventType::CredentialsListed { .. } | AuditEventType::DataImported { .. } => 1,
 
             // Info (0)
-            AuditEventType::AuthenticationAttempt { .. } |
-            AuditEventType::VaultLockedManually |
-            AuditEventType::AuthenticationFailure { .. } |
-            AuditEventType::VaultUnlocked { success: false } |
-            AuditEventType::DaemonStarted |
-            AuditEventType::DaemonStopped |
-            AuditEventType::IpcServerStarted |
-            AuditEventType::IpcClientConnected => 0,
+            AuditEventType::AuthenticationAttempt { .. }
+            | AuditEventType::VaultLockedManually
+            | AuditEventType::AuthenticationFailure { .. }
+            | AuditEventType::VaultUnlocked { success: false }
+            | AuditEventType::DaemonStarted
+            | AuditEventType::DaemonStopped
+            | AuditEventType::IpcServerStarted
+            | AuditEventType::IpcClientConnected => 0,
         }
     }
 
     /// Get all audit entries
     pub fn get_entries(&self, limit: usize) -> Result<Vec<AuditEntry>> {
-        let content = std::fs::read_to_string(&self.log_file)
-            .map_err(|e| PasswordManagerError::Database(format!("Failed to read audit log: {}", e)))?;
+        let content = std::fs::read_to_string(&self.log_file).map_err(|e| {
+            PasswordManagerError::Database(format!("Failed to read audit log: {}", e))
+        })?;
 
         let entries: Vec<AuditEntry> = content
             .lines()
@@ -174,8 +204,9 @@ impl AuditLogger {
 
     /// Get audit entries since a specific timestamp
     pub fn get_entries_since(&self, since: DateTime<Utc>) -> Result<Vec<AuditEntry>> {
-        let content = std::fs::read_to_string(&self.log_file)
-            .map_err(|e| PasswordManagerError::Database(format!("Failed to read audit log: {}", e)))?;
+        let content = std::fs::read_to_string(&self.log_file).map_err(|e| {
+            PasswordManagerError::Database(format!("Failed to read audit log: {}", e))
+        })?;
 
         let entries: Vec<AuditEntry> = content
             .lines()
@@ -189,8 +220,9 @@ impl AuditLogger {
 
     /// Get audit entries by severity level
     pub fn get_entries_by_severity(&self, min_severity: u8) -> Result<Vec<AuditEntry>> {
-        let content = std::fs::read_to_string(&self.log_file)
-            .map_err(|e| PasswordManagerError::Database(format!("Failed to read audit log: {}", e)))?;
+        let content = std::fs::read_to_string(&self.log_file).map_err(|e| {
+            PasswordManagerError::Database(format!("Failed to read audit log: {}", e))
+        })?;
 
         let entries: Vec<AuditEntry> = content
             .lines()
@@ -219,8 +251,19 @@ mod tests {
 
     #[test]
     fn test_severity_levels() {
-        assert_eq!(AuditLogger::severity_for_event(&AuditEventType::BruteForceDetected { ip_address: None }), 4);
-        assert_eq!(AuditLogger::severity_for_event(&AuditEventType::VaultUnlocked { success: true }), 3);
-        assert_eq!(AuditLogger::severity_for_event(&AuditEventType::IpcClientConnected), 0);
+        assert_eq!(
+            AuditLogger::severity_for_event(&AuditEventType::BruteForceDetected {
+                ip_address: None
+            }),
+            4
+        );
+        assert_eq!(
+            AuditLogger::severity_for_event(&AuditEventType::VaultUnlocked { success: true }),
+            3
+        );
+        assert_eq!(
+            AuditLogger::severity_for_event(&AuditEventType::IpcClientConnected),
+            0
+        );
     }
 }

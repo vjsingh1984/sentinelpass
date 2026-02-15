@@ -1,6 +1,6 @@
 //! Secure random password generator
 
-use crate::crypto::{Result, CryptoError};
+use crate::crypto::{CryptoError, Result};
 use rand::seq::SliceRandom;
 
 /// Character sets for password generation
@@ -40,8 +40,10 @@ impl CharacterSets {
     }
 
     const LETTERS: &'static [u8] = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
-    const ALPHANUMERIC: &'static [u8] = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-    const ALL: &'static [u8] = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()_+-=[]{}|;:,.<>?";
+    const ALPHANUMERIC: &'static [u8] =
+        b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+    const ALL: &'static [u8] =
+        b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()_+-=[]{}|;:,.<>?";
 }
 
 /// Configuration for password generation
@@ -120,13 +122,17 @@ impl PasswordGeneratorConfig {
     pub fn validate(&self) -> Result<()> {
         if self.length < 4 {
             return Err(CryptoError::EncryptionFailed(
-                "Password length must be at least 4 characters".to_string()
+                "Password length must be at least 4 characters".to_string(),
             ));
         }
 
-        if !self.include_lowercase && !self.include_uppercase && !self.include_digits && !self.include_symbols {
+        if !self.include_lowercase
+            && !self.include_uppercase
+            && !self.include_digits
+            && !self.include_symbols
+        {
             return Err(CryptoError::EncryptionFailed(
-                "At least one character type must be enabled".to_string()
+                "At least one character type must be enabled".to_string(),
             ));
         }
 
@@ -165,7 +171,7 @@ pub fn generate_password(config: &PasswordGeneratorConfig) -> Result<String> {
     // Ensure pool is not empty
     if pool.is_empty() {
         return Err(CryptoError::RandomFailed(
-            "Character pool is empty after applying filters".to_string()
+            "Character pool is empty after applying filters".to_string(),
         ));
     }
 
@@ -175,7 +181,12 @@ pub fn generate_password(config: &PasswordGeneratorConfig) -> Result<String> {
 
     if config.include_lowercase {
         let chars = if config.exclude_ambiguous {
-            charset.lowercase.iter().copied().filter(|&c| !matches!(c, b'l')).collect::<Vec<_>>()
+            charset
+                .lowercase
+                .iter()
+                .copied()
+                .filter(|&c| !matches!(c, b'l'))
+                .collect::<Vec<_>>()
         } else {
             charset.lowercase.to_vec()
         };
@@ -187,7 +198,12 @@ pub fn generate_password(config: &PasswordGeneratorConfig) -> Result<String> {
 
     if config.include_uppercase {
         let chars = if config.exclude_ambiguous {
-            charset.uppercase.iter().copied().filter(|&c| !matches!(c, b'I' | b'O')).collect::<Vec<_>>()
+            charset
+                .uppercase
+                .iter()
+                .copied()
+                .filter(|&c| !matches!(c, b'I' | b'O'))
+                .collect::<Vec<_>>()
         } else {
             charset.uppercase.to_vec()
         };
@@ -199,7 +215,12 @@ pub fn generate_password(config: &PasswordGeneratorConfig) -> Result<String> {
 
     if config.include_digits {
         let chars = if config.exclude_ambiguous {
-            charset.digits.iter().copied().filter(|&c| !matches!(c, b'0' | b'1')).collect::<Vec<_>>()
+            charset
+                .digits
+                .iter()
+                .copied()
+                .filter(|&c| !matches!(c, b'0' | b'1'))
+                .collect::<Vec<_>>()
         } else {
             charset.digits.to_vec()
         };
@@ -246,15 +267,15 @@ pub fn generate_simple_password(length: usize) -> Result<String> {
 pub fn generate_passphrase(word_count: usize, separator: &str) -> Result<String> {
     if word_count == 0 {
         return Err(CryptoError::EncryptionFailed(
-            "Word count must be at least 1".to_string()
+            "Word count must be at least 1".to_string(),
         ));
     }
 
     // Simple word list for demonstration
     const WORDS: &[&str] = &[
-        "correct", "horse", "battery", "staple", "cloud", "mountain", "river", "forest",
-        "ocean", "star", "moon", "sun", "wind", "rain", "snow", "fire", "earth", "water",
-        "bridge", "castle", "dragon", "eagle", "flower", "garden", "house", "island", "journey",
+        "correct", "horse", "battery", "staple", "cloud", "mountain", "river", "forest", "ocean",
+        "star", "moon", "sun", "wind", "rain", "snow", "fire", "earth", "water", "bridge",
+        "castle", "dragon", "eagle", "flower", "garden", "house", "island", "journey",
     ];
 
     let mut rng = rand::thread_rng();
@@ -301,7 +322,9 @@ mod tests {
             .length(20);
         let password = generate_password(&config).unwrap();
         assert_eq!(password.len(), 20);
-        assert!(!password.chars().any(|c| matches!(c, 'l' | '1' | 'I' | 'O' | '0')));
+        assert!(!password
+            .chars()
+            .any(|c| matches!(c, 'l' | '1' | 'I' | 'O' | '0')));
     }
 
     #[test]

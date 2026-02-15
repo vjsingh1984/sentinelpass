@@ -1,6 +1,6 @@
 //! Import/export functionality for password vault
 
-use crate::{VaultManager, Entry, Result, PasswordManagerError};
+use crate::{Entry, PasswordManagerError, Result, VaultManager};
 use serde::{Deserialize, Serialize};
 use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
@@ -59,8 +59,9 @@ pub fn export_to_json(vault: &VaultManager, output: &Path) -> Result<()> {
     let json = serde_json::to_string_pretty(&export_entries)
         .map_err(|e| PasswordManagerError::Database(e.to_string()))?;
 
-    let mut file = std::fs::File::create(output)
-        .map_err(|e| PasswordManagerError::Database(format!("Failed to create export file: {}", e)))?;
+    let mut file = std::fs::File::create(output).map_err(|e| {
+        PasswordManagerError::Database(format!("Failed to create export file: {}", e))
+    })?;
 
     file.write_all(json.as_bytes())
         .map_err(|e| PasswordManagerError::Database(format!("Failed to write export: {}", e)))?;
@@ -75,8 +76,9 @@ pub fn export_to_csv(vault: &VaultManager, output: &Path) -> Result<()> {
     }
 
     let entries = vault.list_entries()?;
-    let mut file = std::fs::File::create(output)
-        .map_err(|e| PasswordManagerError::Database(format!("Failed to create export file: {}", e)))?;
+    let mut file = std::fs::File::create(output).map_err(|e| {
+        PasswordManagerError::Database(format!("Failed to create export file: {}", e))
+    })?;
 
     // Write CSV header
     writeln!(
@@ -105,8 +107,16 @@ pub fn export_to_csv(vault: &VaultManager, output: &Path) -> Result<()> {
             escape(&entry.title),
             escape(&entry.username),
             escape(&entry.password),
-            entry.url.as_ref().map(|s| escape(s)).unwrap_or_else(|| "".to_string()),
-            entry.notes.as_ref().map(|s| escape(s)).unwrap_or_else(|| "".to_string()),
+            entry
+                .url
+                .as_ref()
+                .map(|s| escape(s))
+                .unwrap_or_else(|| "".to_string()),
+            entry
+                .notes
+                .as_ref()
+                .map(|s| escape(s))
+                .unwrap_or_else(|| "".to_string()),
             escape(&entry.created_at.to_rfc3339()),
             escape(&entry.modified_at.to_rfc3339()),
             entry.favorite
@@ -123,8 +133,9 @@ pub fn import_from_json(vault: &mut VaultManager, input: &Path) -> Result<usize>
         return Err(PasswordManagerError::VaultLocked);
     }
 
-    let file = std::fs::File::open(input)
-        .map_err(|e| PasswordManagerError::Database(format!("Failed to open import file: {}", e)))?;
+    let file = std::fs::File::open(input).map_err(|e| {
+        PasswordManagerError::Database(format!("Failed to open import file: {}", e))
+    })?;
 
     let reader = BufReader::new(file);
     let export_entries: Vec<ExportEntry> = serde_json::from_reader(reader)
@@ -139,10 +150,12 @@ pub fn import_from_json(vault: &mut VaultManager, input: &Path) -> Result<usize>
             password: export_entry.password,
             url: export_entry.url,
             notes: export_entry.notes,
-            created_at: export_entry.created_at.parse()
-                .map_err(|e| PasswordManagerError::Database(format!("Invalid created_at date: {}", e)))?,
-            modified_at: export_entry.modified_at.parse()
-                .map_err(|e| PasswordManagerError::Database(format!("Invalid modified_at date: {}", e)))?,
+            created_at: export_entry.created_at.parse().map_err(|e| {
+                PasswordManagerError::Database(format!("Invalid created_at date: {}", e))
+            })?,
+            modified_at: export_entry.modified_at.parse().map_err(|e| {
+                PasswordManagerError::Database(format!("Invalid modified_at date: {}", e))
+            })?,
             favorite: export_entry.favorite,
         };
 
@@ -159,29 +172,33 @@ pub fn import_from_csv(vault: &mut VaultManager, input: &Path) -> Result<usize> 
         return Err(PasswordManagerError::VaultLocked);
     }
 
-    let file = std::fs::File::open(input)
-        .map_err(|e| PasswordManagerError::Database(format!("Failed to open import file: {}", e)))?;
+    let file = std::fs::File::open(input).map_err(|e| {
+        PasswordManagerError::Database(format!("Failed to open import file: {}", e))
+    })?;
 
     let reader = BufReader::new(file);
     let mut lines = reader.lines();
 
     // Skip header line
-    let _header = lines.next()
+    let _header = lines
+        .next()
         .ok_or_else(|| PasswordManagerError::Database("Empty CSV file".to_string()))?
         .map_err(|e| PasswordManagerError::Database(format!("Failed to read CSV header: {}", e)))?;
 
     let mut imported = 0;
 
     for (line_num, line_result) in lines.enumerate().take(10000) {
-        let line = line_result
-            .map_err(|e| PasswordManagerError::Database(format!("Failed to read line {}: {}", line_num + 2, e)))?;
+        let line = line_result.map_err(|e| {
+            PasswordManagerError::Database(format!("Failed to read line {}: {}", line_num + 2, e))
+        })?;
 
         if line.trim().is_empty() {
             continue;
         }
 
-        let record = parse_csv_line(&line)
-            .map_err(|e| PasswordManagerError::Database(format!("Failed to parse line {}: {}", line_num + 2, e)))?;
+        let record = parse_csv_line(&line).map_err(|e| {
+            PasswordManagerError::Database(format!("Failed to parse line {}: {}", line_num + 2, e))
+        })?;
 
         let empty = &String::new();
         let entry = Entry {
@@ -191,11 +208,19 @@ pub fn import_from_csv(vault: &mut VaultManager, input: &Path) -> Result<usize> 
             password: record.get(2).unwrap_or(empty).to_string(),
             url: {
                 let url_str = record.get(3).unwrap_or(empty);
-                if url_str.is_empty() { None } else { Some(url_str.to_string()) }
+                if url_str.is_empty() {
+                    None
+                } else {
+                    Some(url_str.to_string())
+                }
             },
             notes: {
                 let notes_str = record.get(4).unwrap_or(empty);
-                if notes_str.is_empty() { None } else { Some(notes_str.to_string()) }
+                if notes_str.is_empty() {
+                    None
+                } else {
+                    Some(notes_str.to_string())
+                }
             },
             created_at: chrono::Utc::now(),
             modified_at: chrono::Utc::now(),
@@ -244,7 +269,8 @@ fn parse_csv_line(line: &str) -> Result<Vec<String>> {
     fields.push(current);
 
     // Unescape quoted fields
-    let unescaped: Vec<String> = fields.into_iter()
+    let unescaped: Vec<String> = fields
+        .into_iter()
         .map(|s| s.replace("\"\"", "\""))
         .collect();
 
@@ -257,7 +283,8 @@ mod tests {
 
     #[test]
     fn test_parse_csv_simple() {
-        let line = r#"title,username,password,url,notes,2024-01-01T00:00:00Z,2024-01-01T00:00:00Z,false"#;
+        let line =
+            r#"title,username,password,url,notes,2024-01-01T00:00:00Z,2024-01-01T00:00:00Z,false"#;
         let result = parse_csv_line(line).unwrap();
         assert_eq!(result.len(), 8);
         assert_eq!(result[0], "title");
@@ -275,7 +302,8 @@ mod tests {
 
     #[test]
     fn test_parse_csv_with_quotes() {
-        let line = r#"title,user,"pass""word",url,note,2024-01-01T00:00:00Z,2024-01-01T00:00:00Z,false"#;
+        let line =
+            r#"title,user,"pass""word",url,note,2024-01-01T00:00:00Z,2024-01-01T00:00:00Z,false"#;
         let result = parse_csv_line(line).unwrap();
         assert_eq!(result.len(), 8);
         assert_eq!(result[2], "pass\"word");
@@ -292,8 +320,16 @@ mod tests {
             password: "password123".to_string(),
             url: Some("https://example.com".to_string()),
             notes: Some("Test notes".to_string()),
-            created_at: chrono::Utc.ymd_opt(2024, 1, 1).unwrap().and_hms_opt(0, 0, 0).unwrap(),
-            modified_at: chrono::Utc.ymd_opt(2024, 1, 1).unwrap().and_hms_opt(0, 0, 0).unwrap(),
+            created_at: chrono::Utc
+                .ymd_opt(2024, 1, 1)
+                .unwrap()
+                .and_hms_opt(0, 0, 0)
+                .unwrap(),
+            modified_at: chrono::Utc
+                .ymd_opt(2024, 1, 1)
+                .unwrap()
+                .and_hms_opt(0, 0, 0)
+                .unwrap(),
             favorite: true,
         };
 

@@ -47,11 +47,11 @@ impl PasswordStrength {
     /// Get the color code for UI display
     pub fn color_code(&self) -> &'static str {
         match self {
-            PasswordStrength::VeryWeak => "\x1b[31m", // Red
-            PasswordStrength::Weak => "\x1b[33m",     // Orange/Yellow
-            PasswordStrength::Fair => "\x1b[93m",     // Bright Yellow
-            PasswordStrength::Good => "\x1b[32m",     // Green
-            PasswordStrength::Strong => "\x1b[36m",   // Cyan
+            PasswordStrength::VeryWeak => "\x1b[31m",   // Red
+            PasswordStrength::Weak => "\x1b[33m",       // Orange/Yellow
+            PasswordStrength::Fair => "\x1b[93m",       // Bright Yellow
+            PasswordStrength::Good => "\x1b[32m",       // Green
+            PasswordStrength::Strong => "\x1b[36m",     // Cyan
             PasswordStrength::VeryStrong => "\x1b[34m", // Blue
         }
     }
@@ -117,7 +117,9 @@ pub fn analyze_password(password: &str) -> Result<PasswordAnalysis> {
     let has_lowercase = password.chars().any(|c| c.is_lowercase());
     let has_uppercase = password.chars().any(|c| c.is_uppercase());
     let has_digits = password.chars().any(|c| c.is_ascii_digit());
-    let has_symbols = password.chars().any(|c| c.is_ascii_punctuation() || c.is_ascii_graphic() && !c.is_alphanumeric());
+    let has_symbols = password
+        .chars()
+        .any(|c| c.is_ascii_punctuation() || c.is_ascii_graphic() && !c.is_alphanumeric());
 
     // Calculate character set size
     let mut charset_size = 0;
@@ -199,20 +201,21 @@ pub fn analyze_password(password: &str) -> Result<PasswordAnalysis> {
     }
 
     // Check for repeating characters
-    if password.chars().collect::<Vec<char>>().windows(3).any(|w| w[0] == w[1] && w[1] == w[2]) {
+    if password
+        .chars()
+        .collect::<Vec<char>>()
+        .windows(3)
+        .any(|w| w[0] == w[1] && w[1] == w[2])
+    {
         warnings.push("Contains repeating characters".to_string());
         suggestions.push("Avoid repeating characters".to_string());
     }
 
     // Check for sequential characters
-    let sequential = password
-        .chars()
-        .collect::<Vec<char>>()
-        .windows(3)
-        .any(|w| {
-            let (a, b, c) = (w[0] as u8, w[1] as u8, w[2] as u8);
-            (a + 1 == b && b + 1 == c) || (a == b + 1 && b == c + 1)
-        });
+    let sequential = password.chars().collect::<Vec<char>>().windows(3).any(|w| {
+        let (a, b, c) = (w[0] as u8, w[1] as u8, w[2] as u8);
+        (a + 1 == b && b + 1 == c) || (a == b + 1 && b == c + 1)
+    });
     if sequential {
         warnings.push("Contains sequential characters (like 'abc' or '123')".to_string());
         suggestions.push("Avoid sequential patterns".to_string());
@@ -288,13 +291,19 @@ mod tests {
     #[test]
     fn test_good_password() {
         let analysis = analyze_password("MyP@ssw0rd!23").unwrap();
-        assert!(matches!(analysis.strength, PasswordStrength::Good | PasswordStrength::Strong));
+        assert!(matches!(
+            analysis.strength,
+            PasswordStrength::Good | PasswordStrength::Strong
+        ));
     }
 
     #[test]
     fn test_strong_password() {
         let analysis = analyze_password("Tr0ub4dor&3St!le#P@ssw0rd").unwrap();
-        assert!(matches!(analysis.strength, PasswordStrength::Strong | PasswordStrength::VeryStrong));
+        assert!(matches!(
+            analysis.strength,
+            PasswordStrength::Strong | PasswordStrength::VeryStrong
+        ));
         assert!(analysis.entropy_bits > 80.0);
     }
 

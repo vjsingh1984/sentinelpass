@@ -43,9 +43,7 @@ fn normalize_host(value: &str) -> Option<String> {
         host = &host[(at_pos + 1)..];
     }
 
-    let host_end = host
-        .find(['/', '?', '#'])
-        .unwrap_or(host.len());
+    let host_end = host.find(['/', '?', '#']).unwrap_or(host.len());
     host = &host[..host_end];
     host = host.trim_end_matches('.');
 

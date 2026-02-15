@@ -10,7 +10,7 @@
 use crate::crypto::{CryptoError, Result};
 use argon2::{
     password_hash::{PasswordHasher, SaltString},
-    Argon2, Algorithm, Params, Version,
+    Algorithm, Argon2, Params, Version,
 };
 use serde::{Deserialize, Serialize};
 
@@ -100,8 +100,13 @@ pub fn derive_master_key(password: &[u8], params: &KdfParams) -> Result<[u8; 32]
     params.validate()?;
 
     // Build Argon2id parameters
-    let params_obj = Params::new(params.mem_cost, params.time_cost, params.parallelism, Some(params.output_length as usize))
-        .map_err(|e| CryptoError::KdfFailed(format!("Invalid parameters: {}", e)))?;
+    let params_obj = Params::new(
+        params.mem_cost,
+        params.time_cost,
+        params.parallelism,
+        Some(params.output_length as usize),
+    )
+    .map_err(|e| CryptoError::KdfFailed(format!("Invalid parameters: {}", e)))?;
 
     let argon2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, params_obj);
 
@@ -116,7 +121,8 @@ pub fn derive_master_key(password: &[u8], params: &KdfParams) -> Result<[u8; 32]
 
     // Extract the output hash
     let hash_bytes = password_hash.hash.map(|h| h.as_bytes().to_vec());
-    let hash_bytes = hash_bytes.ok_or_else(|| CryptoError::KdfFailed("No hash output".to_string()))?;
+    let hash_bytes =
+        hash_bytes.ok_or_else(|| CryptoError::KdfFailed("No hash output".to_string()))?;
 
     if hash_bytes.len() < 32 {
         return Err(CryptoError::KdfFailed(format!(
@@ -143,7 +149,11 @@ pub fn derive_master_key(password: &[u8], params: &KdfParams) -> Result<[u8; 32]
 ///
 /// # Returns
 /// Ok(()) if password is correct, Err otherwise
-pub fn verify_master_password(password: &[u8], params: &KdfParams, expected_key: &[u8; 32]) -> Result<()> {
+pub fn verify_master_password(
+    password: &[u8],
+    params: &KdfParams,
+    expected_key: &[u8; 32],
+) -> Result<()> {
     // Derive the key from the provided password
     let derived_key = derive_master_key(password, params)?;
 
@@ -180,15 +190,27 @@ mod tests {
     #[test]
     fn test_kdf_params_validation() {
         // Test too low memory
-        let params = KdfParams { mem_cost: 1000, ..Default::default() };
+        let params = KdfParams {
+            mem_cost: 1000,
+            ..Default::default()
+        };
         assert!(params.validate().is_err());
 
         // Test too low time
-        let params = KdfParams { mem_cost: 262_144, time_cost: 0, ..Default::default() };
+        let params = KdfParams {
+            mem_cost: 262_144,
+            time_cost: 0,
+            ..Default::default()
+        };
         assert!(params.validate().is_err());
 
         // Test too low parallelism
-        let params = KdfParams { mem_cost: 262_144, time_cost: 3, parallelism: 0, ..Default::default() };
+        let params = KdfParams {
+            mem_cost: 262_144,
+            time_cost: 3,
+            parallelism: 0,
+            ..Default::default()
+        };
         assert!(params.validate().is_err());
 
         // Test too short output

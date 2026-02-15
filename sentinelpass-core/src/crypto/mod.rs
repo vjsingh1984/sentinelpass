@@ -8,19 +8,24 @@
 //! - Password generation
 //! - Password strength analysis
 
-pub mod kdf;
 pub mod cipher;
+pub mod kdf;
 pub mod keyring;
-pub mod zero;
 pub mod password;
 pub mod strength;
+pub mod zero;
 
-pub use kdf::{KdfParams, derive_master_key, verify_master_password};
-pub use cipher::{EncryptedEntry, encrypt_entry, decrypt_entry, DataEncryptionKey};
-pub use keyring::{MasterKey, WrappedKey, KeyHierarchy};
-pub use zero::{SecureBuffer, zeroize_bytes};
-pub use password::{generate_password, generate_simple_password, generate_passphrase, PasswordGeneratorConfig, CharacterSets};
-pub use strength::{analyze_password, calculate_shannon_entropy, PasswordAnalysis, PasswordStrength};
+pub use cipher::{decrypt_entry, encrypt_entry, DataEncryptionKey, EncryptedEntry};
+pub use kdf::{derive_master_key, verify_master_password, KdfParams};
+pub use keyring::{KeyHierarchy, MasterKey, WrappedKey};
+pub use password::{
+    generate_passphrase, generate_password, generate_simple_password, CharacterSets,
+    PasswordGeneratorConfig,
+};
+pub use strength::{
+    analyze_password, calculate_shannon_entropy, PasswordAnalysis, PasswordStrength,
+};
+pub use zero::{zeroize_bytes, SecureBuffer};
 
 use thiserror::Error;
 

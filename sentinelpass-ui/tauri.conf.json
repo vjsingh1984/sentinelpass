@@ -4,8 +4,8 @@
   "version": "0.1.0",
   "identifier": "com.sentinelpass.app",
   "build": {
-    "beforeDevCommand": "",
-    "beforeBuildCommand": "",
+    "beforeDevCommand": "npm run web:build",
+    "beforeBuildCommand": "npm run web:build",
     "frontendDist": "dist"
   },
   "app": {

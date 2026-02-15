@@ -25,6 +25,7 @@ A secure, local-first password manager with browser autofill support.
 ### Prerequisites
 
 - Rust 1.70 or later
+- Node.js 20+ (for TypeScript web/extension builds)
 - Chrome or Chromium-based browser
 - For Windows: PowerShell 5.1+
 - For Unix: Bash and standard Unix tools
@@ -63,6 +64,8 @@ git clone https://github.com/vjsingh1984/sentinelpass.git
 cd sentinelpass
 
 # Build the project
+npm install
+npm run web:build
 cargo build --release
 
 # Install (Windows, user-level one-stop)
@@ -181,6 +184,12 @@ The daemon will:
 # Run tests
 cargo test --workspace
 
+# Type-check web/extension TypeScript
+npm run web:typecheck
+
+# Run TypeScript unit tests with coverage (TDD gate)
+npm run test:ts
+
 # Run Clippy
 cargo clippy --workspace --all-targets -- -D warnings
 
@@ -194,6 +203,13 @@ cargo run --bin sentinelpass-daemon
 cargo build --workspace
 ```
 
+## Test & Coverage Gates
+
+- Rust tests: `bash scripts/test-rust.sh`
+- Rust LLVM coverage: `bash scripts/coverage-rust.sh` (requires `cargo-llvm-cov`)
+- TypeScript tests + coverage: `bash scripts/test-web.sh`
+- Pre-commit hook runs lint + tests for touched Rust/TS files (`.githooks/pre-commit`)
+
 ## Project Structure
 
 ```
@@ -202,7 +218,8 @@ sentinelpass/
 ├── sentinelpass-cli/      # Command-line interface
 ├── sentinelpass-daemon/   # Background service for vault management
 ├── sentinelpass-host/     # Native messaging host for browser extension
-├── browser-extension/     # Chrome extension
+├── browser-extension/     # Chrome/Firefox extension (TypeScript sources + emitted JS)
+├── sentinelpass-ui/       # Tauri desktop frontend (TypeScript app + dist assets)
 └── installation/          # Installation scripts
 ```
 

@@ -41,11 +41,29 @@ CREATE TABLE IF NOT EXISTS domain_mappings (
     FOREIGN KEY (entry_id) REFERENCES entries(entry_id) ON DELETE CASCADE
 );
 
+-- TOTP secrets table
+-- Stores encrypted TOTP seed and algorithm settings for entries
+CREATE TABLE IF NOT EXISTS totp_secrets (
+    totp_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    entry_id INTEGER NOT NULL UNIQUE,
+    secret_encrypted BLOB NOT NULL,
+    nonce BLOB NOT NULL,
+    auth_tag BLOB NOT NULL,
+    algorithm TEXT NOT NULL DEFAULT 'SHA1',
+    digits INTEGER NOT NULL DEFAULT 6,
+    period INTEGER NOT NULL DEFAULT 30,
+    issuer TEXT,
+    account_name TEXT,
+    created_at INTEGER NOT NULL,
+    FOREIGN KEY (entry_id) REFERENCES entries(entry_id) ON DELETE CASCADE
+);
+
 -- Indexes for performance
 CREATE INDEX IF NOT EXISTS idx_entries_vault_id ON entries(vault_id);
 CREATE INDEX IF NOT EXISTS idx_entries_favorite ON entries(favorite);
 CREATE INDEX IF NOT EXISTS idx_domain_mappings_entry_id ON domain_mappings(entry_id);
 CREATE INDEX IF NOT EXISTS idx_domain_mappings_domain ON domain_mappings(domain);
+CREATE INDEX IF NOT EXISTS idx_totp_secrets_entry_id ON totp_secrets(entry_id);
 
 -- Trigger to update last_modified timestamp
 CREATE TRIGGER IF NOT EXISTS update_db_metadata_timestamp

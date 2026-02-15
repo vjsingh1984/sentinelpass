@@ -1,0 +1,16 @@
+{
+  "name": "sentinelpass-web-tooling",
+  "private": true,
+  "scripts": {
+    "web:build": "tsc -p tsconfig.web.json && node scripts/postprocess-web-build.mjs",
+    "web:typecheck": "tsc -p tsconfig.web.json --noEmit",
+    "test:ts": "vitest run --coverage",
+    "test:ts:watch": "vitest"
+  },
+  "devDependencies": {
+    "@types/chrome": "^0.1.31",
+    "@vitest/coverage-v8": "^2.1.8",
+    "typescript": "^5.9.2",
+    "vitest": "^2.1.8"
+  }
+}

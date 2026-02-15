@@ -71,10 +71,14 @@ impl LockoutManager {
         let ip_str = ip_address.map(|ip| ip.to_string());
         let now = Utc::now().timestamp();
 
-        self.conn.execute(
-            "INSERT INTO failed_attempts (attempt_time, ip_address) VALUES (?1, ?2)",
-            (now, ip_str),
-        ).map_err(|e| PasswordManagerError::Database(format!("Failed to record attempt: {}", e)))?;
+        self.conn
+            .execute(
+                "INSERT INTO failed_attempts (attempt_time, ip_address) VALUES (?1, ?2)",
+                (now, ip_str),
+            )
+            .map_err(|e| {
+                PasswordManagerError::Database(format!("Failed to record attempt: {}", e))
+            })?;
 
         Ok(())
     }
@@ -83,33 +87,42 @@ impl LockoutManager {
     pub fn get_recent_failed_attempts(&self, within_seconds: i64) -> Result<u32> {
         let cutoff = Utc::now().timestamp() - within_seconds;
 
-        let count: u32 = self.conn.query_row(
-            "SELECT COUNT(*) FROM failed_attempts WHERE attempt_time > ?1",
-            [cutoff],
-            |row| row.get(0),
-        ).map_err(|e| PasswordManagerError::Database(format!("Failed to count attempts: {}", e)))?;
+        let count: u32 = self
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM failed_attempts WHERE attempt_time > ?1",
+                [cutoff],
+                |row| row.get(0),
+            )
+            .map_err(|e| {
+                PasswordManagerError::Database(format!("Failed to count attempts: {}", e))
+            })?;
 
         Ok(count)
     }
 
     /// Get total failed attempts (all time)
     pub fn get_total_failed_attempts(&self) -> Result<u32> {
-        let count: u32 = self.conn.query_row(
-            "SELECT COUNT(*) FROM failed_attempts",
-            [],
-            |row| row.get(0),
-        ).map_err(|e| PasswordManagerError::Database(format!("Failed to count attempts: {}", e)))?;
+        let count: u32 = self
+            .conn
+            .query_row("SELECT COUNT(*) FROM failed_attempts", [], |row| row.get(0))
+            .map_err(|e| {
+                PasswordManagerError::Database(format!("Failed to count attempts: {}", e))
+            })?;
 
         Ok(count)
     }
 
     /// Get the timestamp of the last failed attempt
     pub fn get_last_failed_attempt_time(&self) -> Result<Option<DateTime<Utc>>> {
-        let result: Option<i64> = self.conn.query_row(
-            "SELECT MAX(attempt_time) FROM failed_attempts",
-            [],
-            |row| row.get(0),
-        ).map_err(|e| PasswordManagerError::Database(format!("Failed to get last attempt: {}", e)))?;
+        let result: Option<i64> = self
+            .conn
+            .query_row("SELECT MAX(attempt_time) FROM failed_attempts", [], |row| {
+                row.get(0)
+            })
+            .map_err(|e| {
+                PasswordManagerError::Database(format!("Failed to get last attempt: {}", e))
+            })?;
 
         Ok(result.map(|ts| DateTime::from_timestamp(ts, 0).unwrap_or_default()))
     }
@@ -159,10 +172,11 @@ impl LockoutManager {
 
     /// Clear all failed attempt records (e.g., after successful unlock)
     pub fn clear_failed_attempts(&self) -> Result<()> {
-        self.conn.execute(
-            "DELETE FROM failed_attempts",
-            [],
-        ).map_err(|e| PasswordManagerError::Database(format!("Failed to clear attempts: {}", e)))?;
+        self.conn
+            .execute("DELETE FROM failed_attempts", [])
+            .map_err(|e| {
+                PasswordManagerError::Database(format!("Failed to clear attempts: {}", e))
+            })?;
 
         Ok(())
     }
@@ -171,10 +185,15 @@ impl LockoutManager {
     pub fn clear_old_attempts(&self, older_than_seconds: i64) -> Result<u32> {
         let cutoff = Utc::now().timestamp() - older_than_seconds;
 
-        let deleted = self.conn.execute(
-            "DELETE FROM failed_attempts WHERE attempt_time < ?1",
-            [cutoff],
-        ).map_err(|e| PasswordManagerError::Database(format!("Failed to clear old attempts: {}", e)))?;
+        let deleted = self
+            .conn
+            .execute(
+                "DELETE FROM failed_attempts WHERE attempt_time < ?1",
+                [cutoff],
+            )
+            .map_err(|e| {
+                PasswordManagerError::Database(format!("Failed to clear old attempts: {}", e))
+            })?;
 
         Ok(deleted as u32)
     }
@@ -198,7 +217,8 @@ mod tests {
                 ip_address TEXT
             )",
             [],
-        ).unwrap();
+        )
+        .unwrap();
         LockoutManager::with_defaults(conn).unwrap()
     }
 

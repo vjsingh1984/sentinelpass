@@ -1,188 +1,64 @@
-# Building SentinelPass
+# Build Guide
 
-## Windows
+## Toolchain Matrix
 
-### Building from Windows (Recommended)
-Open **PowerShell** or **Command Prompt** and run:
+| Tool | Minimum |
+| --- | --- |
+| Rust | 1.70+ |
+| Node.js | 20+ |
+| npm | 10+ |
+| PowerShell (Windows install scripts) | 5.1+ |
 
-```powershell
-# Install web toolchain
-npm install
+## Platform Dependencies
 
-# Build TypeScript frontend/extension artifacts
-npm run web:build
+| Platform | Extra system packages |
+| --- | --- |
+| Windows | None (Tauri Windows toolchain is sufficient) |
+| macOS | `brew install openssl` |
+| Ubuntu/Debian | `libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev libssl-dev build-essential` |
 
-# Build all components
-cargo build --release
-
-# Run the UI
-cargo run --package sentinelpass-ui
-
-# Run the CLI
-cargo run --package sentinelpass-cli -- --help
-```
-
-No additional dependencies required - Tauri for Windows bundles everything needed.
-
-### WSL Users
-If you try to build from WSL, you will get GTK library errors. To build the UI from WSL, you must install GTK development libraries:
+## Build Commands
 
 ```bash
-sudo apt update
-sudo apt install -y libwebkit2gtk-4.1-dev \
-    build-essential \
-    curl \
-    wget \
-    file \
-    libssl-dev \
-    libgtk-3-dev \
-    libayatana-appindicator3-dev \
-    librsvg2-dev
-```
-
-However, **building from native Windows is recommended** as it produces a proper Windows executable and doesn't require installing system libraries.
-
-## macOS
-
-```bash
-# Install dependencies
-brew install openssl
 npm install
-
-# Build
 npm run web:build
 cargo build --release
 ```
 
-## Linux
+## Fast Dev Commands
 
-```bash
-# Install dependencies (Ubuntu/Debian)
-sudo apt update
-sudo apt install -y libwebkit2gtk-4.1-dev \
-    build-essential \
-    curl \
-    wget \
-    file \
-    libssl-dev \
-    libgtk-3-dev \
-    libayatana-appindicator3-dev \
-    librsvg2-dev
-npm install
+| Task | Command |
+| --- | --- |
+| UI (debug) | `cargo run --package sentinelpass-ui` |
+| Daemon | `cargo run --package sentinelpass-daemon` |
+| CLI help | `cargo run --package sentinelpass-cli -- --help` |
+| Rust tests | `cargo test --workspace` |
+| Rust lint | `cargo clippy --workspace --all-targets -- -D warnings` |
+| TS typecheck | `npm run web:typecheck` |
+| TS tests | `npm run test:ts` |
 
-# Build
-npm run web:build
-cargo build --release
-```
+## Coverage Gates
 
-## Development Builds
+| Coverage gate | Command |
+| --- | --- |
+| Rust LLVM coverage | `bash scripts/coverage-rust.sh` |
+| TypeScript coverage | `npm run test:ts` |
 
-For faster development builds without optimizations:
+## Release CI (tagged)
 
-```bash
-cargo build --package sentinelpass-ui
-```
+| Step | Detail |
+| --- | --- |
+| Trigger | Push tag `v*` |
+| Workflow | `.github/workflows/release.yml` |
+| Binaries | `sentinelpass`, `sentinelpass-daemon`, `sentinelpass-host`, `sentinelpass-ui` |
+| Install bundles | user-level installers for Windows/macOS/Linux |
+| Native installers | NSIS/MSI (Windows), DMG/pkg (macOS), AppImage/DEB/RPM (Linux, runner dependent) |
 
-## Release Builds
-
-For optimized release builds:
-
-```bash
-cargo build --release --package sentinelpass-ui
-```
-
-## TypeScript Frontend/Extension Build
-
-SentinelPass web surfaces are TypeScript-first:
-
-- source files: `sentinelpass-ui/app.ts`, `browser-extension/*/*.ts`
-- emitted runtime JS: `sentinelpass-ui/app.js`, `sentinelpass-ui/dist/app.js`, `browser-extension/*/*.js`
-
-Use:
-
-```bash
-npm run web:typecheck
-npm run web:build
-npm run test:ts
-```
-
-### Rust LLVM Coverage
-
-```bash
-# One-time install
-cargo install cargo-llvm-cov --locked
-
-# Generate coverage + enforce minimum line coverage
-bash scripts/coverage-rust.sh
-```
-
-The release binary will be at:
-- Windows: `target/release/sentinelpass-ui.exe`
-- macOS/Linux: `target/release/sentinelpass-ui`
-
-## Automated Release CI
-
-GitHub Actions release automation runs when you push a version tag (`v*`), for example:
-
-```bash
-git tag v0.1.6
-git push origin v0.1.6
-```
-
-The `Release CI` workflow builds and publishes platform executables for:
-- Ubuntu (`linux`)
-- macOS (`macos`)
-- Windows (`windows`)
-
-Each tagged release now publishes:
-- Portable archives with binaries (`sentinelpass`, `sentinelpass-daemon`, `sentinelpass-host`, `sentinelpass-ui`)
-- User-level installer bundles (`sentinelpass-installer-<tag>-<platform>.*`) with one-click launchers:
-  - Windows: `install-user.cmd`
-  - macOS: `install-user.command`
-  - Linux: `install-user.sh`
-- `sha256sums.txt`
-
-Installer bundles run the same user-scoped install flow as local scripts (`install.ps1` / `install.sh`) without requiring admin privileges.
-
-In addition, `Release CI` now builds native platform installers from Tauri bundles:
-- Windows: NSIS/MSI
-- macOS: DMG (and pkg/app artifacts when available)
-- Linux: AppImage/DEB/RPM (depending on runner capabilities)
-
-Signed builds are enabled automatically when signing secrets are configured in repository settings; otherwise unsigned artifacts are still produced for release testing.
-
-For local native installer builds, use:
-
-```bash
-./scripts/build-native-installers.sh
-```
-
-or on Windows:
+## Browser Native Host Registration (Chrome)
 
 ```powershell
-.\scripts\build-native-installers.ps1
+./register-chrome.ps1 -ExtensionId <YOUR_32_CHAR_EXTENSION_ID> -InstallDir <INSTALL_DIR>
 ```
 
-## Browser Integration Tests (Extension)
+If Chrome reports native host permission errors, re-run registration and restart Chrome.
 
-An end-to-end browser automation suite is available at:
-
-- `browser-extension/e2e/`
-
-It validates save-prompt behavior and explicit no-save/save audit paths.
-
-## Chrome Native Host Troubleshooting
-
-If browser logs show `Access to the specified native messaging host is forbidden`:
-
-1. Copy your extension ID from `chrome://extensions/` (or extension background logs).
-2. Re-register the native host manifest:
-
-```powershell
-.\register-chrome.ps1 -ExtensionId <YOUR_32_CHAR_EXTENSION_ID> -InstallDir "$env:LOCALAPPDATA\SentinelPass"
-```
-
-3. Restart Chrome and re-test.
-
-This updates `allowed_origins` in the native messaging host manifest to include:
-`chrome-extension://<YOUR_EXTENSION_ID>/`.

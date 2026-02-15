@@ -1,6 +1,11 @@
 {
   "name": "sentinelpass-web-tooling",
   "private": true,
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/vjsingh1984/sentinelpass.git"
+  },
   "scripts": {
     "web:build": "tsc -p tsconfig.web.json && node scripts/postprocess-web-build.mjs",
     "web:typecheck": "tsc -p tsconfig.web.json --noEmit",

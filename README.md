@@ -1,263 +1,90 @@
 # SentinelPass
 
-A secure, local-first password manager with browser autofill support.
+Local-first password manager with a Rust core, Tauri desktop UI, and browser extension.
 
-## Features
+## At a Glance
 
-- **Zero-Knowledge Architecture**: Master password never leaves your device
-- **Military-Grade Encryption**: Argon2id KDF + AES-256-GCM encryption
-- **Browser Autofill**: Chrome extension with seamless autofill
-- **TOTP Support**: RFC 6238 codes with `otpauth://` provisioning support
-- **Desktop TOTP Setup & Copy**: Configure/remove TOTP and copy current codes from entry details
-- **Offline-First**: No cloud dependencies, works completely offline
-- **Cross-Platform**: Windows, macOS, and Linux support
+| Area | What SentinelPass does |
+| --- | --- |
+| Secret model | Zero-knowledge, local vault; no cloud dependency |
+| Crypto | Argon2id key derivation + AES-256-GCM encryption |
+| App surfaces | CLI (`sentinelpass`), daemon, desktop UI, browser extension |
+| Platforms | Windows, macOS, Linux |
+| License | Apache License 2.0 |
 
-## Security
+## System Map
 
-- **Key Derivation**: Argon2id (m=256MB, t=3, p=4)
-- **Encryption**: AES-256-GCM with unique nonces per entry
-- **Memory Safety**: Rust's memory safety guarantees + secure buffer handling
-- **Zero-Knowledge**: Your master password is never stored or transmitted
-- **Clipboard Hygiene**: Copied secrets are auto-cleared after 30 seconds when unchanged
+| Component | Path | Responsibility |
+| --- | --- | --- |
+| Core library | `sentinelpass-core/` | Crypto, vault, DB, IPC contracts |
+| CLI | `sentinelpass-cli/` | Vault operations from terminal |
+| Daemon | `sentinelpass-daemon/` | Background unlock/lock state + IPC |
+| Native host | `sentinelpass-host/` | Browser native messaging bridge |
+| Desktop app | `sentinelpass-ui/` | Tauri UI and user unlock workflow |
+| Browser extension | `browser-extension/` | Autofill + save prompts |
 
-## Getting Started
+## Runtime Flow
 
-### Prerequisites
-
-- Rust 1.70 or later
-- Node.js 20+ (for TypeScript web/extension builds)
-- Chrome or Chromium-based browser
-- For Windows: PowerShell 5.1+
-- For Unix: Bash and standard Unix tools
-
-### Installation
-
-#### One-Click Installer (Release Assets)
-
-Tagged GitHub releases include user-level installer bundles per platform:
-
-- Windows: `sentinelpass-installer-<tag>-windows.zip` → run `install-user.cmd`
-- macOS: `sentinelpass-installer-<tag>-macos.tar.gz` → run `install-user.command`
-- Linux: `sentinelpass-installer-<tag>-linux.tar.gz` → run `install-user.sh`
-
-These installers default to user-scope paths (no admin needed).
-
-#### Build Native Installers Locally
-
-To generate platform-native installers (NSIS/MSI, DMG, AppImage/DEB) locally:
-
-```bash
-# macOS/Linux
-./scripts/build-native-installers.sh
-
-# Windows (PowerShell)
-.\scripts\build-native-installers.ps1
+```text
+Browser Extension -> sentinelpass-host -> sentinelpass-daemon -> sentinelpass-core (vault)
+                         ^
+                         |
+                    sentinelpass-ui (unlock + state)
 ```
 
-Both scripts package `sentinelpass-daemon` and `sentinelpass-host` into UI bundle resources before `cargo tauri build`.
+## Quick Start
 
-#### From Source
+### 1) Build
 
 ```bash
-# Clone the repository
-git clone https://github.com/vjsingh1984/sentinelpass.git
-cd sentinelpass
-
-# Build the project
 npm install
 npm run web:build
 cargo build --release
+```
 
-# Install (Windows, user-level one-stop)
-.\install.ps1
+### 2) Install (user-level, no admin)
 
-# Install (macOS/Linux, user-level one-stop)
+```bash
+# Windows
+./install.ps1
+
+# macOS / Linux
 ./install.sh
-
-# Optional: preconfigure Chrome native host for your unpacked extension ID
-./install.sh --chrome-extension-id <YOUR_32_CHAR_EXTENSION_ID>
-# Windows:
-.\install.ps1 -ExtensionId <YOUR_32_CHAR_EXTENSION_ID>
 ```
 
-### Initial Setup
+### 3) Run
 
 ```bash
-# Create a new vault
-sentinelpass init
-
-# Add a credential
-sentinelpass add --title "GitHub" --username "user@example.com" --url "https://github.com"
-
-# List all credentials
-sentinelpass list
-
-# Search credentials
-sentinelpass search github
-
-# Add TOTP from an otpauth URI (from QR payload)
-sentinelpass totp-add --entry-id 1 --otpauth-uri "otpauth://totp/Acme:user@example.com?secret=JBSWY3DPEHPK3PXP&issuer=Acme"
-
-# Get current TOTP code
-sentinelpass totp-code --entry-id 1
-
-# Check biometric unlock status
-sentinelpass biometric-status
-
-# Enable biometric unlock (if platform support is available)
-sentinelpass biometric-enable
-
-# Unlock with biometric
-sentinelpass unlock-biometric
-
-# Disable biometric unlock
-sentinelpass biometric-disable
-
-# Check SSH agent availability
-sentinelpass ssh-agent-status
-
-# Add private key to SSH agent
-sentinelpass ssh-agent-add ~/.ssh/id_ed25519
-
-# Add stored vault SSH key (by ID) to SSH agent without writing to disk
-sentinelpass ssh-agent-add-stored 1
-
-# Clear all identities from SSH agent
-sentinelpass ssh-agent-clear
-
-# Add an SSH key pair to vault
-sentinelpass ssh-key-add --name "Work Laptop" --private-key-file ~/.ssh/id_ed25519
-
-# List SSH keys in vault
-sentinelpass ssh-key-list
-
-# Show SSH key metadata (and optionally private key)
-sentinelpass ssh-key-get 1
-sentinelpass ssh-key-get 1 --show-private
-
-# Delete an SSH key
-sentinelpass ssh-key-delete 1
+sentinelpass-ui
 ```
 
-### Running the Daemon
+UI startup coordinates daemon startup; unlocking in UI enables browser save/autofill paths.
 
-Browser autofill and save require the daemon:
+## Developer Loop
 
-- `sentinelpass-ui` now auto-starts `sentinelpass-daemon` in locked mode on app launch.
-- Unlocking the vault in UI also unlocks the daemon for browser integration.
-- You can still run the daemon manually for CLI-only workflows:
+| Task | Command |
+| --- | --- |
+| Rust format check | `cargo fmt --all -- --check` |
+| Rust lint (deny warnings) | `cargo clippy --workspace --all-targets -- -D warnings` |
+| Rust tests | `cargo test --workspace` |
+| TypeScript typecheck | `npm run web:typecheck` |
+| TypeScript tests + coverage | `npm run test:ts` |
+| Rust coverage (LLVM) | `bash scripts/coverage-rust.sh` |
 
-```bash
-sentinelpass-daemon
+## Release Artifacts
 
-# Start daemon using biometric unlock flow
-sentinelpass-daemon --biometric
+| Trigger | Workflow | Output |
+| --- | --- | --- |
+| Git tag `v*` | `Release CI` | cross-platform binaries + installer bundles |
+| Push / PR | `Rust CI`, `Security CI`, `extension-e2e` | lint, tests, security scans, extension e2e |
 
-# Start daemon without interactive prompt (for orchestration)
-sentinelpass-daemon --start-locked
-```
+## OSS and Contribution Docs
 
-The daemon will:
-- Start locked when launched by UI (or with `--start-locked`)
-- Prompt for master password only in interactive mode (or use `--biometric`)
-- Start the IPC server for communication with the browser extension
-- Auto-lock after 5 minutes of inactivity (configurable)
-
-### Browser Extension
-
-1. Start `sentinelpass-ui` (it auto-starts the daemon)
-2. Open Chrome and navigate to `chrome://extensions/`
-3. Enable "Developer mode"
-4. Click "Load unpacked"
-5. Select the `browser-extension/chrome/` directory
-6. The extension is now ready to use
-
-**Using Autofill:**
-- Navigate to a login page
-- Click the autofill button (🔒) that appears next to password fields
-- Or use the keyboard shortcut: `Ctrl+Shift+U` (Windows/Linux) or `Cmd+Shift+U` (macOS)
-- Credentials will be filled automatically
-
-## Development
-
-```bash
-# Run tests
-cargo test --workspace
-
-# Type-check web/extension TypeScript
-npm run web:typecheck
-
-# Run TypeScript unit tests with coverage (TDD gate)
-npm run test:ts
-
-# Run Clippy
-cargo clippy --workspace --all-targets -- -D warnings
-
-# Format code
-cargo fmt --all
-
-# Run the daemon
-cargo run --bin sentinelpass-daemon
-
-# Build everything
-cargo build --workspace
-```
-
-## Test & Coverage Gates
-
-- Rust tests: `bash scripts/test-rust.sh`
-- Rust LLVM coverage: `bash scripts/coverage-rust.sh` (requires `cargo-llvm-cov`)
-- TypeScript tests + coverage: `bash scripts/test-web.sh`
-- Pre-commit hook runs lint + tests for touched Rust/TS files (`.githooks/pre-commit`)
-
-## Project Structure
-
-```
-sentinelpass/
-├── sentinelpass-core/     # Core library (crypto, database, IPC)
-├── sentinelpass-cli/      # Command-line interface
-├── sentinelpass-daemon/   # Background service for vault management
-├── sentinelpass-host/     # Native messaging host for browser extension
-├── browser-extension/     # Chrome/Firefox extension (TypeScript sources + emitted JS)
-├── sentinelpass-ui/       # Tauri desktop frontend (TypeScript app + dist assets)
-└── installation/          # Installation scripts
-```
-
-## Security Architecture
-
-See [SECURITY_ARCHITECTURE.md](SECURITY_ARCHITECTURE.md) for detailed security documentation.
-
-## License
-
-Apache-2.0 License - see LICENSE file for details
-
-## Contributing
-
-Contributions are welcome! Please read SECURITY_ARCHITECTURE.md before making changes to security-critical code.
-
-## Architecture
-
-```
-┌─────────────────┐
-│  Chrome Browser │
-│                 │
-│  ┌───────────┐  │
-│  │ Extension │  │
-│  └─────┬─────┘  │
-└────────┼────────┘
-         │ native messaging
-         ▼
-┌─────────────────────────┐
-│   sentinelpass-host     │
-│  (Native Messaging)     │
-└────────┬────────────────┘
-         │ IPC (Unix socket / named pipe)
-         ▼
-┌─────────────────────────┐
-│  sentinelpass-daemon    │
-│   └── DaemonVault       │
-│       └── VaultManager  │
-│           ├── Crypto    │
-│           └── Database  │
-└─────────────────────────┘
-```
+| Topic | File |
+| --- | --- |
+| Contribution process | `CONTRIBUTING.md` |
+| Security reporting | `SECURITY.md` |
+| Code of conduct | `CODE_OF_CONDUCT.md` |
+| OSS release checklist | `docs/OSS_RELEASE_CHECKLIST.md` |
+| Build details | `BUILD.md` |
+| Security internals | `SECURITY_ARCHITECTURE.md` |

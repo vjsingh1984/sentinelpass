@@ -77,17 +77,26 @@ mod tests {
 
     #[test]
     fn test_activity_resets_timer() {
-        // Use wider timing margins to avoid flaky behavior on slow CI runners.
-        let mut manager = AutoLockManager::new(Duration::from_millis(250));
+        // Use large margins to avoid flaky behavior on busy CI runners.
+        let timeout = Duration::from_secs(2);
+        let mut manager = AutoLockManager::new(timeout);
 
-        thread::sleep(Duration::from_millis(40));
+        thread::sleep(Duration::from_millis(600));
         manager.record_activity();
 
-        thread::sleep(Duration::from_millis(60));
+        let remaining = manager
+            .time_until_lock()
+            .expect("auto-lock should be enabled");
+        assert!(
+            remaining > Duration::from_millis(1200),
+            "expected timer reset near full timeout, remaining={remaining:?}"
+        );
+
+        thread::sleep(Duration::from_millis(700));
         // Should not lock because activity reset the timer
         assert!(!manager.should_lock());
 
-        thread::sleep(Duration::from_millis(220));
+        thread::sleep(Duration::from_millis(1500));
         // Should lock after enough time has passed since last activity
         assert!(manager.should_lock());
     }

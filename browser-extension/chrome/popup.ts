@@ -167,6 +167,18 @@ async function copyToClipboard(username, password) {
   try {
     await navigator.clipboard.writeText(password);
     showNotification('Password copied to clipboard');
+
+    // Auto-clear after 30 seconds
+    setTimeout(async () => {
+      try {
+        const current = await navigator.clipboard.readText();
+        if (current === password) {
+          await navigator.clipboard.writeText('');
+        }
+      } catch (e) {
+        // Clipboard read may fail if focus changed
+      }
+    }, 30000);
   } catch (error) {
     console.error('Failed to copy:', error);
     showNotification('Failed to copy password', 'error');

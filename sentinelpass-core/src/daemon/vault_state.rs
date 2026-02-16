@@ -3,7 +3,7 @@
 //! The daemon maintains the vault in memory, handling lock/unlock
 //! and responding to credential requests.
 
-use crate::{get_default_vault_path, PasswordManagerError, Result, VaultManager};
+use crate::{get_default_vault_path, DatabaseError, PasswordManagerError, Result, VaultManager};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
@@ -118,7 +118,10 @@ impl DaemonVault {
     /// Unlock the vault with master password
     pub async fn unlock(&self, master_password: &[u8]) -> Result<()> {
         let vault = VaultManager::open(&self.vault_path, master_password).map_err(|e| {
-            PasswordManagerError::Database(format!("Failed to unlock vault: {}", e))
+            PasswordManagerError::from(DatabaseError::Other(format!(
+                "Failed to unlock vault: {}",
+                e
+            )))
         })?;
 
         self.unlock_with_manager(vault).await;
@@ -141,7 +144,10 @@ impl DaemonVault {
     pub async fn unlock_with_biometric(&self, prompt_reason: &str) -> Result<()> {
         let vault =
             VaultManager::open_with_biometric(&self.vault_path, prompt_reason).map_err(|e| {
-                PasswordManagerError::Database(format!("Failed biometric unlock: {}", e))
+                PasswordManagerError::from(DatabaseError::Other(format!(
+                    "Failed biometric unlock: {}",
+                    e
+                )))
             })?;
 
         self.unlock_with_manager(vault).await;

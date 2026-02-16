@@ -282,4 +282,24 @@ mod tests {
         )
         .is_err());
     }
+
+    use proptest::prelude::*;
+
+    proptest! {
+        #[test]
+        fn encrypt_decrypt_roundtrip_arbitrary_data(data in proptest::collection::vec(any::<u8>(), 1..4096)) {
+            let dek = DataEncryptionKey::new().unwrap();
+            let encrypted = encrypt_entry(&dek, &data).unwrap();
+            let decrypted = decrypt_entry(&dek, &encrypted).unwrap();
+            prop_assert_eq!(data, decrypted);
+        }
+
+        #[test]
+        fn unique_nonces_for_same_data(data in proptest::collection::vec(any::<u8>(), 1..256)) {
+            let dek = DataEncryptionKey::new().unwrap();
+            let e1 = encrypt_entry(&dek, &data).unwrap();
+            let e2 = encrypt_entry(&dek, &data).unwrap();
+            prop_assert_ne!(e1.nonce, e2.nonce);
+        }
+    }
 }

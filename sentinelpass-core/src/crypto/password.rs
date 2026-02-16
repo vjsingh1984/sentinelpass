@@ -367,4 +367,15 @@ mod tests {
         let p2 = generate_password(&config).unwrap();
         assert_ne!(p1, p2);
     }
+
+    use proptest::prelude::*;
+
+    proptest! {
+        #[test]
+        fn generated_passwords_meet_length(len in 8usize..128) {
+            let config = PasswordGeneratorConfig::default().length(len);
+            let pw = generate_password(&config).unwrap();
+            prop_assert_eq!(pw.len(), len);
+        }
+    }
 }

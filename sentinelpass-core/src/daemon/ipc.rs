@@ -3,12 +3,13 @@
 //! Uses Unix domain sockets on Linux/macOS and named pipes on Windows.
 
 use crate::daemon::DaemonVault;
-use crate::{get_config_dir, PasswordManagerError, Result};
+use crate::{get_config_dir, DatabaseError, PasswordManagerError, Result};
 use rand::{rngs::OsRng, RngCore};
 use serde::{Deserialize, Serialize};
 use std::io::Write;
 use std::path::PathBuf;
 use std::sync::Arc;
+use subtle::ConstantTimeEq;
 #[allow(unused_imports)]
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tracing::{debug, error, info, warn};
@@ -91,7 +92,10 @@ impl IpcServer {
         // Remove existing socket if present
         if self.socket_path.exists() {
             std::fs::remove_file(&self.socket_path).map_err(|e| {
-                PasswordManagerError::Database(format!("Failed to remove socket: {}", e))
+                PasswordManagerError::from(DatabaseError::Ipc(format!(
+                    "Failed to remove socket: {}",
+                    e
+                )))
             })?;
         }
 
@@ -100,7 +104,10 @@ impl IpcServer {
             use tokio::net::UnixListener;
 
             let listener = UnixListener::bind(&self.socket_path).map_err(|e| {
-                PasswordManagerError::Database(format!("Failed to bind socket: {}", e))
+                PasswordManagerError::from(DatabaseError::Ipc(format!(
+                    "Failed to bind socket: {}",
+                    e
+                )))
             })?;
 
             info!("IPC server listening on {:?}", self.socket_path);
@@ -120,7 +127,12 @@ impl IpcServer {
                                         Ok(_) => {
                                             match serde_json::from_slice::<IpcEnvelope>(&buffer) {
                                                 Ok(envelope) => {
-                                                    if envelope.token != self.auth_token {
+                                                    if !bool::from(
+                                                        envelope
+                                                            .token
+                                                            .as_bytes()
+                                                            .ct_eq(self.auth_token.as_bytes()),
+                                                    ) {
                                                         warn!("Rejected IPC request with invalid token");
                                                         continue;
                                                     }
@@ -187,7 +199,10 @@ impl IpcServer {
             info!("IPC server listening on TCP: {}", addr_str);
 
             let listener = TcpListener::bind(addr_str).await.map_err(|e| {
-                PasswordManagerError::Database(format!("Failed to bind TCP socket: {}", e))
+                PasswordManagerError::from(DatabaseError::Ipc(format!(
+                    "Failed to bind TCP socket: {}",
+                    e
+                )))
             })?;
 
             loop {
@@ -205,7 +220,12 @@ impl IpcServer {
                                         Ok(_) => {
                                             match serde_json::from_slice::<IpcEnvelope>(&buffer) {
                                                 Ok(envelope) => {
-                                                    if envelope.token != self.auth_token {
+                                                    if !bool::from(
+                                                        envelope
+                                                            .token
+                                                            .as_bytes()
+                                                            .ct_eq(self.auth_token.as_bytes()),
+                                                    ) {
                                                         warn!("Rejected IPC request with invalid token");
                                                         continue;
                                                     }
@@ -434,7 +454,10 @@ impl IpcClient {
             use tokio::net::UnixStream;
 
             let mut stream = UnixStream::connect(&self.socket_path).await.map_err(|e| {
-                PasswordManagerError::Database(format!("Failed to connect to daemon: {}", e))
+                PasswordManagerError::from(DatabaseError::Ipc(format!(
+                    "Failed to connect to daemon: {}",
+                    e
+                )))
             })?;
 
             let envelope = IpcEnvelope {
@@ -442,45 +465,62 @@ impl IpcClient {
                 message: msg,
             };
             let msg_bytes = serde_json::to_vec(&envelope).map_err(|e| {
-                PasswordManagerError::Database(format!("Failed to serialize message: {}", e))
+                PasswordManagerError::from(DatabaseError::Ipc(format!(
+                    "Failed to serialize message: {}",
+                    e
+                )))
             })?;
 
             let length = msg_bytes.len() as u32;
 
             stream.write_all(&length.to_be_bytes()).await.map_err(|e| {
-                PasswordManagerError::Database(format!("Failed to write length: {}", e))
+                PasswordManagerError::from(DatabaseError::Ipc(format!(
+                    "Failed to write length: {}",
+                    e
+                )))
             })?;
 
             stream.write_all(&msg_bytes).await.map_err(|e| {
-                PasswordManagerError::Database(format!("Failed to write message: {}", e))
+                PasswordManagerError::from(DatabaseError::Ipc(format!(
+                    "Failed to write message: {}",
+                    e
+                )))
             })?;
 
-            stream
-                .flush()
-                .await
-                .map_err(|e| PasswordManagerError::Database(format!("Failed to flush: {}", e)))?;
+            stream.flush().await.map_err(|e| {
+                PasswordManagerError::from(DatabaseError::Ipc(format!("Failed to flush: {}", e)))
+            })?;
 
             // Read response
             let mut length_buf = [0u8; 4];
             stream.read_exact(&mut length_buf).await.map_err(|e| {
-                PasswordManagerError::Database(format!("Failed to read length: {}", e))
+                PasswordManagerError::from(DatabaseError::Ipc(format!(
+                    "Failed to read length: {}",
+                    e
+                )))
             })?;
 
             let response_length = u32::from_be_bytes(length_buf) as usize;
 
             if response_length > 65536 {
-                return Err(PasswordManagerError::Database(
+                return Err(PasswordManagerError::from(DatabaseError::Ipc(
                     "Response too large".to_string(),
-                ));
+                )));
             }
 
             let mut buffer = vec![0u8; response_length];
             stream.read_exact(&mut buffer).await.map_err(|e| {
-                PasswordManagerError::Database(format!("Failed to read response: {}", e))
+                PasswordManagerError::from(DatabaseError::Ipc(format!(
+                    "Failed to read response: {}",
+                    e
+                )))
             })?;
 
             serde_json::from_slice::<IpcMessage>(&buffer).map_err(|e| {
-                PasswordManagerError::Database(format!("Failed to parse response: {}", e))
+                PasswordManagerError::from(DatabaseError::Ipc(format!(
+                    "Failed to parse response: {}",
+                    e
+                )))
             })
         }
 
@@ -502,18 +542,20 @@ impl IpcClient {
                         // Server might not be ready yet, retry after a short delay
                         if e.kind() == std::io::ErrorKind::ConnectionRefused {
                             if tokio::time::Instant::now() >= connect_deadline {
-                                return Err(PasswordManagerError::Database(format!(
-                                    "Failed to connect to daemon at {}: timed out after 3s",
-                                    addr_str
+                                return Err(PasswordManagerError::from(DatabaseError::Ipc(
+                                    format!(
+                                        "Failed to connect to daemon at {}: timed out after 3s",
+                                        addr_str
+                                    ),
                                 )));
                             }
                             tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
                             continue;
                         }
-                        return Err(PasswordManagerError::Database(format!(
+                        return Err(PasswordManagerError::from(DatabaseError::Ipc(format!(
                             "Failed to connect to daemon: {}",
                             e
-                        )));
+                        ))));
                     }
                 }
             };
@@ -523,45 +565,62 @@ impl IpcClient {
                 message: msg,
             };
             let msg_bytes = serde_json::to_vec(&envelope).map_err(|e| {
-                PasswordManagerError::Database(format!("Failed to serialize message: {}", e))
+                PasswordManagerError::from(DatabaseError::Ipc(format!(
+                    "Failed to serialize message: {}",
+                    e
+                )))
             })?;
 
             let length = msg_bytes.len() as u32;
 
             stream.write_all(&length.to_be_bytes()).await.map_err(|e| {
-                PasswordManagerError::Database(format!("Failed to write length: {}", e))
+                PasswordManagerError::from(DatabaseError::Ipc(format!(
+                    "Failed to write length: {}",
+                    e
+                )))
             })?;
 
             stream.write_all(&msg_bytes).await.map_err(|e| {
-                PasswordManagerError::Database(format!("Failed to write message: {}", e))
+                PasswordManagerError::from(DatabaseError::Ipc(format!(
+                    "Failed to write message: {}",
+                    e
+                )))
             })?;
 
-            stream
-                .flush()
-                .await
-                .map_err(|e| PasswordManagerError::Database(format!("Failed to flush: {}", e)))?;
+            stream.flush().await.map_err(|e| {
+                PasswordManagerError::from(DatabaseError::Ipc(format!("Failed to flush: {}", e)))
+            })?;
 
             // Read response
             let mut length_buf = [0u8; 4];
             stream.read_exact(&mut length_buf).await.map_err(|e| {
-                PasswordManagerError::Database(format!("Failed to read length: {}", e))
+                PasswordManagerError::from(DatabaseError::Ipc(format!(
+                    "Failed to read length: {}",
+                    e
+                )))
             })?;
 
             let response_length = u32::from_be_bytes(length_buf) as usize;
 
             if response_length > 65536 {
-                return Err(PasswordManagerError::Database(
+                return Err(PasswordManagerError::from(DatabaseError::Ipc(
                     "Response too large".to_string(),
-                ));
+                )));
             }
 
             let mut buffer = vec![0u8; response_length];
             stream.read_exact(&mut buffer).await.map_err(|e| {
-                PasswordManagerError::Database(format!("Failed to read response: {}", e))
+                PasswordManagerError::from(DatabaseError::Ipc(format!(
+                    "Failed to read response: {}",
+                    e
+                )))
             })?;
 
             serde_json::from_slice::<IpcMessage>(&buffer).map_err(|e| {
-                PasswordManagerError::Database(format!("Failed to parse response: {}", e))
+                PasswordManagerError::from(DatabaseError::Ipc(format!(
+                    "Failed to parse response: {}",
+                    e
+                )))
             })
         }
     }
@@ -590,10 +649,10 @@ pub fn load_ipc_token() -> Result<String> {
     let token_path = default_ipc_token_path();
     let token = std::fs::read_to_string(&token_path)?.trim().to_string();
     if token.is_empty() {
-        return Err(PasswordManagerError::Database(format!(
+        return Err(PasswordManagerError::from(DatabaseError::Ipc(format!(
             "IPC token file is empty: {:?}",
             token_path
-        )));
+        ))));
     }
     Ok(token)
 }

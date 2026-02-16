@@ -1,6 +1,6 @@
 //! Failed attempt lockout mechanism to prevent brute force attacks
 
-use crate::{PasswordManagerError, Result};
+use crate::{DatabaseError, PasswordManagerError, Result};
 use chrono::{DateTime, Duration, Utc};
 use rusqlite::Connection;
 use std::net::IpAddr;
@@ -76,9 +76,7 @@ impl LockoutManager {
                 "INSERT INTO failed_attempts (attempt_time, ip_address) VALUES (?1, ?2)",
                 (now, ip_str),
             )
-            .map_err(|e| {
-                PasswordManagerError::Database(format!("Failed to record attempt: {}", e))
-            })?;
+            .map_err(|e| PasswordManagerError::from(DatabaseError::Sqlite(e)))?;
 
         Ok(())
     }
@@ -94,9 +92,7 @@ impl LockoutManager {
                 [cutoff],
                 |row| row.get(0),
             )
-            .map_err(|e| {
-                PasswordManagerError::Database(format!("Failed to count attempts: {}", e))
-            })?;
+            .map_err(|e| PasswordManagerError::from(DatabaseError::Sqlite(e)))?;
 
         Ok(count)
     }
@@ -106,9 +102,7 @@ impl LockoutManager {
         let count: u32 = self
             .conn
             .query_row("SELECT COUNT(*) FROM failed_attempts", [], |row| row.get(0))
-            .map_err(|e| {
-                PasswordManagerError::Database(format!("Failed to count attempts: {}", e))
-            })?;
+            .map_err(|e| PasswordManagerError::from(DatabaseError::Sqlite(e)))?;
 
         Ok(count)
     }
@@ -120,9 +114,7 @@ impl LockoutManager {
             .query_row("SELECT MAX(attempt_time) FROM failed_attempts", [], |row| {
                 row.get(0)
             })
-            .map_err(|e| {
-                PasswordManagerError::Database(format!("Failed to get last attempt: {}", e))
-            })?;
+            .map_err(|e| PasswordManagerError::from(DatabaseError::Sqlite(e)))?;
 
         Ok(result.map(|ts| DateTime::from_timestamp(ts, 0).unwrap_or_default()))
     }
@@ -174,9 +166,7 @@ impl LockoutManager {
     pub fn clear_failed_attempts(&self) -> Result<()> {
         self.conn
             .execute("DELETE FROM failed_attempts", [])
-            .map_err(|e| {
-                PasswordManagerError::Database(format!("Failed to clear attempts: {}", e))
-            })?;
+            .map_err(|e| PasswordManagerError::from(DatabaseError::Sqlite(e)))?;
 
         Ok(())
     }
@@ -191,9 +181,7 @@ impl LockoutManager {
                 "DELETE FROM failed_attempts WHERE attempt_time < ?1",
                 [cutoff],
             )
-            .map_err(|e| {
-                PasswordManagerError::Database(format!("Failed to clear old attempts: {}", e))
-            })?;
+            .map_err(|e| PasswordManagerError::from(DatabaseError::Sqlite(e)))?;
 
         Ok(deleted as u32)
     }

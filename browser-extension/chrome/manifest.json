@@ -9,7 +9,8 @@
     "activeTab",
     "scripting",
     "notifications",
-    "nativeMessaging"
+    "nativeMessaging",
+    "clipboardRead"
   ],
   "host_permissions": [
     "<all_urls>"

@@ -1,8 +1,11 @@
 //! Database schema and connection management.
 
-use crate::crypto::{CryptoError, Result};
+use crate::{DatabaseError, PasswordManagerError, Result};
 use rusqlite::Connection;
 use std::path::Path;
+
+/// Current schema version. Incremented when the schema changes.
+pub const CURRENT_SCHEMA_VERSION: i32 = 1;
 
 /// Main database connection and schema manager
 pub struct Database {
@@ -12,25 +15,21 @@ pub struct Database {
 impl Database {
     /// Open a database at the specified path
     pub fn open<P: AsRef<Path>>(path: P) -> Result<Self> {
-        let conn = Connection::open(path).map_err(|e| {
-            CryptoError::EncryptionFailed(format!("Failed to open database: {}", e))
-        })?;
+        let conn = Connection::open(path).map_err(DatabaseError::Sqlite)?;
 
         // Enable foreign key constraints
         conn.execute("PRAGMA foreign_keys = ON", [])
-            .map_err(|e| CryptoError::EncryptionFailed(format!("Failed to enable FK: {}", e)))?;
+            .map_err(DatabaseError::Sqlite)?;
 
         Ok(Self { conn })
     }
 
     /// Create a new in-memory database for testing
     pub fn in_memory() -> Result<Self> {
-        let conn = Connection::open_in_memory().map_err(|e| {
-            CryptoError::EncryptionFailed(format!("Failed to create in-memory DB: {}", e))
-        })?;
+        let conn = Connection::open_in_memory().map_err(DatabaseError::Sqlite)?;
 
         conn.execute("PRAGMA foreign_keys = ON", [])
-            .map_err(|e| CryptoError::EncryptionFailed(format!("Failed to enable FK: {}", e)))?;
+            .map_err(DatabaseError::Sqlite)?;
 
         Ok(Self { conn })
     }
@@ -43,6 +42,8 @@ impl Database {
         self.create_failed_attempts_table()?;
         self.create_ssh_keys_table()?;
         self.create_totp_secrets_table()?;
+        self.create_indexes()?;
+        self.create_triggers()?;
         Ok(())
     }
 
@@ -61,9 +62,7 @@ impl Database {
             )",
                 [],
             )
-            .map_err(|e| {
-                CryptoError::EncryptionFailed(format!("Failed to create db_metadata: {}", e))
-            })?;
+            .map_err(DatabaseError::Sqlite)?;
         Ok(())
     }
 
@@ -86,9 +85,7 @@ impl Database {
             )",
                 [],
             )
-            .map_err(|e| {
-                CryptoError::EncryptionFailed(format!("Failed to create entries: {}", e))
-            })?;
+            .map_err(DatabaseError::Sqlite)?;
         Ok(())
     }
 
@@ -104,9 +101,7 @@ impl Database {
             )",
                 [],
             )
-            .map_err(|e| {
-                CryptoError::EncryptionFailed(format!("Failed to create domain_mappings: {}", e))
-            })?;
+            .map_err(DatabaseError::Sqlite)?;
         Ok(())
     }
 
@@ -120,9 +115,7 @@ impl Database {
             )",
                 [],
             )
-            .map_err(|e| {
-                CryptoError::EncryptionFailed(format!("Failed to create failed_attempts: {}", e))
-            })?;
+            .map_err(DatabaseError::Sqlite)?;
         Ok(())
     }
 
@@ -145,9 +138,7 @@ impl Database {
             )",
                 [],
             )
-            .map_err(|e| {
-                CryptoError::EncryptionFailed(format!("Failed to create ssh_keys: {}", e))
-            })?;
+            .map_err(DatabaseError::Sqlite)?;
         Ok(())
     }
 
@@ -170,9 +161,59 @@ impl Database {
             )",
                 [],
             )
-            .map_err(|e| {
-                CryptoError::EncryptionFailed(format!("Failed to create totp_secrets: {}", e))
-            })?;
+            .map_err(DatabaseError::Sqlite)?;
+        Ok(())
+    }
+
+    fn create_indexes(&self) -> Result<()> {
+        let indexes = [
+            "CREATE INDEX IF NOT EXISTS idx_entries_vault_id ON entries(vault_id)",
+            "CREATE INDEX IF NOT EXISTS idx_entries_favorite ON entries(favorite)",
+            "CREATE INDEX IF NOT EXISTS idx_domain_mappings_entry_id ON domain_mappings(entry_id)",
+            "CREATE INDEX IF NOT EXISTS idx_domain_mappings_domain ON domain_mappings(domain)",
+            "CREATE INDEX IF NOT EXISTS idx_totp_secrets_entry_id ON totp_secrets(entry_id)",
+        ];
+        for sql in &indexes {
+            self.conn.execute(sql, []).map_err(DatabaseError::Sqlite)?;
+        }
+        Ok(())
+    }
+
+    fn create_triggers(&self) -> Result<()> {
+        self.conn
+            .execute_batch(
+                "CREATE TRIGGER IF NOT EXISTS update_db_metadata_timestamp
+                 AFTER UPDATE ON db_metadata
+                 FOR EACH ROW
+                 BEGIN
+                     UPDATE db_metadata SET last_modified = (strftime('%s', 'now')) WHERE id = 1;
+                 END;
+
+                 CREATE TRIGGER IF NOT EXISTS update_entry_modified_timestamp
+                 AFTER UPDATE ON entries
+                 FOR EACH ROW
+                 BEGIN
+                     UPDATE entries SET modified_at = (strftime('%s', 'now')) WHERE entry_id = NEW.entry_id;
+                 END;",
+            )
+            .map_err(DatabaseError::Sqlite)?;
+        Ok(())
+    }
+
+    /// Validate that the database schema version matches the expected version.
+    pub fn validate_schema_version(&self) -> Result<()> {
+        let version: i32 = self
+            .conn
+            .query_row("SELECT version FROM db_metadata WHERE id = 1", [], |row| {
+                row.get(0)
+            })
+            .map_err(DatabaseError::Sqlite)?;
+        if version != CURRENT_SCHEMA_VERSION {
+            return Err(PasswordManagerError::from(DatabaseError::SchemaMismatch {
+                expected: CURRENT_SCHEMA_VERSION,
+                found: version,
+            }));
+        }
         Ok(())
     }
 
@@ -207,5 +248,34 @@ mod tests {
         assert!(table_names.contains(&"failed_attempts".to_string()));
         assert!(table_names.contains(&"ssh_keys".to_string()));
         assert!(table_names.contains(&"totp_secrets".to_string()));
+
+        // Verify indexes exist
+        let index_names: Vec<String> = db
+            .conn
+            .prepare("SELECT name FROM sqlite_master WHERE type='index' AND name LIKE 'idx_%'")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .unwrap();
+
+        assert!(index_names.contains(&"idx_entries_vault_id".to_string()));
+        assert!(index_names.contains(&"idx_entries_favorite".to_string()));
+        assert!(index_names.contains(&"idx_domain_mappings_entry_id".to_string()));
+        assert!(index_names.contains(&"idx_domain_mappings_domain".to_string()));
+        assert!(index_names.contains(&"idx_totp_secrets_entry_id".to_string()));
+
+        // Verify triggers exist
+        let trigger_names: Vec<String> = db
+            .conn
+            .prepare("SELECT name FROM sqlite_master WHERE type='trigger'")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .unwrap();
+
+        assert!(trigger_names.contains(&"update_db_metadata_timestamp".to_string()));
+        assert!(trigger_names.contains(&"update_entry_modified_timestamp".to_string()));
     }
 }

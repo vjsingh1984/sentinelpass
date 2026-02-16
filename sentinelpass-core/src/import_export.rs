@@ -1,6 +1,6 @@
 //! Import/export functionality for password vault
 
-use crate::{Entry, PasswordManagerError, Result, VaultManager};
+use crate::{DatabaseError, Entry, PasswordManagerError, Result, VaultManager};
 use serde::{Deserialize, Serialize};
 use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
@@ -48,23 +48,30 @@ pub fn export_to_json(vault: &VaultManager, output: &Path) -> Result<()> {
                 export_entries.push(ExportEntry::from(entry));
             }
             Err(e) => {
-                return Err(PasswordManagerError::Database(format!(
+                return Err(PasswordManagerError::from(DatabaseError::Other(format!(
                     "Failed to export entry {}: {}",
                     summary.entry_id, e
-                )));
+                ))));
             }
         }
     }
 
     let json = serde_json::to_string_pretty(&export_entries)
-        .map_err(|e| PasswordManagerError::Database(e.to_string()))?;
+        .map_err(|e| PasswordManagerError::from(DatabaseError::Serialization(e.to_string())))?;
 
     let mut file = std::fs::File::create(output).map_err(|e| {
-        PasswordManagerError::Database(format!("Failed to create export file: {}", e))
+        PasswordManagerError::from(DatabaseError::FileIo(format!(
+            "Failed to create export file: {}",
+            e
+        )))
     })?;
 
-    file.write_all(json.as_bytes())
-        .map_err(|e| PasswordManagerError::Database(format!("Failed to write export: {}", e)))?;
+    file.write_all(json.as_bytes()).map_err(|e| {
+        PasswordManagerError::from(DatabaseError::FileIo(format!(
+            "Failed to write export: {}",
+            e
+        )))
+    })?;
 
     Ok(())
 }
@@ -77,7 +84,10 @@ pub fn export_to_csv(vault: &VaultManager, output: &Path) -> Result<()> {
 
     let entries = vault.list_entries()?;
     let mut file = std::fs::File::create(output).map_err(|e| {
-        PasswordManagerError::Database(format!("Failed to create export file: {}", e))
+        PasswordManagerError::from(DatabaseError::FileIo(format!(
+            "Failed to create export file: {}",
+            e
+        )))
     })?;
 
     // Write CSV header
@@ -85,7 +95,9 @@ pub fn export_to_csv(vault: &VaultManager, output: &Path) -> Result<()> {
         file,
         "Title,Username,Password,URL,Notes,Created At,Modified At,Favorite"
     )
-    .map_err(|e| PasswordManagerError::Database(format!("Failed to write CSV: {}", e)))?;
+    .map_err(|e| {
+        PasswordManagerError::from(DatabaseError::FileIo(format!("Failed to write CSV: {}", e)))
+    })?;
 
     for summary in entries {
         let entry = vault.get_entry(summary.entry_id)?;
@@ -121,7 +133,9 @@ pub fn export_to_csv(vault: &VaultManager, output: &Path) -> Result<()> {
             escape(&entry.modified_at.to_rfc3339()),
             entry.favorite
         )
-        .map_err(|e| PasswordManagerError::Database(format!("Failed to write CSV: {}", e)))?;
+        .map_err(|e| {
+            PasswordManagerError::from(DatabaseError::FileIo(format!("Failed to write CSV: {}", e)))
+        })?;
     }
 
     Ok(())
@@ -134,12 +148,19 @@ pub fn import_from_json(vault: &mut VaultManager, input: &Path) -> Result<usize>
     }
 
     let file = std::fs::File::open(input).map_err(|e| {
-        PasswordManagerError::Database(format!("Failed to open import file: {}", e))
+        PasswordManagerError::from(DatabaseError::FileIo(format!(
+            "Failed to open import file: {}",
+            e
+        )))
     })?;
 
     let reader = BufReader::new(file);
-    let export_entries: Vec<ExportEntry> = serde_json::from_reader(reader)
-        .map_err(|e| PasswordManagerError::Database(format!("Failed to parse JSON: {}", e)))?;
+    let export_entries: Vec<ExportEntry> = serde_json::from_reader(reader).map_err(|e| {
+        PasswordManagerError::from(DatabaseError::Serialization(format!(
+            "Failed to parse JSON: {}",
+            e
+        )))
+    })?;
 
     let mut imported = 0;
     for export_entry in export_entries {
@@ -151,10 +172,16 @@ pub fn import_from_json(vault: &mut VaultManager, input: &Path) -> Result<usize>
             url: export_entry.url,
             notes: export_entry.notes,
             created_at: export_entry.created_at.parse().map_err(|e| {
-                PasswordManagerError::Database(format!("Invalid created_at date: {}", e))
+                PasswordManagerError::from(DatabaseError::Serialization(format!(
+                    "Invalid created_at date: {}",
+                    e
+                )))
             })?,
             modified_at: export_entry.modified_at.parse().map_err(|e| {
-                PasswordManagerError::Database(format!("Invalid modified_at date: {}", e))
+                PasswordManagerError::from(DatabaseError::Serialization(format!(
+                    "Invalid modified_at date: {}",
+                    e
+                )))
             })?,
             favorite: export_entry.favorite,
         };
@@ -173,7 +200,10 @@ pub fn import_from_csv(vault: &mut VaultManager, input: &Path) -> Result<usize> 
     }
 
     let file = std::fs::File::open(input).map_err(|e| {
-        PasswordManagerError::Database(format!("Failed to open import file: {}", e))
+        PasswordManagerError::from(DatabaseError::FileIo(format!(
+            "Failed to open import file: {}",
+            e
+        )))
     })?;
 
     let reader = BufReader::new(file);
@@ -182,14 +212,25 @@ pub fn import_from_csv(vault: &mut VaultManager, input: &Path) -> Result<usize> 
     // Skip header line
     let _header = lines
         .next()
-        .ok_or_else(|| PasswordManagerError::Database("Empty CSV file".to_string()))?
-        .map_err(|e| PasswordManagerError::Database(format!("Failed to read CSV header: {}", e)))?;
+        .ok_or_else(|| {
+            PasswordManagerError::from(DatabaseError::FileIo("Empty CSV file".to_string()))
+        })?
+        .map_err(|e| {
+            PasswordManagerError::from(DatabaseError::FileIo(format!(
+                "Failed to read CSV header: {}",
+                e
+            )))
+        })?;
 
     let mut imported = 0;
 
     for (line_num, line_result) in lines.enumerate().take(10000) {
         let line = line_result.map_err(|e| {
-            PasswordManagerError::Database(format!("Failed to read line {}: {}", line_num + 2, e))
+            PasswordManagerError::from(DatabaseError::FileIo(format!(
+                "Failed to read line {}: {}",
+                line_num + 2,
+                e
+            )))
         })?;
 
         if line.trim().is_empty() {
@@ -197,7 +238,11 @@ pub fn import_from_csv(vault: &mut VaultManager, input: &Path) -> Result<usize> 
         }
 
         let record = parse_csv_line(&line).map_err(|e| {
-            PasswordManagerError::Database(format!("Failed to parse line {}: {}", line_num + 2, e))
+            PasswordManagerError::from(DatabaseError::Serialization(format!(
+                "Failed to parse line {}: {}",
+                line_num + 2,
+                e
+            )))
         })?;
 
         let empty = &String::new();

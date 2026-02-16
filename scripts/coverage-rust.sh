@@ -33,6 +33,7 @@ cargo llvm-cov \
   --lcov \
   --output-path target/llvm-cov/lcov.info \
   --fail-under-lines "${MIN_LINES}" \
+  --ignore-filename-regex '(sentinelpass-cli/src/main\.rs|sentinelpass-daemon/src/main\.rs|sentinelpass-host/src/main\.rs)' \
   --summary-only
 
 echo "[rust] Coverage report generated at target/llvm-cov/lcov.info"

@@ -1,5 +1,7 @@
 //! Biometric authentication support (Windows Hello, Touch ID)
 
+#[cfg(any(windows, target_os = "macos"))]
+use crate::DatabaseError;
 use crate::{PasswordManagerError, Result};
 use std::path::Path;
 #[cfg(any(windows, target_os = "macos"))]
@@ -102,19 +104,19 @@ impl BiometricManager {
             let biometric_ref = Self::biometric_ref_for_vault(vault_path);
             let entry =
                 keyring::Entry::new(BIOMETRIC_SERVICE_NAME, &biometric_ref).map_err(|e| {
-                    PasswordManagerError::Database(format!(
+                    PasswordManagerError::from(DatabaseError::Keyring(format!(
                         "Failed to initialize keyring entry: {}",
                         e
-                    ))
+                    )))
                 })?;
 
             // Store base64 to keep storage UTF-8 safe across keychain backends.
             let mut encoded = base64::engine::general_purpose::STANDARD.encode(master_password);
             let set_result = entry.set_password(&encoded).map_err(|e| {
-                PasswordManagerError::Database(format!(
+                PasswordManagerError::from(DatabaseError::Keyring(format!(
                     "Failed to store biometric keyring secret: {}",
                     e
-                ))
+                )))
             });
             encoded.zeroize();
             set_result?;
@@ -139,10 +141,10 @@ impl BiometricManager {
 
             let entry =
                 keyring::Entry::new(BIOMETRIC_SERVICE_NAME, biometric_ref).map_err(|e| {
-                    PasswordManagerError::Database(format!(
+                    PasswordManagerError::from(DatabaseError::Keyring(format!(
                         "Failed to initialize keyring entry: {}",
                         e
-                    ))
+                    )))
                 })?;
 
             let mut encoded = entry.get_password().map_err(|e| {
@@ -155,10 +157,10 @@ impl BiometricManager {
             let decoded = base64::engine::general_purpose::STANDARD
                 .decode(encoded.as_bytes())
                 .map_err(|e| {
-                    PasswordManagerError::Database(format!(
+                    PasswordManagerError::from(DatabaseError::Keyring(format!(
                         "Stored biometric keyring secret is invalid: {}",
                         e
-                    ))
+                    )))
                 })?;
             encoded.zeroize();
 
@@ -180,10 +182,10 @@ impl BiometricManager {
         {
             let entry =
                 keyring::Entry::new(BIOMETRIC_SERVICE_NAME, biometric_ref).map_err(|e| {
-                    PasswordManagerError::Database(format!(
+                    PasswordManagerError::from(DatabaseError::Keyring(format!(
                         "Failed to initialize keyring entry: {}",
                         e
-                    ))
+                    )))
                 })?;
 
             if let Err(e) = entry.delete_password() {
@@ -195,10 +197,10 @@ impl BiometricManager {
                 {
                     return Ok(());
                 }
-                return Err(PasswordManagerError::Database(format!(
+                return Err(PasswordManagerError::from(DatabaseError::Keyring(format!(
                     "Failed to clear biometric keyring secret: {}",
                     e
-                )));
+                ))));
             }
 
             Ok(())

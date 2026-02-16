@@ -41,6 +41,34 @@ use thiserror::Error;
 /// Result type for password manager operations
 pub type Result<T> = std::result::Result<T, PasswordManagerError>;
 
+/// Structured error type for database and I/O operations
+#[derive(Error, Debug)]
+pub enum DatabaseError {
+    #[error("SQLite error: {0}")]
+    Sqlite(#[from] rusqlite::Error),
+
+    #[error("Serialization error: {0}")]
+    Serialization(String),
+
+    #[error("Lock error: {0}")]
+    LockPoisoned(String),
+
+    #[error("IPC error: {0}")]
+    Ipc(String),
+
+    #[error("File I/O error: {0}")]
+    FileIo(String),
+
+    #[error("Keyring error: {0}")]
+    Keyring(String),
+
+    #[error("Schema mismatch: expected {expected}, found {found}")]
+    SchemaMismatch { expected: i32, found: i32 },
+
+    #[error("{0}")]
+    Other(String),
+}
+
 /// General error type for password manager operations
 #[derive(Error, Debug)]
 pub enum PasswordManagerError {
@@ -48,7 +76,7 @@ pub enum PasswordManagerError {
     Crypto(#[from] crypto::CryptoError),
 
     #[error("Database error: {0}")]
-    Database(String),
+    Database(#[from] DatabaseError),
 
     #[error("Vault is locked")]
     VaultLocked,

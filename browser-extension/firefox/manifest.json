@@ -15,6 +15,7 @@
     "webNavigation",
     "notifications",
     "nativeMessaging",
+    "clipboardRead",
     "<all_urls>"
   ],
   "background": {

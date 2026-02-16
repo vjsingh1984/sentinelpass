@@ -54,11 +54,26 @@ cargo build --release
 | Install bundles | user-level installers for Windows/macOS/Linux |
 | Native installers | NSIS/MSI (Windows), DMG/pkg (macOS), AppImage/DEB/RPM (Linux, runner dependent) |
 
-## Browser Native Host Registration (Chrome)
+## Browser Native Host Registration
 
-```powershell
-./register-chrome.ps1 -ExtensionId <YOUR_32_CHAR_EXTENSION_ID> -InstallDir <INSTALL_DIR>
+The Tauri desktop app **auto-registers** native messaging host manifests for Chrome, Chromium, and Firefox on every launch. No manual registration is required for users who install via DMG/MSI/DEB/RPM and open the app.
+
+For build-from-source workflows where you run only the CLI/daemon (without the UI), use the install script:
+
+```bash
+# macOS / Linux (source build)
+./installation/install.sh
+
+# macOS / Linux (installed app bundle)
+./installation/install.sh --from-app-bundle
+
+# Windows (source build)
+./install.ps1
 ```
 
-If Chrome reports native host permission errors, re-run registration and restart Chrome.
+The Chrome extension uses a stable `key` in its manifest, producing a deterministic
+extension ID (`nophfgfiiohedlodfeepjoioljbhggdd`) across all machines.
+
+If Chrome reports native host permission errors, restart the browser after the UI has
+launched at least once.
 

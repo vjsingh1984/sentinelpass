@@ -319,6 +319,56 @@ enum Commands {
         #[arg(short, long, default_value = "json")]
         format: String,
     },
+
+    /// Sync subcommands for encrypted cloud sync
+    #[command(subcommand)]
+    Sync(SyncCommands),
+}
+
+#[derive(Subcommand)]
+enum SyncCommands {
+    /// Initialize sync for this vault (generates device identity, sets relay URL)
+    Init {
+        /// Relay server URL
+        #[arg(long)]
+        relay_url: String,
+
+        /// Device name (defaults to hostname)
+        #[arg(long)]
+        device_name: Option<String>,
+    },
+
+    /// Trigger a sync cycle now (push pending changes, pull remote changes)
+    Now,
+
+    /// Show sync status (enabled, device info, pending changes)
+    Status,
+
+    /// List all devices in this vault's sync group
+    DeviceList,
+
+    /// Revoke a device from the sync group
+    DeviceRevoke {
+        /// Device ID to revoke
+        device_id: String,
+    },
+
+    /// Start pairing (existing device generates code for new device)
+    PairStart,
+
+    /// Join sync from a new device using a pairing code
+    PairJoin {
+        /// Relay server URL
+        #[arg(long)]
+        relay_url: String,
+
+        /// 6-digit pairing code
+        #[arg(long)]
+        code: String,
+    },
+
+    /// Disable sync for this vault
+    Disable,
 }
 
 fn get_vault_path(cli: &Cli, dev: bool) -> PathBuf {
@@ -1274,6 +1324,243 @@ fn main() -> Result<()> {
                 }
                 _ => anyhow::bail!("Unsupported format: {}. Use 'json' or 'csv'", format),
             }
+        }
+
+        Commands::Sync(ref sync_cmd) => {
+            handle_sync_command(&cli, sync_cmd)?;
+        }
+    }
+
+    Ok(())
+}
+
+fn handle_sync_command(cli: &Cli, cmd: &SyncCommands) -> Result<()> {
+    let vault_path = get_vault_path(cli, false);
+    if !vault_path.exists() {
+        anyhow::bail!("No vault found. Use 'sentinelpass init' to create a new vault");
+    }
+
+    match cmd {
+        SyncCommands::Init {
+            ref relay_url,
+            ref device_name,
+        } => {
+            let master_password = prompt_master_password(false)?;
+            let vault = open_vault_with_password(&vault_path, master_password.as_bytes())?;
+
+            // Check if sync is already initialized
+            let status = vault.get_sync_status()?;
+            if status.enabled {
+                anyhow::bail!(
+                    "Sync is already initialized for this vault.\n\
+                     Device: {} ({})\n\
+                     Relay: {}",
+                    status.device_name.unwrap_or_default(),
+                    status.device_id.map(|d| d.to_string()).unwrap_or_default(),
+                    status.relay_url.unwrap_or_default()
+                );
+            }
+
+            let device_name = device_name.clone().unwrap_or_else(|| {
+                hostname::get()
+                    .map(|h| h.to_string_lossy().to_string())
+                    .unwrap_or_else(|_| "unknown".to_string())
+            });
+
+            // Generate device identity
+            let identity = sentinelpass_core::sync::device::DeviceIdentity::generate(&device_name);
+            let device_id = identity.device_id;
+            let vault_id = uuid::Uuid::new_v4();
+
+            // Save config and device identity
+            vault.init_sync(relay_url, &device_name, vault_id, &identity)?;
+
+            println!("Sync initialized successfully!");
+            println!("  Device name: {}", device_name);
+            println!("  Device ID:   {}", device_id);
+            println!("  Vault ID:    {}", vault_id);
+            println!("  Relay URL:   {}", relay_url);
+            println!();
+            println!("Next: register this device with the relay server:");
+            println!("  sentinelpass sync now");
+        }
+
+        SyncCommands::Now => {
+            let master_password = prompt_master_password(false)?;
+            let vault = open_vault_with_password(&vault_path, master_password.as_bytes())?;
+
+            let status = vault.get_sync_status()?;
+            if !status.enabled {
+                anyhow::bail!("Sync is not initialized. Use 'sentinelpass sync init' first.");
+            }
+
+            println!("Sync not yet connected to relay (client transport requires 'sync' feature).");
+            println!("Pending changes: {}", status.pending_changes);
+        }
+
+        SyncCommands::Status => {
+            let master_password = prompt_master_password(false)?;
+            let vault = open_vault_with_password(&vault_path, master_password.as_bytes())?;
+
+            let status = vault.get_sync_status()?;
+
+            println!();
+            println!("Sync Status");
+            println!("===========");
+            println!(
+                "  Enabled:         {}",
+                if status.enabled { "yes" } else { "no" }
+            );
+            if let Some(device_id) = status.device_id {
+                println!("  Device ID:       {}", device_id);
+            }
+            if let Some(ref name) = status.device_name {
+                println!("  Device name:     {}", name);
+            }
+            if let Some(ref url) = status.relay_url {
+                println!("  Relay URL:       {}", url);
+            }
+            if let Some(ts) = status.last_sync_at {
+                let dt = chrono::DateTime::from_timestamp(ts, 0)
+                    .map(|d| d.format("%Y-%m-%d %H:%M:%S UTC").to_string())
+                    .unwrap_or_else(|| ts.to_string());
+                println!("  Last synced:     {}", dt);
+            } else {
+                println!("  Last synced:     never");
+            }
+            println!("  Pending changes: {}", status.pending_changes);
+            println!();
+        }
+
+        SyncCommands::DeviceList => {
+            let master_password = prompt_master_password(false)?;
+            let vault = open_vault_with_password(&vault_path, master_password.as_bytes())?;
+
+            let status = vault.get_sync_status()?;
+            if !status.enabled {
+                anyhow::bail!("Sync is not initialized. Use 'sentinelpass sync init' first.");
+            }
+
+            let devices = vault.list_sync_devices()?;
+
+            if devices.is_empty() {
+                println!("No devices registered yet.");
+                println!(
+                    "This device: {} ({})",
+                    status.device_name.unwrap_or_default(),
+                    status.device_id.map(|d| d.to_string()).unwrap_or_default()
+                );
+            } else {
+                println!();
+                println!("{:<38} {:<20} {:<10} Status", "Device ID", "Name", "Type");
+                println!("{}", "-".repeat(80));
+                for device in &devices {
+                    let status_str = if device.revoked { "revoked" } else { "active" };
+                    println!(
+                        "{:<38} {:<20} {:<10} {}",
+                        device.device_id, device.device_name, device.device_type, status_str
+                    );
+                }
+                println!();
+            }
+        }
+
+        SyncCommands::DeviceRevoke { ref device_id } => {
+            let master_password = prompt_master_password(false)?;
+            let vault = open_vault_with_password(&vault_path, master_password.as_bytes())?;
+
+            let status = vault.get_sync_status()?;
+            if !status.enabled {
+                anyhow::bail!("Sync is not initialized.");
+            }
+
+            // Confirm
+            print!("Revoke device {}? [y/N]: ", device_id);
+            use std::io::Write;
+            std::io::stdout().flush()?;
+            let mut confirmation = String::new();
+            std::io::stdin().read_line(&mut confirmation)?;
+            if !confirmation.trim().to_lowercase().starts_with('y') {
+                println!("Revocation cancelled");
+                return Ok(());
+            }
+
+            // Mark locally as revoked
+            vault.revoke_sync_device(device_id)?;
+
+            println!("Device {} marked as revoked locally.", device_id);
+            println!("Run 'sentinelpass sync now' to propagate to the relay server.");
+        }
+
+        SyncCommands::PairStart => {
+            let master_password = prompt_master_password(false)?;
+            let vault = open_vault_with_password(&vault_path, master_password.as_bytes())?;
+
+            let status = vault.get_sync_status()?;
+            if !status.enabled {
+                anyhow::bail!("Sync is not initialized. Use 'sentinelpass sync init' first.");
+            }
+
+            let code = sentinelpass_core::sync::pairing::generate_pairing_code();
+            let salt = sentinelpass_core::sync::pairing::generate_pairing_salt();
+
+            println!();
+            println!("Pairing Code: {}", code);
+            println!();
+            println!("Share this code with the new device. It expires in 5 minutes.");
+            println!("On the new device, run:");
+            println!(
+                "  sentinelpass sync pair-join --relay-url {} --code {}",
+                status
+                    .relay_url
+                    .unwrap_or_else(|| "<relay-url>".to_string()),
+                code
+            );
+            println!();
+            println!(
+                "Pairing salt (base64): {}",
+                base64::engine::general_purpose::STANDARD.encode(salt)
+            );
+            println!("Note: Full pairing with relay upload requires the 'sync' feature.");
+        }
+
+        SyncCommands::PairJoin {
+            ref relay_url,
+            ref code,
+        } => {
+            if code.len() != 6 || !code.chars().all(|c| c.is_ascii_digit()) {
+                anyhow::bail!("Pairing code must be exactly 6 digits");
+            }
+
+            println!("Pair-join flow requires the 'sync' feature for relay communication.");
+            println!("Relay URL: {}", relay_url);
+            println!("Code: {}", code);
+        }
+
+        SyncCommands::Disable => {
+            let master_password = prompt_master_password(false)?;
+            let vault = open_vault_with_password(&vault_path, master_password.as_bytes())?;
+
+            let status = vault.get_sync_status()?;
+            if !status.enabled {
+                println!("Sync is already disabled.");
+                return Ok(());
+            }
+
+            print!("Disable sync? This will not delete remote data. [y/N]: ");
+            use std::io::Write;
+            std::io::stdout().flush()?;
+            let mut confirmation = String::new();
+            std::io::stdin().read_line(&mut confirmation)?;
+            if !confirmation.trim().to_lowercase().starts_with('y') {
+                println!("Cancelled");
+                return Ok(());
+            }
+
+            vault.disable_sync()?;
+
+            println!("Sync disabled. Device identity and vault ID are preserved.");
+            println!("Use 'sentinelpass sync init' to re-enable.");
         }
     }
 

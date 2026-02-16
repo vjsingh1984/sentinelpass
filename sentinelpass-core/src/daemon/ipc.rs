@@ -59,6 +59,28 @@ pub enum IpcMessage {
     },
     LockVault,
     Shutdown,
+
+    // --- Sync messages ---
+    /// Trigger a sync cycle now (push + pull).
+    SyncNow,
+    /// Response to SyncNow.
+    SyncNowResponse {
+        success: bool,
+        pushed: u64,
+        pulled: u64,
+        error: Option<String>,
+    },
+    /// Get sync status.
+    SyncStatus,
+    /// Sync status response.
+    SyncStatusResponse {
+        enabled: bool,
+        device_id: Option<String>,
+        device_name: Option<String>,
+        relay_url: Option<String>,
+        last_sync_at: Option<i64>,
+        pending_changes: u64,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -423,6 +445,30 @@ impl IpcServer {
             IpcMessage::Shutdown => {
                 info!("IPC: Shutdown requested");
                 IpcMessage::VaultStatusResponse { unlocked: false }
+            }
+            IpcMessage::SyncStatus => {
+                debug!("IPC: SyncStatus");
+                match self.vault.get_sync_status().await {
+                    Ok(status) => IpcMessage::SyncStatusResponse {
+                        enabled: status.enabled,
+                        device_id: status.device_id.map(|d| d.to_string()),
+                        device_name: status.device_name,
+                        relay_url: status.relay_url,
+                        last_sync_at: status.last_sync_at,
+                        pending_changes: status.pending_changes,
+                    },
+                    Err(e) => {
+                        error!("Failed to get sync status: {}", e);
+                        IpcMessage::SyncStatusResponse {
+                            enabled: false,
+                            device_id: None,
+                            device_name: None,
+                            relay_url: None,
+                            last_sync_at: None,
+                            pending_changes: 0,
+                        }
+                    }
+                }
             }
             _ => IpcMessage::VaultStatusResponse { unlocked: false },
         }

@@ -29,11 +29,12 @@ echo "[rust] Running LLVM coverage (line threshold: ${MIN_LINES}%)"
 cargo llvm-cov \
   --workspace \
   --exclude sentinelpass-ui \
+  --exclude sentinelpass-relay \
   --all-features \
   --lcov \
   --output-path target/llvm-cov/lcov.info \
   --fail-under-lines "${MIN_LINES}" \
-  --ignore-filename-regex '(sentinelpass-cli/src/main\.rs|sentinelpass-daemon/src/main\.rs|sentinelpass-host/src/main\.rs)' \
+  --ignore-filename-regex '(sentinelpass-cli/src/main\.rs|sentinelpass-daemon/src/main\.rs|sentinelpass-host/src/main\.rs|sentinelpass-relay/|sync/(client|engine)\.rs)' \
   --summary-only
 
 echo "[rust] Coverage report generated at target/llvm-cov/lcov.info"

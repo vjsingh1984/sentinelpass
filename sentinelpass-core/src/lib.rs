@@ -12,6 +12,7 @@ pub mod import_export;
 pub mod lockout;
 pub mod platform;
 pub mod ssh;
+pub mod sync;
 pub mod totp;
 pub mod vault;
 

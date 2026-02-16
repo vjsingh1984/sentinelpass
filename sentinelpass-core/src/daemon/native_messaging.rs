@@ -387,3 +387,197 @@ impl NativeMessagingHost {
         Self::write_response(&response)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn native_message_deserialization_full() {
+        let json = r#"{
+            "version": 1,
+            "type": "get_credential",
+            "domain": "example.com",
+            "request_id": "abc-123"
+        }"#;
+        let msg: NativeMessage = serde_json::from_str(json).unwrap();
+        assert_eq!(msg.version, 1);
+        assert_eq!(msg.msg_type, "get_credential");
+        assert_eq!(msg.domain.as_deref(), Some("example.com"));
+        assert_eq!(msg.request_id.as_deref(), Some("abc-123"));
+        assert!(msg.data.is_none());
+    }
+
+    #[test]
+    fn native_message_deserialization_minimal() {
+        let json = r#"{"type": "check_vault_status"}"#;
+        let msg: NativeMessage = serde_json::from_str(json).unwrap();
+        assert_eq!(msg.version, PROTOCOL_VERSION); // default
+        assert_eq!(msg.msg_type, "check_vault_status");
+        assert!(msg.domain.is_none());
+        assert!(msg.request_id.is_none());
+    }
+
+    #[test]
+    fn native_message_with_credential_data() {
+        let json = r#"{
+            "type": "save_credential",
+            "domain": "github.com",
+            "data": {
+                "username": "dev@gh.com",
+                "password": "secret123",
+                "title": "GitHub",
+                "url": "https://github.com"
+            }
+        }"#;
+        let msg: NativeMessage = serde_json::from_str(json).unwrap();
+        assert_eq!(msg.msg_type, "save_credential");
+        let data = msg.data.unwrap();
+        assert_eq!(data.username, "dev@gh.com");
+        assert_eq!(data.password, "secret123");
+        assert_eq!(data.title.as_deref(), Some("GitHub"));
+        assert_eq!(data.url.as_deref(), Some("https://github.com"));
+    }
+
+    #[test]
+    fn native_response_serialization() {
+        let response = NativeResponse {
+            version: PROTOCOL_VERSION,
+            msg_type: MSG_CREDENTIAL_RESPONSE.to_string(),
+            request_id: "req-1".to_string(),
+            success: true,
+            data: Some(CredentialData {
+                username: "user".to_string(),
+                password: "pass".to_string(),
+                title: Some("Test".to_string()),
+                url: None,
+            }),
+            error: None,
+            unlocked: None,
+            exists: None,
+            totp_code: None,
+            seconds_remaining: None,
+        };
+
+        let json = serde_json::to_string(&response).unwrap();
+        assert!(json.contains("\"success\":true"));
+        assert!(json.contains("\"username\":\"user\""));
+
+        let deserialized: NativeResponse = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.version, PROTOCOL_VERSION);
+        assert!(deserialized.success);
+        assert!(deserialized.data.is_some());
+    }
+
+    #[test]
+    fn native_response_error() {
+        let response = NativeResponse {
+            version: PROTOCOL_VERSION,
+            msg_type: MSG_CREDENTIAL_RESPONSE.to_string(),
+            request_id: "req-2".to_string(),
+            success: false,
+            data: None,
+            error: Some("No credential found".to_string()),
+            unlocked: None,
+            exists: None,
+            totp_code: None,
+            seconds_remaining: None,
+        };
+
+        let json = serde_json::to_string(&response).unwrap();
+        let deserialized: NativeResponse = serde_json::from_str(&json).unwrap();
+        assert!(!deserialized.success);
+        assert_eq!(deserialized.error.as_deref(), Some("No credential found"));
+    }
+
+    #[test]
+    fn native_response_vault_status() {
+        let response = NativeResponse {
+            version: PROTOCOL_VERSION,
+            msg_type: MSG_VAULT_STATUS.to_string(),
+            request_id: "req-3".to_string(),
+            success: true,
+            data: None,
+            error: None,
+            unlocked: Some(true),
+            exists: None,
+            totp_code: None,
+            seconds_remaining: None,
+        };
+
+        let json = serde_json::to_string(&response).unwrap();
+        let deserialized: NativeResponse = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.unlocked, Some(true));
+    }
+
+    #[test]
+    fn native_response_exists() {
+        let response = NativeResponse {
+            version: PROTOCOL_VERSION,
+            msg_type: MSG_CREDENTIAL_RESPONSE.to_string(),
+            request_id: "req-4".to_string(),
+            success: true,
+            data: None,
+            error: None,
+            unlocked: None,
+            exists: Some(true),
+            totp_code: None,
+            seconds_remaining: None,
+        };
+
+        let json = serde_json::to_string(&response).unwrap();
+        let deserialized: NativeResponse = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.exists, Some(true));
+    }
+
+    #[test]
+    fn native_response_totp_code() {
+        let response = NativeResponse {
+            version: PROTOCOL_VERSION,
+            msg_type: MSG_TOTP_RESPONSE.to_string(),
+            request_id: "req-5".to_string(),
+            success: true,
+            data: None,
+            error: None,
+            unlocked: None,
+            exists: None,
+            totp_code: Some("123456".to_string()),
+            seconds_remaining: Some(15),
+        };
+
+        let json = serde_json::to_string(&response).unwrap();
+        let deserialized: NativeResponse = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.totp_code.as_deref(), Some("123456"));
+        assert_eq!(deserialized.seconds_remaining, Some(15));
+    }
+
+    #[test]
+    fn credential_data_optional_fields() {
+        let json = r#"{"username": "u", "password": "p"}"#;
+        let data: CredentialData = serde_json::from_str(json).unwrap();
+        assert_eq!(data.username, "u");
+        assert!(data.title.is_none());
+        assert!(data.url.is_none());
+    }
+
+    #[test]
+    fn native_messaging_host_construction() {
+        let _host = NativeMessagingHost::new();
+        let _host2 = NativeMessagingHost;
+    }
+
+    #[test]
+    fn message_type_constants() {
+        assert_eq!(MSG_GET_CREDENTIAL, "get_credential");
+        assert_eq!(MSG_SAVE_CREDENTIAL, "save_credential");
+        assert_eq!(MSG_CHECK_CREDENTIAL_EXISTS, "check_credential_exists");
+        assert_eq!(MSG_GET_TOTP_CODE, "get_totp_code");
+        assert_eq!(MSG_CHECK_VAULT, "check_vault_status");
+        assert_eq!(MSG_LOCK_VAULT, "lock_vault");
+        assert_eq!(MSG_CREDENTIAL_RESPONSE, "credential_response");
+        assert_eq!(MSG_TOTP_RESPONSE, "totp_response");
+        assert_eq!(MSG_VAULT_STATUS, "vault_status");
+        assert_eq!(MSG_VAULT_STATUS_RESPONSE, "vault_status_response");
+        assert_eq!(PROTOCOL_VERSION, 1);
+    }
+}

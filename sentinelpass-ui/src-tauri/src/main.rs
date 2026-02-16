@@ -46,6 +46,13 @@ fn resolve_daemon_binary_path() -> std::path::PathBuf {
     }
 
     if let Some(resource_dir) = RESOURCE_DIR.get() {
+        candidates.push(
+            resource_dir
+                .join("src-tauri")
+                .join("resources")
+                .join("bin")
+                .join(binary_name),
+        );
         candidates.push(resource_dir.join("bin").join(binary_name));
         candidates.push(resource_dir.join(binary_name));
     }

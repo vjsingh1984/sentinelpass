@@ -8,86 +8,50 @@ SentinelPass is a secure, local-first password manager written in Rust with a Ta
 
 ## Common Commands
 
-### Build Commands
+### Build
 ```bash
-# Build all workspace members (release)
-cargo build --release
-
-# Build specific package
-cargo build --package sentinelpass-ui
-cargo build --package sentinelpass-cli
-
-# Development build (faster)
-cargo build --workspace
+cargo build --workspace                          # Dev build (all crates)
+cargo build --release                            # Release build
+npm install && npm run web:build                 # Build web assets (required before Tauri UI)
+cargo build --package sentinelpass-ui            # Build Tauri UI (needs web assets first)
 ```
 
-### Test Commands
+### Test
 ```bash
-# Run all tests
-cargo test --workspace
-
-# Run tests with output
-cargo test --workspace -- --nocapture
-
-# Run integration tests
-cargo test --workspace --test '*'
-
-# Run security tests
-cargo test --workspace security
-
-# Run specific test
-cargo test --package sentinelpass-core crypto::tests
+cargo test --workspace                           # All Rust tests
+cargo test --workspace -- --nocapture            # With stdout
+cargo test --package sentinelpass-core crypto::tests  # Single test module
+cargo test --workspace --test '*'                # Integration tests only
+cargo test --workspace security                  # Security tests only
+npm run test:ts                                  # TypeScript/Vitest tests
+bash scripts/coverage-rust.sh                    # Rust coverage (50% minimum)
 ```
 
-### Linting & Formatting
+### Lint & Format
 ```bash
-# Format code
-cargo fmt --all
-
-# Check formatting
-cargo fmt --all -- --check
-
-# Run Clippy linter
-cargo clippy --workspace --all-targets -- -D warnings
+cargo fmt --all                                  # Format
+cargo fmt --all -- --check                       # Check formatting
+cargo clippy --workspace --all-targets -- -D warnings  # Lint
+npm run web:typecheck                            # TypeScript typecheck
 ```
 
-### Running Applications
+### Run
 ```bash
-# Run daemon (required for browser extension)
-cargo run --bin sentinelpass-daemon
-
-# Run CLI
-cargo run --bin sentinelpass-cli -- [args]
-
-# Run Tauri UI
-cargo run --package sentinelpass-ui
-
-# Run native messaging host
-cargo run --bin sentinelpass-host
+cargo run --bin sentinelpass -- [args]            # CLI (binary name: sentinelpass)
+cargo run --bin sentinelpass-daemon               # Daemon (required for browser extension)
+cargo run --bin sentinelpass-host                 # Native messaging host
+cargo run --package sentinelpass-ui               # Tauri desktop UI
 ```
 
-### Using Just (Command Runner)
-The project includes a `justfile` with common commands:
+### Just shortcuts
 ```bash
-just build          # Build release
-just test           # Run tests
-just lint           # Run clippy + fmt-check
-just ci             # Run full CI pipeline
-just daemon         # Run daemon
-just cli            # Run CLI
+just ci             # lint + test
+just lint           # clippy + fmt-check
+just test           # cargo test --workspace
+just build          # cargo build --release
 ```
 
-### Browser Extension Installation (Windows)
-```powershell
-# Install native messaging host
-.\install.ps1
-
-# Register Chrome extension
-.\register-chrome.ps1 <EXTENSION_ID>
-
-# Register Firefox extension
-.\register-firefox.ps1
-```
+**Note:** The justfile references old binary names (`pm-cli`, `pm-daemon`). Use the `cargo run --bin` commands above for correct binary names.
 
 ## Architecture Overview
 
@@ -106,15 +70,12 @@ sentinelpass-daemon
 
 ### Key Components
 
-**sentinelpass-core/** - Core library containing:
-- `crypto/` - Argon2id KDF, AES-256-GCM encryption, keyring management
-- `database/` - SQLite schema, migrations, models
-- `daemon/` - IPC server, native messaging protocol, vault state management
-- `vault.rs` - VaultManager with lock/unlock operations
-- `audit.rs` - Security event logging
-- `lockout.rs` - Failed attempt lockout (exponential backoff)
-- `biometric.rs` - OS keystore integration (Keychain/DPAPI)
-- `ssh.rs` - SSH key storage and ssh-agent integration
+**sentinelpass-core/** - Core library (all other crates depend on this):
+- `crypto/` - `kdf.rs` (Argon2id), `cipher.rs` (AES-256-GCM), `keyring.rs` (KeyHierarchy/MasterKey/WrappedKey), `password.rs` (generation), `strength.rs` (analysis), `zero.rs` (SecureBuffer/zeroization)
+- `daemon/` - `ipc.rs` (IPC server/client), `vault_state.rs` (DaemonVault with auto-lock), `native_messaging.rs` (browser protocol), `autolock.rs`
+- `database/` - `schema.rs` (SQLite ops), `models.rs` (Entry/DomainMapping/TotpSecret), `migrations.rs` (refinery runner)
+- `vault.rs` - VaultManager: central CRUD, encryption, lock/unlock, TOTP, SSH keys, biometric, import/export
+- `audit.rs`, `lockout.rs`, `biometric.rs`, `ssh.rs`, `totp.rs`, `import_export.rs`, `platform.rs`
 
 **sentinelpass-daemon/** - Background service:
 - Runs Tokio async runtime
@@ -127,20 +88,20 @@ sentinelpass-daemon
 - Translates between browser extension and daemon
 - Must be registered in OS registry/manifest
 
-**sentinelpass-cli/** - Command-line interface:
+**sentinelpass-cli/** - Command-line interface (binary: `sentinelpass`):
 - Clap-based CLI with subcommands
-- Commands: init, add, list, search, edit, delete, generate
+- Commands: init, add, list, search, edit, delete, generate, totp-add/code/remove, ssh-key-add/list/get/delete, export, import, check, biometric-enable/disable
 
-**sentinelpass-ui/** - Tauri desktop application:
-- `src-tauri/src/` - Tauri backend (Rust commands)
-- `app.js` - Vanilla JS frontend
-- `index.html` - UI markup (login screen, vault list, entry detail)
+**sentinelpass-ui/** - Tauri v2 desktop application (binary: `sentinelpass-ui`):
+- `src-tauri/src/main.rs` - Tauri backend with Rust commands
+- `app.ts` / `app.js` - TypeScript source and transpiled frontend
+- `index.html` - UI markup
+- Requires `npm run web:build` before `cargo build`
 
 **browser-extension/** - Chrome & Firefox extensions:
-- `chrome/manifest.json` - MV3 manifest
-- `chrome/background.js` - Service worker, native messaging client
-- `chrome/content.js` - Password field detection, autofill button injection
-- `firefox/` - MV2 manifest (reuses chrome scripts)
+- `chrome/` - MV3 manifest, TypeScript sources (`.ts`) with transpiled JS
+- `firefox/` - MV2 manifest (shares content/background scripts)
+- `e2e/` - Playwright E2E tests
 
 ## Communication Protocols
 
@@ -156,6 +117,8 @@ sentinelpass-daemon
 - `save_credential` - Save new credentials
 - `check_credential_exists` - Check if credential exists
 - `check_vault_status` - Check if vault is unlocked
+- `get_totp_code` - Retrieve TOTP code for domain
+- `lock_vault` - Lock the vault
 
 **Response Structure:**
 ```json
@@ -173,6 +136,7 @@ sentinelpass-daemon
 
 **Unix (Linux/macOS):** Unix domain socket at `/tmp/sentinelpass.sock`
 **Windows:** TCP localhost at `tcp://127.0.0.1:35873`
+**Auth:** All IPC requests require a 32-byte hex token from `~/.config/sentinelpass/ipc.token` (mode 0600). Messages use length-prefixed JSON with an envelope containing the token.
 
 ## Cryptographic Architecture
 
@@ -290,10 +254,10 @@ See `browser-extension/chrome/DEBUGGING.md` for detailed debugging guide.
 ### Testing Database Changes
 ```bash
 # Initialize dev database
-cargo run --bin pm-cli -- init --dev
+cargo run --bin sentinelpass -- init --dev
 
 # Run migrations
-cargo run --bin pm-daemon  # Daemon auto-runs migrations
+cargo run --bin sentinelpass-daemon  # Daemon auto-runs migrations
 
 # Verify schema
 sqlite3 ~/.sentinelpass/vault.db ".schema"
@@ -317,12 +281,15 @@ sqlite3 ~/.sentinelpass/vault.db ".schema"
 
 ## CI/CD Pipeline
 
-The project uses GitHub Actions (`.github/workflows/rust.yml`):
-- Format check (`cargo fmt --all -- --check`)
-- Clippy lint (`cargo clippy --workspace --all-targets -- -D warnings`)
-- Tests (`cargo test --workspace --verbose`)
-- Security audit (`cargo audit`)
-- Build (`cargo build --release --workspace`)
+The project uses GitHub Actions (`.github/workflows/rust.yml`) with 6 jobs:
+- **format** - `cargo fmt --all -- --check`
+- **clippy** - `cargo clippy --workspace --all-targets -- -D warnings`
+- **test** - `cargo test --workspace --verbose` (matrix: ubuntu/windows/macos)
+- **coverage** - Rust LLVM coverage with 50% minimum threshold
+- **web_tdd** - TypeScript typecheck + Vitest tests with coverage
+- **build** - `cargo build --release --workspace` (matrix: ubuntu/windows/macos)
+
+Additional workflows: `release.yml` (tagged builds), `security.yml` (cargo audit), `extension-e2e.yml`, `release-preflight.yml`.
 
 All checks must pass before merging to main branch.
 
@@ -330,8 +297,16 @@ All checks must pass before merging to main branch.
 
 - **Main branch:** `main` (protected, requires CI + review)
 - **Development branch:** `develop`
-- **Commit format:** Conventional Commits (`feat:`, `fix:`, `docs:`, etc.)
+- **Commit format:** Conventional Commits with scope, e.g. `feat(ui): add ...`, `fix(crypto): ...`
 - **Branch protection:** CI required, 1 approval, no force pushes
+- **Pre-commit hook:** `.githooks/pre-commit` runs lint + test scripts for changed Rust/TS files. Configure with `git config core.hooksPath .githooks`
+
+## Coding Style
+
+- Rust 2021, 4-space indent, `rustfmt`-clean. Extension JS/TS uses 2-space indent.
+- `snake_case` for files/modules/functions, `CamelCase` for structs/enums/traits, `SCREAMING_SNAKE_CASE` for constants.
+- Tests are inline `#[cfg(test)]` modules. Use descriptive behavior-focused names (e.g. `locks_after_failed_attempts`).
+- Prefer `Result` over panics in production paths.
 
 ## Dependencies Note
 

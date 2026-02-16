@@ -199,6 +199,15 @@ jobs:
       - name: Install Tauri CLI
         run: cargo install tauri-cli --version '^2.0.0' --locked
 
+      - name: Inject release version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION=$(awk -F'"' '/^\[workspace\.package\]/{f=1;next} /^\[/{f=0} f && /^version/{print $2;exit}' Cargo.toml)
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          jq --arg v "$VERSION" '.version = $v' sentinelpass-ui/tauri.conf.json > tmp.$$.json && mv tmp.$$.json sentinelpass-ui/tauri.conf.json
+
       - name: Build daemon and host binaries
         run: cargo build --release --locked --bin sentinelpass-daemon --bin sentinelpass-host
 
@@ -248,23 +257,58 @@ jobs:
           fi
           cargo tauri build --ci
 
-      - name: Collect native installers (Unix)
+      - name: Collect and rename native installers (Unix)
         if: runner.os != 'Windows'
         shell: bash
         run: |
           set -euo pipefail
+          VERSION="${{ steps.version.outputs.version }}"
+          PLATFORM="${{ matrix.platform }}"
           mkdir -p dist/native
-          find target/release/bundle -type f \( -name '*.AppImage' -o -name '*.deb' -o -name '*.rpm' -o -name '*.dmg' -o -name '*.pkg' -o -name '*.tar.gz' \) -exec cp {} dist/native/ \;
-          ls -lah dist/native
-          test -n "$(ls -A dist/native)"
+          find target/release/bundle -type f \( -name '*.AppImage' -o -name '*.deb' -o -name '*.rpm' -o -name '*.dmg' -o -name '*.pkg' \) -exec cp {} dist/native/ \;
+          cd dist/native
+          for f in *; do
+            [ -f "$f" ] || continue
+            new=""
+            case "$f" in
+              *.deb)      arch="${f%.deb}";      arch="${arch##*_}"; new="sentinelpass-${VERSION}-${PLATFORM}-${arch}.deb" ;;
+              *.rpm)      arch="${f%.rpm}";      arch="${arch##*.}"; new="sentinelpass-${VERSION}-${PLATFORM}-${arch}.rpm" ;;
+              *.AppImage) arch="${f%.AppImage}"; arch="${arch##*_}"; new="sentinelpass-${VERSION}-${PLATFORM}-${arch}.AppImage" ;;
+              *.dmg)      arch="${f%.dmg}";      arch="${arch##*_}"; new="sentinelpass-${VERSION}-${PLATFORM}-${arch}.dmg" ;;
+              *.pkg)      arch="${f%.pkg}";      arch="${arch##*_}"; new="sentinelpass-${VERSION}-${PLATFORM}-${arch}.pkg" ;;
+            esac
+            if [ -n "$new" ] && [ "$f" != "$new" ]; then
+              echo "Renaming $f -> $new"
+              mv "$f" "$new"
+            fi
+          done
+          ls -lah .
+          test -n "$(ls -A .)"
 
-      - name: Collect native installers (Windows)
+      - name: Collect and rename native installers (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
+          $VERSION = "${{ steps.version.outputs.version }}"
+          $PLATFORM = "${{ matrix.platform }}"
           New-Item -ItemType Directory -Force -Path dist/native | Out-Null
           Get-ChildItem target/release/bundle -Recurse -Include *.exe,*.msi |
             Copy-Item -Destination dist/native
+          Get-ChildItem dist/native -File | ForEach-Object {
+            $new = $null
+            if ($_.Name -match '-setup\.exe$') {
+              $arch = ($_.BaseName -replace '-setup$','') -split '[_]' | Select-Object -Last 1
+              $new = "sentinelpass-${VERSION}-${PLATFORM}-${arch}-setup.exe"
+            } elseif ($_.Extension -eq '.msi') {
+              $parts = $_.BaseName -split '_'
+              $arch = $parts[$parts.Length - 2]
+              $new = "sentinelpass-${VERSION}-${PLATFORM}-${arch}.msi"
+            }
+            if ($new -and $_.Name -ne $new) {
+              Write-Host "Renaming $($_.Name) -> $new"
+              Rename-Item $_.FullName -NewName $new
+            }
+          }
           Get-ChildItem dist/native
           if ((Get-ChildItem dist/native | Measure-Object).Count -eq 0) {
             throw 'No native installer artifacts found'

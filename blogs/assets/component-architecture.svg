@@ -1,0 +1,123 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 600" width="900" height="600">
+  <defs>
+    <linearGradient id="bgGrad2" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#0f172a"/>
+      <stop offset="100%" style="stop-color:#1e293b"/>
+    </linearGradient>
+    <linearGradient id="blueGrad2" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#1a56db"/>
+      <stop offset="100%" style="stop-color:#0ea5e9"/>
+    </linearGradient>
+    <linearGradient id="greenGrad2" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#059669"/>
+      <stop offset="100%" style="stop-color:#10b981"/>
+    </linearGradient>
+    <linearGradient id="purpleGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#7c3aed"/>
+      <stop offset="100%" style="stop-color:#a78bfa"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Background -->
+  <rect width="900" height="600" fill="url(#bgGrad2)" rx="12"/>
+
+  <!-- Title -->
+  <text x="450" y="40" text-anchor="middle" fill="#f1f5f9" font-family="system-ui, -apple-system, sans-serif" font-size="22" font-weight="700">SentinelPass Component Architecture</text>
+  <text x="450" y="60" text-anchor="middle" fill="#94a3b8" font-family="system-ui, sans-serif" font-size="12">Multi-tier architecture with native messaging bridge</text>
+
+  <!-- Tier 1: User Interfaces -->
+  <text x="30" y="95" fill="#64748b" font-family="monospace" font-size="10" font-weight="600" letter-spacing="2">USER INTERFACES</text>
+  <rect x="25" y="100" width="850" height="70" rx="8" fill="none" stroke="#334155" stroke-width="1" stroke-dasharray="6"/>
+
+  <rect x="45" y="112" width="170" height="46" rx="8" fill="url(#blueGrad2)" opacity="0.85"/>
+  <text x="130" y="140" text-anchor="middle" fill="#fff" font-family="monospace" font-size="13" font-weight="600">Desktop UI</text>
+  <text x="130" y="153" text-anchor="middle" fill="#bfdbfe" font-family="monospace" font-size="9">Tauri v2</text>
+
+  <rect x="235" y="112" width="170" height="46" rx="8" fill="url(#blueGrad2)" opacity="0.85"/>
+  <text x="320" y="140" text-anchor="middle" fill="#fff" font-family="monospace" font-size="13" font-weight="600">Chrome Extension</text>
+  <text x="320" y="153" text-anchor="middle" fill="#bfdbfe" font-family="monospace" font-size="9">Manifest V3</text>
+
+  <rect x="425" y="112" width="170" height="46" rx="8" fill="url(#blueGrad2)" opacity="0.85"/>
+  <text x="510" y="140" text-anchor="middle" fill="#fff" font-family="monospace" font-size="13" font-weight="600">Firefox Extension</text>
+  <text x="510" y="153" text-anchor="middle" fill="#bfdbfe" font-family="monospace" font-size="9">Manifest V2</text>
+
+  <rect x="615" y="112" width="170" height="46" rx="8" fill="url(#blueGrad2)" opacity="0.85"/>
+  <text x="700" y="140" text-anchor="middle" fill="#fff" font-family="monospace" font-size="13" font-weight="600">CLI</text>
+  <text x="700" y="153" text-anchor="middle" fill="#bfdbfe" font-family="monospace" font-size="9">sentinelpass</text>
+
+  <!-- Arrows from browser extensions down -->
+  <line x1="320" y1="158" x2="320" y2="195" stroke="#475569" stroke-width="1.5"/>
+  <polygon points="315,193 320,203 325,193" fill="#475569"/>
+  <line x1="510" y1="158" x2="510" y2="195" stroke="#475569" stroke-width="1.5"/>
+  <polygon points="505,193 510,203 515,193" fill="#475569"/>
+
+  <!-- Tier 2: Communication -->
+  <text x="260" y="215" fill="#94a3b8" font-family="monospace" font-size="10">Native Messaging</text>
+  <text x="460" y="215" fill="#94a3b8" font-family="monospace" font-size="10">Native Messaging</text>
+
+  <!-- Arrows down to host -->
+  <line x1="320" y1="220" x2="400" y2="250" stroke="#475569" stroke-width="1.5"/>
+  <line x1="510" y1="220" x2="450" y2="250" stroke="#475569" stroke-width="1.5"/>
+
+  <!-- Tier 3: Native Host Bridge -->
+  <rect x="300" y="250" width="250" height="50" rx="8" fill="url(#purpleGrad)" opacity="0.85"/>
+  <text x="425" y="275" text-anchor="middle" fill="#fff" font-family="monospace" font-size="14" font-weight="700">sentinelpass-host</text>
+  <text x="425" y="290" text-anchor="middle" fill="#e9d5ff" font-family="monospace" font-size="10">stdio JSON bridge</text>
+
+  <!-- IPC label and arrow -->
+  <line x1="425" y1="300" x2="425" y2="340" stroke="#475569" stroke-width="1.5"/>
+  <polygon points="420,338 425,348 430,338" fill="#475569"/>
+  <text x="440" y="325" fill="#94a3b8" font-family="monospace" font-size="10">IPC</text>
+  <text x="440" y="337" fill="#64748b" font-family="monospace" font-size="8">Unix socket / TCP</text>
+
+  <!-- Arrow from Desktop UI to daemon (direct IPC) -->
+  <line x1="130" y1="158" x2="130" y2="370" stroke="#475569" stroke-width="1.5" stroke-dasharray="4"/>
+  <line x1="130" y1="370" x2="175" y2="370" stroke="#475569" stroke-width="1.5"/>
+  <polygon points="173,365 183,370 173,375" fill="#475569"/>
+  <text x="80" y="270" fill="#64748b" font-family="monospace" font-size="9" transform="rotate(-90, 80, 270)">IPC (direct)</text>
+
+  <!-- Arrow from CLI to daemon (direct IPC) -->
+  <line x1="700" y1="158" x2="700" y2="370" stroke="#475569" stroke-width="1.5" stroke-dasharray="4"/>
+  <line x1="700" y1="370" x2="680" y2="370" stroke="#475569" stroke-width="1.5"/>
+  <polygon points="682,365 672,370 682,375" fill="#475569"/>
+  <text x="750" y="270" fill="#64748b" font-family="monospace" font-size="9" transform="rotate(90, 750, 270)">IPC (direct)</text>
+
+  <!-- Tier 4: Daemon -->
+  <rect x="185" y="345" width="485" height="120" rx="10" fill="none" stroke="#10b981" stroke-width="2"/>
+  <text x="427" y="367" text-anchor="middle" fill="#34d399" font-family="monospace" font-size="15" font-weight="700">sentinelpass-daemon</text>
+
+  <!-- Daemon sub-components -->
+  <rect x="200" y="380" width="120" height="35" rx="6" fill="#1e293b" stroke="#334155" stroke-width="1"/>
+  <text x="260" y="402" text-anchor="middle" fill="#94a3b8" font-family="monospace" font-size="11">VaultManager</text>
+
+  <rect x="335" y="380" width="90" height="35" rx="6" fill="#1e293b" stroke="#334155" stroke-width="1"/>
+  <text x="380" y="402" text-anchor="middle" fill="#94a3b8" font-family="monospace" font-size="11">Crypto</text>
+
+  <rect x="440" y="380" width="90" height="35" rx="6" fill="#1e293b" stroke="#334155" stroke-width="1"/>
+  <text x="485" y="402" text-anchor="middle" fill="#94a3b8" font-family="monospace" font-size="11">SQLite</text>
+
+  <rect x="200" y="422" width="100" height="35" rx="6" fill="#1e293b" stroke="#334155" stroke-width="1"/>
+  <text x="250" y="444" text-anchor="middle" fill="#94a3b8" font-family="monospace" font-size="11">Auto-lock</text>
+
+  <rect x="315" y="422" width="100" height="35" rx="6" fill="#1e293b" stroke="#334155" stroke-width="1"/>
+  <text x="365" y="444" text-anchor="middle" fill="#94a3b8" font-family="monospace" font-size="11">Audit Log</text>
+
+  <rect x="430" y="422" width="120" height="35" rx="6" fill="#1e293b" stroke="#334155" stroke-width="1"/>
+  <text x="490" y="444" text-anchor="middle" fill="#94a3b8" font-family="monospace" font-size="11">TOTP / SSH</text>
+
+  <rect x="565" y="380" width="90" height="77" rx="6" fill="#1e293b" stroke="#334155" stroke-width="1"/>
+  <text x="610" y="415" text-anchor="middle" fill="#94a3b8" font-family="monospace" font-size="11">IPC</text>
+  <text x="610" y="430" text-anchor="middle" fill="#94a3b8" font-family="monospace" font-size="11">Server</text>
+  <text x="610" y="448" text-anchor="middle" fill="#64748b" font-family="monospace" font-size="8">Tokio async</text>
+
+  <!-- Tier 5: OS Keystore -->
+  <line x1="380" y1="465" x2="380" y2="500" stroke="#475569" stroke-width="1.5"/>
+  <polygon points="375,498 380,508 385,498" fill="#475569"/>
+
+  <rect x="280" y="510" width="280" height="50" rx="8" fill="#1e293b" stroke="#f59e0b" stroke-width="2"/>
+  <text x="420" y="535" text-anchor="middle" fill="#fbbf24" font-family="monospace" font-size="13" font-weight="600">OS Keystore</text>
+  <text x="420" y="550" text-anchor="middle" fill="#fcd34d" font-family="monospace" font-size="10">macOS Keychain · Windows DPAPI · Linux Secret Service</text>
+
+  <!-- Footer -->
+  <text x="450" y="588" text-anchor="middle" fill="#334155" font-family="system-ui, sans-serif" font-size="10">github.com/AltamashSentinelPass/sentinelpass · Apache 2.0</text>
+</svg>

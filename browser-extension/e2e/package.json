@@ -4,7 +4,8 @@
   "type": "module",
   "scripts": {
     "test:e2e": "playwright test --config=playwright.config.ts",
-    "test:e2e:headed": "HEADLESS=0 playwright test --config=playwright.config.ts"
+    "test:e2e:headed": "HEADLESS=0 playwright test --config=playwright.config.ts",
+    "test:release": "playwright test tests/verify-release-downloads.spec.ts"
   },
   "devDependencies": {
     "@playwright/test": "^1.52.0"

@@ -320,6 +320,24 @@ impl DaemonVault {
         }
     }
 
+    /// Get sync status from the vault database.
+    pub async fn get_sync_status(&self) -> Result<crate::sync::models::SyncStatus> {
+        let vault_guard = self.vault.lock().await;
+        if let Some(ref vault) = *vault_guard {
+            vault.get_sync_status()
+        } else {
+            // Return disabled status when vault is locked
+            Ok(crate::sync::models::SyncStatus {
+                enabled: false,
+                device_id: None,
+                device_name: None,
+                relay_url: None,
+                last_sync_at: None,
+                pending_changes: 0,
+            })
+        }
+    }
+
     /// Record activity (resets the auto-lock timer)
     pub async fn record_activity(&self) {
         *self.last_activity.write().await = Instant::now();

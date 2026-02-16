@@ -201,25 +201,29 @@ impl VaultManager {
             .lock()
             .map_err(|_| DatabaseError::LockPoisoned("Failed to lock database".to_string()))?;
 
+        let sync_id = uuid::Uuid::new_v4().to_string();
+
         db.conn()
             .execute(
                 "INSERT INTO entries (
                 vault_id, title, username, password, url, notes,
-                entry_nonce, auth_tag, created_at, modified_at, favorite
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
-                (
+                entry_nonce, auth_tag, created_at, modified_at, favorite,
+                sync_id, sync_version, sync_state
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, 1, 'pending')",
+                rusqlite::params![
                     vault_id,
-                    &title_blob,
-                    &username_blob,
-                    &password_blob,
+                    title_blob,
+                    username_blob,
+                    password_blob,
                     url_blob.as_deref().unwrap_or(&[]),
                     notes_blob.as_deref().unwrap_or(&[]),
-                    &nonce_blob,
-                    &auth_tag_blob,
+                    nonce_blob,
+                    auth_tag_blob,
                     now,
                     now,
                     favorite,
-                ),
+                    sync_id,
+                ],
             )
             .map_err(DatabaseError::Sqlite)?;
 
@@ -367,7 +371,7 @@ impl VaultManager {
 
         let mut stmt = db
             .conn()
-            .prepare("SELECT entry_id, title, username, favorite FROM entries")
+            .prepare("SELECT entry_id, title, username, favorite FROM entries WHERE is_deleted = 0")
             .map_err(DatabaseError::Sqlite)?;
 
         let mut entries = stmt
@@ -417,7 +421,7 @@ impl VaultManager {
         Ok(entries)
     }
 
-    /// Delete an entry
+    /// Delete an entry (soft-delete with tombstone for sync).
     pub fn delete_entry(&self, entry_id: i64) -> Result<()> {
         if !self.is_unlocked() {
             return Err(PasswordManagerError::VaultLocked);
@@ -428,18 +432,27 @@ impl VaultManager {
             .lock()
             .map_err(|_| DatabaseError::LockPoisoned("Failed to lock database".to_string()))?;
 
-        // First, delete associated domain mappings
-        db.conn()
-            .execute(
-                "DELETE FROM domain_mappings WHERE entry_id = ?1",
-                [entry_id],
-            )
-            .map_err(DatabaseError::Sqlite)?;
+        let now = chrono::Utc::now().timestamp();
 
-        // Then delete the entry
+        // Get sync_id and sync_version before soft-deleting
+        let sync_info: Option<(String, i64)> = db
+            .conn()
+            .query_row(
+                "SELECT sync_id, sync_version FROM entries WHERE entry_id = ?1",
+                [entry_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .ok();
+
+        // Soft-delete: mark as deleted, bump sync_version
         let rows_affected = db
             .conn()
-            .execute("DELETE FROM entries WHERE entry_id = ?1", [entry_id])
+            .execute(
+                "UPDATE entries SET is_deleted = 1, deleted_at = ?1,
+                 sync_version = sync_version + 1, sync_state = 'pending'
+                 WHERE entry_id = ?2 AND is_deleted = 0",
+                rusqlite::params![now, entry_id],
+            )
             .map_err(DatabaseError::Sqlite)?;
 
         if rows_affected == 0 {
@@ -448,6 +461,25 @@ impl VaultManager {
                 entry_id
             )));
         }
+
+        // Record tombstone for sync
+        if let Some((sync_id, sync_version)) = sync_info {
+            db.conn()
+                .execute(
+                    "INSERT OR IGNORE INTO sync_tombstones (sync_id, entry_type, sync_version, deleted_at, origin_device_id)
+                     VALUES (?1, 'credential', ?2, ?3, '')",
+                    rusqlite::params![sync_id, sync_version + 1, now],
+                )
+                .map_err(DatabaseError::Sqlite)?;
+        }
+
+        // Delete associated domain mappings (these are inside the credential blob for sync)
+        db.conn()
+            .execute(
+                "DELETE FROM domain_mappings WHERE entry_id = ?1",
+                [entry_id],
+            )
+            .map_err(DatabaseError::Sqlite)?;
 
         // Log credential deletion
         if let Some(ref logger) = self.audit_logger {
@@ -550,6 +582,113 @@ impl VaultManager {
             );
         }
 
+        Ok(())
+    }
+
+    /// Get sync status from the database.
+    pub fn get_sync_status(&self) -> Result<crate::sync::models::SyncStatus> {
+        let db = self
+            .db
+            .lock()
+            .map_err(|e| DatabaseError::LockPoisoned(e.to_string()))?;
+        let config = crate::sync::config::SyncConfig::load(db.conn())?;
+        let pending = crate::sync::change_tracker::count_pending_changes(db.conn())?;
+
+        Ok(crate::sync::models::SyncStatus {
+            enabled: config.sync_enabled,
+            device_id: config.device_id,
+            device_name: config.device_name.clone(),
+            relay_url: config.relay_url.clone(),
+            last_sync_at: config.last_sync_at,
+            pending_changes: pending,
+        })
+    }
+
+    /// Initialize sync for this vault: save config and device identity.
+    pub fn init_sync(
+        &self,
+        relay_url: &str,
+        device_name: &str,
+        vault_id: uuid::Uuid,
+        identity: &crate::sync::device::DeviceIdentity,
+    ) -> Result<()> {
+        let db = self
+            .db
+            .lock()
+            .map_err(|e| DatabaseError::LockPoisoned(e.to_string()))?;
+        let config = crate::sync::config::SyncConfig {
+            sync_enabled: true,
+            vault_id: Some(vault_id),
+            device_id: Some(identity.device_id),
+            device_name: Some(device_name.to_string()),
+            relay_url: Some(relay_url.to_string()),
+            last_push_sequence: 0,
+            last_pull_sequence: 0,
+            last_sync_at: None,
+        };
+        config.save(db.conn())?;
+        let dek = self.key_hierarchy.dek()?;
+        identity.save_to_db(db.conn(), dek)?;
+        Ok(())
+    }
+
+    /// Disable sync (preserves identity but sets enabled = false).
+    pub fn disable_sync(&self) -> Result<()> {
+        let db = self
+            .db
+            .lock()
+            .map_err(|e| DatabaseError::LockPoisoned(e.to_string()))?;
+        let mut config = crate::sync::config::SyncConfig::load(db.conn())?;
+        config.sync_enabled = false;
+        config.save(db.conn())?;
+        Ok(())
+    }
+
+    /// List sync devices from local cache.
+    pub fn list_sync_devices(&self) -> Result<Vec<crate::sync::models::SyncDeviceInfo>> {
+        let db = self
+            .db
+            .lock()
+            .map_err(|e| DatabaseError::LockPoisoned(e.to_string()))?;
+        let mut stmt = db.conn().prepare(
+            "SELECT device_id, device_name, device_type, public_key, registered_at, last_sync, revoked, revoked_at
+             FROM sync_devices ORDER BY registered_at"
+        ).map_err(DatabaseError::Sqlite)?;
+
+        let devices = stmt
+            .query_map([], |row| {
+                let device_id_str: String = row.get(0)?;
+                Ok(crate::sync::models::SyncDeviceInfo {
+                    device_id: uuid::Uuid::parse_str(&device_id_str).unwrap_or_default(),
+                    device_name: row.get(1)?,
+                    device_type: row.get(2)?,
+                    public_key: row.get::<_, Option<Vec<u8>>>(3)?.unwrap_or_default(),
+                    registered_at: row.get(4)?,
+                    last_sync: row.get(5)?,
+                    revoked: row.get(6)?,
+                    revoked_at: row.get(7)?,
+                })
+            })
+            .map_err(DatabaseError::Sqlite)?
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(DatabaseError::Sqlite)?;
+
+        Ok(devices)
+    }
+
+    /// Revoke a sync device locally.
+    pub fn revoke_sync_device(&self, device_id: &str) -> Result<()> {
+        let db = self
+            .db
+            .lock()
+            .map_err(|e| DatabaseError::LockPoisoned(e.to_string()))?;
+        let now = Utc::now().timestamp();
+        db.conn()
+            .execute(
+                "UPDATE sync_devices SET revoked = 1, revoked_at = ?1 WHERE device_id = ?2",
+                rusqlite::params![now, device_id],
+            )
+            .map_err(DatabaseError::Sqlite)?;
         Ok(())
     }
 

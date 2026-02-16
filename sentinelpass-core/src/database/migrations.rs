@@ -4,3 +4,389 @@
 //! open in `schema::Database::validate_schema_version()`. When future schema
 //! changes are needed, add migration logic here and bump
 //! `schema::CURRENT_SCHEMA_VERSION`.
+
+use crate::{DatabaseError, Result};
+use rusqlite::Connection;
+
+/// Migrate schema from v1 to v2: add sync columns and tables.
+pub fn migrate_v1_to_v2(conn: &Connection) -> Result<()> {
+    conn.execute_batch(
+        "BEGIN;
+
+        -- Add sync columns to entries
+        ALTER TABLE entries ADD COLUMN sync_id TEXT;
+        ALTER TABLE entries ADD COLUMN sync_version INTEGER NOT NULL DEFAULT 0;
+        ALTER TABLE entries ADD COLUMN sync_state TEXT NOT NULL DEFAULT 'pending';
+        ALTER TABLE entries ADD COLUMN last_synced_at INTEGER;
+        ALTER TABLE entries ADD COLUMN is_deleted INTEGER NOT NULL DEFAULT 0;
+        ALTER TABLE entries ADD COLUMN deleted_at INTEGER;
+
+        -- Add sync columns to ssh_keys
+        ALTER TABLE ssh_keys ADD COLUMN sync_id TEXT;
+        ALTER TABLE ssh_keys ADD COLUMN sync_version INTEGER NOT NULL DEFAULT 0;
+        ALTER TABLE ssh_keys ADD COLUMN sync_state TEXT NOT NULL DEFAULT 'pending';
+        ALTER TABLE ssh_keys ADD COLUMN last_synced_at INTEGER;
+        ALTER TABLE ssh_keys ADD COLUMN is_deleted INTEGER NOT NULL DEFAULT 0;
+        ALTER TABLE ssh_keys ADD COLUMN deleted_at INTEGER;
+
+        -- Add sync columns to totp_secrets
+        ALTER TABLE totp_secrets ADD COLUMN sync_id TEXT;
+        ALTER TABLE totp_secrets ADD COLUMN sync_version INTEGER NOT NULL DEFAULT 0;
+        ALTER TABLE totp_secrets ADD COLUMN sync_state TEXT NOT NULL DEFAULT 'pending';
+        ALTER TABLE totp_secrets ADD COLUMN last_synced_at INTEGER;
+        ALTER TABLE totp_secrets ADD COLUMN is_deleted INTEGER NOT NULL DEFAULT 0;
+        ALTER TABLE totp_secrets ADD COLUMN deleted_at INTEGER;
+
+        -- Add sync columns to domain_mappings
+        ALTER TABLE domain_mappings ADD COLUMN sync_id TEXT;
+        ALTER TABLE domain_mappings ADD COLUMN sync_version INTEGER NOT NULL DEFAULT 0;
+        ALTER TABLE domain_mappings ADD COLUMN sync_state TEXT NOT NULL DEFAULT 'pending';
+        ALTER TABLE domain_mappings ADD COLUMN last_synced_at INTEGER;
+
+        -- Sync metadata table (device config)
+        CREATE TABLE IF NOT EXISTS sync_metadata (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            vault_id TEXT,
+            device_id TEXT,
+            device_name TEXT,
+            relay_url TEXT,
+            device_signing_key_encrypted BLOB,
+            last_push_sequence INTEGER NOT NULL DEFAULT 0,
+            last_pull_sequence INTEGER NOT NULL DEFAULT 0,
+            last_sync_at INTEGER,
+            sync_enabled INTEGER NOT NULL DEFAULT 0
+        );
+
+        -- Known devices cache
+        CREATE TABLE IF NOT EXISTS sync_devices (
+            device_id TEXT PRIMARY KEY,
+            device_name TEXT NOT NULL,
+            device_type TEXT NOT NULL,
+            public_key BLOB NOT NULL,
+            registered_at INTEGER NOT NULL,
+            last_sync INTEGER,
+            revoked INTEGER NOT NULL DEFAULT 0,
+            revoked_at INTEGER
+        );
+
+        -- Tombstones for deleted entries
+        CREATE TABLE IF NOT EXISTS sync_tombstones (
+            tombstone_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            sync_id TEXT NOT NULL UNIQUE,
+            entry_type TEXT NOT NULL,
+            sync_version INTEGER NOT NULL,
+            deleted_at INTEGER NOT NULL,
+            origin_device_id TEXT NOT NULL,
+            pushed INTEGER NOT NULL DEFAULT 0
+        );
+
+        -- Indexes for sync lookups
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_entries_sync_id ON entries(sync_id);
+        CREATE INDEX IF NOT EXISTS idx_entries_sync_state ON entries(sync_state);
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_ssh_keys_sync_id ON ssh_keys(sync_id);
+        CREATE INDEX IF NOT EXISTS idx_ssh_keys_sync_state ON ssh_keys(sync_state);
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_totp_secrets_sync_id ON totp_secrets(sync_id);
+        CREATE INDEX IF NOT EXISTS idx_totp_secrets_sync_state ON totp_secrets(sync_state);
+        CREATE INDEX IF NOT EXISTS idx_sync_tombstones_pushed ON sync_tombstones(pushed);
+
+        -- Bump schema version
+        UPDATE db_metadata SET version = 2 WHERE id = 1;
+
+        COMMIT;",
+    )
+    .map_err(DatabaseError::Sqlite)?;
+
+    // Assign UUID sync_ids to all existing entries
+    assign_sync_ids(conn)?;
+
+    Ok(())
+}
+
+/// Assign UUID v4 sync_ids to all existing rows that don't have one.
+fn assign_sync_ids(conn: &Connection) -> Result<()> {
+    // Entries
+    let mut stmt = conn
+        .prepare("SELECT entry_id FROM entries WHERE sync_id IS NULL")
+        .map_err(DatabaseError::Sqlite)?;
+
+    let entry_ids: Vec<i64> = stmt
+        .query_map([], |row| row.get(0))
+        .map_err(DatabaseError::Sqlite)?
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(DatabaseError::Sqlite)?;
+
+    for entry_id in entry_ids {
+        let sync_id = uuid::Uuid::new_v4().to_string();
+        conn.execute(
+            "UPDATE entries SET sync_id = ?1 WHERE entry_id = ?2",
+            rusqlite::params![sync_id, entry_id],
+        )
+        .map_err(DatabaseError::Sqlite)?;
+    }
+
+    // SSH keys
+    let mut stmt = conn
+        .prepare("SELECT key_id FROM ssh_keys WHERE sync_id IS NULL")
+        .map_err(DatabaseError::Sqlite)?;
+
+    let key_ids: Vec<i64> = stmt
+        .query_map([], |row| row.get(0))
+        .map_err(DatabaseError::Sqlite)?
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(DatabaseError::Sqlite)?;
+
+    for key_id in key_ids {
+        let sync_id = uuid::Uuid::new_v4().to_string();
+        conn.execute(
+            "UPDATE ssh_keys SET sync_id = ?1 WHERE key_id = ?2",
+            rusqlite::params![sync_id, key_id],
+        )
+        .map_err(DatabaseError::Sqlite)?;
+    }
+
+    // TOTP secrets
+    let mut stmt = conn
+        .prepare("SELECT totp_id FROM totp_secrets WHERE sync_id IS NULL")
+        .map_err(DatabaseError::Sqlite)?;
+
+    let totp_ids: Vec<i64> = stmt
+        .query_map([], |row| row.get(0))
+        .map_err(DatabaseError::Sqlite)?
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(DatabaseError::Sqlite)?;
+
+    for totp_id in totp_ids {
+        let sync_id = uuid::Uuid::new_v4().to_string();
+        conn.execute(
+            "UPDATE totp_secrets SET sync_id = ?1 WHERE totp_id = ?2",
+            rusqlite::params![sync_id, totp_id],
+        )
+        .map_err(DatabaseError::Sqlite)?;
+    }
+
+    // Domain mappings
+    let mut stmt = conn
+        .prepare("SELECT mapping_id FROM domain_mappings WHERE sync_id IS NULL")
+        .map_err(DatabaseError::Sqlite)?;
+
+    let mapping_ids: Vec<i64> = stmt
+        .query_map([], |row| row.get(0))
+        .map_err(DatabaseError::Sqlite)?
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(DatabaseError::Sqlite)?;
+
+    for mapping_id in mapping_ids {
+        let sync_id = uuid::Uuid::new_v4().to_string();
+        conn.execute(
+            "UPDATE domain_mappings SET sync_id = ?1 WHERE mapping_id = ?2",
+            rusqlite::params![sync_id, mapping_id],
+        )
+        .map_err(DatabaseError::Sqlite)?;
+    }
+
+    Ok(())
+}
+
+/// Run all pending migrations to bring the database up to the current version.
+pub fn run_migrations(conn: &Connection) -> Result<()> {
+    let version: i32 = conn
+        .query_row("SELECT version FROM db_metadata WHERE id = 1", [], |row| {
+            row.get(0)
+        })
+        .map_err(DatabaseError::Sqlite)?;
+
+    if version < 2 {
+        migrate_v1_to_v2(conn)?;
+    }
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Create a database with v1 schema only (no sync columns).
+    fn create_v1_db() -> rusqlite::Connection {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute("PRAGMA foreign_keys = ON", []).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE db_metadata (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                version INTEGER NOT NULL,
+                kdf_params BLOB NOT NULL,
+                wrapped_dek BLOB NOT NULL,
+                dek_nonce BLOB NOT NULL,
+                created_at INTEGER NOT NULL,
+                last_modified INTEGER NOT NULL,
+                biometric_ref TEXT
+            );
+            CREATE TABLE entries (
+                entry_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                vault_id INTEGER NOT NULL,
+                title BLOB NOT NULL,
+                username BLOB NOT NULL,
+                password BLOB NOT NULL,
+                url BLOB,
+                notes BLOB,
+                entry_nonce BLOB NOT NULL,
+                auth_tag BLOB NOT NULL,
+                created_at INTEGER NOT NULL,
+                modified_at INTEGER NOT NULL,
+                favorite INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE TABLE domain_mappings (
+                mapping_id INTEGER PRIMARY KEY,
+                entry_id INTEGER NOT NULL,
+                domain TEXT NOT NULL,
+                is_primary INTEGER NOT NULL DEFAULT 1,
+                FOREIGN KEY (entry_id) REFERENCES entries(entry_id) ON DELETE CASCADE
+            );
+            CREATE TABLE failed_attempts (
+                attempt_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                attempt_time INTEGER NOT NULL,
+                ip_address TEXT
+            );
+            CREATE TABLE ssh_keys (
+                key_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                comment TEXT,
+                key_type TEXT NOT NULL,
+                key_size INTEGER,
+                public_key TEXT NOT NULL,
+                private_key_encrypted BLOB NOT NULL,
+                nonce BLOB NOT NULL,
+                auth_tag BLOB NOT NULL,
+                fingerprint TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                modified_at INTEGER NOT NULL
+            );
+            CREATE TABLE totp_secrets (
+                totp_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                entry_id INTEGER NOT NULL UNIQUE,
+                secret_encrypted BLOB NOT NULL,
+                nonce BLOB NOT NULL,
+                auth_tag BLOB NOT NULL,
+                algorithm TEXT NOT NULL DEFAULT 'SHA1',
+                digits INTEGER NOT NULL DEFAULT 6,
+                period INTEGER NOT NULL DEFAULT 30,
+                issuer TEXT,
+                account_name TEXT,
+                created_at INTEGER NOT NULL,
+                FOREIGN KEY (entry_id) REFERENCES entries(entry_id) ON DELETE CASCADE
+            );
+            INSERT INTO db_metadata (id, version, kdf_params, wrapped_dek, dek_nonce, created_at, last_modified)
+            VALUES (1, 1, X'00', X'00', X'00', 0, 0);",
+        )
+        .unwrap();
+        conn
+    }
+
+    #[test]
+    fn migrate_v1_to_v2_creates_sync_tables() {
+        let conn = create_v1_db();
+
+        migrate_v1_to_v2(&conn).unwrap();
+
+        // Verify schema version bumped
+        let version: i32 = conn
+            .query_row("SELECT version FROM db_metadata WHERE id = 1", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(version, 2);
+
+        // Verify sync_metadata table exists
+        let table_exists: bool = conn
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='sync_metadata')",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(table_exists);
+
+        // Verify sync_devices table exists
+        let table_exists: bool = conn
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='sync_devices')",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(table_exists);
+
+        // Verify sync_tombstones table exists
+        let table_exists: bool = conn
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='sync_tombstones')",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(table_exists);
+
+        // Verify sync columns added to entries
+        let has_sync_id: bool = conn
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM pragma_table_info('entries') WHERE name='sync_id')",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(has_sync_id);
+
+        let has_sync_version: bool = conn
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM pragma_table_info('entries') WHERE name='sync_version')",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(has_sync_version);
+    }
+
+    #[test]
+    fn migrate_assigns_sync_ids_to_existing_entries() {
+        let conn = create_v1_db();
+
+        // Insert a test entry (v1 schema, no sync columns)
+        conn.execute(
+            "INSERT INTO entries (vault_id, title, username, password, entry_nonce, auth_tag, created_at, modified_at)
+             VALUES (1, X'01', X'02', X'03', X'04', X'05', 0, 0)",
+            [],
+        )
+        .unwrap();
+
+        migrate_v1_to_v2(&conn).unwrap();
+
+        // Verify sync_id was assigned
+        let sync_id: String = conn
+            .query_row(
+                "SELECT sync_id FROM entries WHERE entry_id = 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+
+        assert!(!sync_id.is_empty());
+        assert!(uuid::Uuid::parse_str(&sync_id).is_ok());
+    }
+
+    #[test]
+    fn run_migrations_idempotent() {
+        let conn = create_v1_db();
+
+        run_migrations(&conn).unwrap();
+
+        // Running again should be a no-op (version is already 2)
+        run_migrations(&conn).unwrap();
+
+        let version: i32 = conn
+            .query_row("SELECT version FROM db_metadata WHERE id = 1", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(version, 2);
+    }
+}

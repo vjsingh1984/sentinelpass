@@ -32,33 +32,56 @@ Browser Extension -> sentinelpass-host -> sentinelpass-daemon -> sentinelpass-co
                     sentinelpass-ui (unlock + state)
 ```
 
-## Quick Start
+## Install
 
-### 1) Build
+| Platform | Method |
+| --- | --- |
+| macOS | Download the DMG from [Releases](../../releases), open it, drag SentinelPass to Applications |
+| Windows | Download the MSI installer from [Releases](../../releases) and run it |
+| Linux (Debian/Ubuntu) | `sudo dpkg -i sentinelpass-*.deb` |
+| Linux (Fedora/RHEL) | `sudo dnf install sentinelpass-*.rpm` |
+| Build from source | `npm install && npm run web:build && cargo build --release` |
+
+> **Tip:** GitHub release links use 302 redirects — use `curl -L -O <url>` when downloading from the command line.
+
+## First Launch
+
+1. Open **SentinelPass** from your Applications folder / Start Menu / launcher.
+2. Create a new vault and set a master password.
+3. The app automatically starts the background daemon and registers the native messaging host for Chrome, Chromium, and Firefox.
+
+## Browser Extension
+
+| Browser | Steps |
+| --- | --- |
+| Chrome | `chrome://extensions/` → enable **Developer mode** → **Load unpacked** → select `browser-extension/chrome/` |
+| Firefox | `about:debugging#/runtime/this-firefox` → **Load Temporary Add-on** → select `browser-extension/firefox/manifest.json` |
+
+After installing the extension, **restart the browser** so it picks up the native messaging host manifest written by the app.
+
+## Verify
+
+1. Visit any login page — an autofill icon should appear next to password fields.
+2. If not, check the Troubleshooting section below.
+
+## Troubleshooting
+
+| Symptom | Fix |
+| --- | --- |
+| "Specified native messaging host not found" | Restart the browser after launching SentinelPass at least once |
+| Autofill icon doesn't appear | Ensure the daemon is running (check SentinelPass UI status) |
+| "Vault is locked" | Unlock the vault in the SentinelPass UI first |
+| Extension installed but not working | Open DevTools → Console → filter for `[SentinelPass]` logs |
+
+You can also re-register the native host manually:
 
 ```bash
-npm install
-npm run web:build
-cargo build --release
+# macOS / Linux — from installed app bundle
+./installation/install.sh --from-app-bundle
+
+# macOS / Linux — from source build
+./installation/install.sh
 ```
-
-### 2) Install (user-level, no admin)
-
-```bash
-# Windows
-./install.ps1
-
-# macOS / Linux
-./install.sh
-```
-
-### 3) Run
-
-```bash
-sentinelpass-ui
-```
-
-UI startup coordinates daemon startup; unlocking in UI enables browser save/autofill paths.
 
 ## Developer Loop
 

@@ -35,6 +35,9 @@ coverage/
 # Native messaging (local dev)
 native-host/local/
 
+# Blog (local only)
+blogs/
+
 # Build artifacts
 *.o
 *.so

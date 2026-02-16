@@ -4,6 +4,7 @@
 set -e
 
 BINARY_DIR_OVERRIDE="${SENTINELPASS_BINARY_DIR:-}"
+FROM_APP_BUNDLE=false
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --binary-dir)
@@ -13,6 +14,10 @@ while [[ $# -gt 0 ]]; do
             fi
             BINARY_DIR_OVERRIDE="$2"
             shift 2
+            ;;
+        --from-app-bundle)
+            FROM_APP_BUNDLE=true
+            shift
             ;;
         *)
             echo "Unknown option for installation/install.sh: $1" >&2
@@ -39,14 +44,38 @@ fi
 NATIVE_HOST_NAME="com.passwordmanager.host"
 CHROME_MANIFEST_FILE="$NATIVE_HOST_NAME.json"
 FIREFOX_MANIFEST_FILE="$NATIVE_HOST_NAME.firefox.json"
-CHROME_EXTENSION_ID="${SENTINELPASS_CHROME_EXTENSION_ID:-YOUR_EXTENSION_ID_HERE}"
+CHROME_EXTENSION_ID="${SENTINELPASS_CHROME_EXTENSION_ID:-nophfgfiiohedlodfeepjoioljbhggdd}"
 
 echo "Installing SentinelPass for $PLATFORM..."
 
 # Get project root
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
-BINARY_DIR="${BINARY_DIR_OVERRIDE:-$PROJECT_ROOT/target/release}"
+
+# Resolve binary directory
+if [[ "$FROM_APP_BUNDLE" == true ]]; then
+    if [[ "$PLATFORM" == "macos" ]]; then
+        BINARY_DIR="/Applications/SentinelPass.app/Contents/Resources/src-tauri/resources/bin"
+    else
+        # Linux: typical install locations for Tauri bundles
+        for candidate in \
+            "/usr/lib/sentinelpass/resources/bin" \
+            "/opt/sentinelpass/resources/bin" \
+            "/usr/share/sentinelpass/resources/bin"; do
+            if [[ -d "$candidate" ]]; then
+                BINARY_DIR="$candidate"
+                break
+            fi
+        done
+        if [[ -z "${BINARY_DIR:-}" ]]; then
+            echo "Could not locate app bundle binaries. Use --binary-dir instead." >&2
+            exit 1
+        fi
+    fi
+    echo "Resolving binaries from app bundle: $BINARY_DIR"
+else
+    BINARY_DIR="${BINARY_DIR_OVERRIDE:-$PROJECT_ROOT/target/release}"
+fi
 
 # Check if binaries are built
 if [[ ! -d "$BINARY_DIR" ]]; then
@@ -143,10 +172,7 @@ ln -sf "$INSTALL_DIR/$FIREFOX_MANIFEST_FILE" "$FIREFOX_NATIVE_DIR/$NATIVE_HOST_N
 
 echo "Native messaging host registered for Chrome, Chromium, and Firefox"
 
-if [[ "$CHROME_EXTENSION_ID" == "YOUR_EXTENSION_ID_HERE" ]]; then
-    echo "WARNING: Chrome native host manifest still uses placeholder extension ID."
-    echo "Set SENTINELPASS_CHROME_EXTENSION_ID=<32-char-id> before running install.sh, or edit $INSTALL_DIR/$CHROME_MANIFEST_FILE."
-fi
+echo "Chrome extension ID used: $CHROME_EXTENSION_ID"
 
 # Add to PATH (if not already there)
 if [[ ":$PATH:" != *":$INSTALL_DIR:"* ]]; then

@@ -34,6 +34,60 @@ fn daemon_binary_name() -> &'static str {
     }
 }
 
+fn host_binary_name() -> &'static str {
+    if cfg!(windows) {
+        "sentinelpass-host.exe"
+    } else {
+        "sentinelpass-host"
+    }
+}
+
+fn resolve_host_binary_path() -> PathBuf {
+    let binary_name = host_binary_name();
+    let mut candidates = Vec::new();
+
+    if let Ok(explicit_path) = std::env::var("SENTINELPASS_HOST_PATH") {
+        let trimmed = explicit_path.trim();
+        if !trimmed.is_empty() {
+            candidates.push(PathBuf::from(trimmed));
+        }
+    }
+
+    if let Some(resource_dir) = RESOURCE_DIR.get() {
+        candidates.push(
+            resource_dir
+                .join("src-tauri")
+                .join("resources")
+                .join("bin")
+                .join(binary_name),
+        );
+        candidates.push(resource_dir.join("bin").join(binary_name));
+        candidates.push(resource_dir.join(binary_name));
+    }
+
+    if let Ok(current_exe) = std::env::current_exe() {
+        if let Some(exe_dir) = current_exe.parent() {
+            candidates.push(exe_dir.join(binary_name));
+            candidates.push(exe_dir.join("resources").join("bin").join(binary_name));
+            candidates.push(
+                exe_dir
+                    .join("..")
+                    .join("Resources")
+                    .join("bin")
+                    .join(binary_name),
+            );
+        }
+    }
+
+    for candidate in candidates {
+        if candidate.exists() {
+            return candidate;
+        }
+    }
+
+    PathBuf::from(binary_name)
+}
+
 fn resolve_daemon_binary_path() -> std::path::PathBuf {
     let binary_name = daemon_binary_name();
     let mut candidates = Vec::new();
@@ -310,6 +364,220 @@ fn unlock_debug_log(message: &str) {
         {
             let _ = file.write_all(line.as_bytes());
         }
+    }
+}
+
+// Stable Chrome extension ID derived from the RSA public key in
+// browser-extension/chrome/manifest.json.  Keep these in sync.
+const CHROME_EXTENSION_ID: &str = "nophfgfiiohedlodfeepjoioljbhggdd";
+const NATIVE_HOST_NAME: &str = "com.passwordmanager.host";
+const FIREFOX_EXTENSION_ID: &str = "sentinelpass@localhost";
+
+/// Directories where Chrome/Chromium/Firefox look for native messaging host
+/// manifests on the current platform.
+fn native_messaging_dirs() -> Vec<(&'static str, PathBuf)> {
+    let mut dirs = Vec::new();
+
+    #[cfg(target_os = "macos")]
+    {
+        if let Some(home) = dirs::home_dir() {
+            let lib = home.join("Library").join("Application Support");
+            dirs.push((
+                "chrome",
+                lib.join("Google")
+                    .join("Chrome")
+                    .join("NativeMessagingHosts"),
+            ));
+            dirs.push((
+                "chromium",
+                lib.join("Chromium").join("NativeMessagingHosts"),
+            ));
+            dirs.push(("firefox", lib.join("Mozilla").join("NativeMessagingHosts")));
+        }
+    }
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        if let Some(home) = dirs::home_dir() {
+            dirs.push((
+                "chrome",
+                home.join(".config")
+                    .join("google-chrome")
+                    .join("NativeMessagingHosts"),
+            ));
+            dirs.push((
+                "chromium",
+                home.join(".config")
+                    .join("chromium")
+                    .join("NativeMessagingHosts"),
+            ));
+            dirs.push((
+                "firefox",
+                home.join(".mozilla").join("native-messaging-hosts"),
+            ));
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        // On Windows the manifest is written to %LOCALAPPDATA%\SentinelPass\ and
+        // a registry key points to the file.  We use "chrome" / "firefox" labels
+        // so the caller can branch on the browser type.
+        if let Ok(local) = std::env::var("LOCALAPPDATA") {
+            let base = PathBuf::from(local).join("SentinelPass");
+            dirs.push(("chrome", base.clone()));
+            dirs.push(("firefox", base));
+        }
+    }
+
+    dirs
+}
+
+fn build_chrome_manifest(host_path: &std::path::Path) -> String {
+    serde_json::json!({
+        "name": NATIVE_HOST_NAME,
+        "description": "SentinelPass Native Messaging Host",
+        "path": host_path.to_string_lossy(),
+        "type": "stdio",
+        "allowed_origins": [
+            format!("chrome-extension://{}/", CHROME_EXTENSION_ID)
+        ]
+    })
+    .to_string()
+}
+
+fn build_firefox_manifest(host_path: &std::path::Path) -> String {
+    serde_json::json!({
+        "name": NATIVE_HOST_NAME,
+        "description": "SentinelPass Native Messaging Host",
+        "path": host_path.to_string_lossy(),
+        "type": "stdio",
+        "allowed_extensions": [FIREFOX_EXTENSION_ID]
+    })
+    .to_string()
+}
+
+fn write_manifest(dir: &std::path::Path, filename: &str, contents: &str) -> Result<(), String> {
+    std::fs::create_dir_all(dir)
+        .map_err(|e| format!("Failed to create dir {}: {}", dir.display(), e))?;
+    let path = dir.join(filename);
+    std::fs::write(&path, contents)
+        .map_err(|e| format!("Failed to write {}: {}", path.display(), e))?;
+    unlock_debug_log(&format!("write_manifest: wrote {}", path.display()));
+    Ok(())
+}
+
+/// Idempotent — safe to call on every launch.  Writes native messaging host
+/// manifests (and on Windows, registry entries) for Chrome, Chromium, and
+/// Firefox so the browser extension can locate `sentinelpass-host`.
+fn ensure_native_host_registered() -> Result<(), String> {
+    let host_path = resolve_host_binary_path();
+    let host_path = if host_path.exists() {
+        std::fs::canonicalize(&host_path).unwrap_or(host_path)
+    } else {
+        host_path
+    };
+
+    unlock_debug_log(&format!(
+        "ensure_native_host_registered: host binary = {}",
+        host_path.display()
+    ));
+
+    let manifest_name = format!("{}.json", NATIVE_HOST_NAME);
+    let chrome_manifest = build_chrome_manifest(&host_path);
+    let firefox_manifest = build_firefox_manifest(&host_path);
+
+    let mut errors = Vec::new();
+
+    for (browser, dir) in native_messaging_dirs() {
+        let result = if browser == "firefox" {
+            // On non-Windows platforms Firefox uses the same directory layout.
+            // On Windows the manifest file gets a different name so we can
+            // write both Chrome and Firefox manifests into the same folder.
+            #[cfg(target_os = "windows")]
+            {
+                let ff_name = format!("{}.firefox.json", NATIVE_HOST_NAME);
+                write_manifest(&dir, &ff_name, &firefox_manifest)
+            }
+            #[cfg(not(target_os = "windows"))]
+            {
+                write_manifest(&dir, &manifest_name, &firefox_manifest)
+            }
+        } else {
+            write_manifest(&dir, &manifest_name, &chrome_manifest)
+        };
+
+        if let Err(e) = result {
+            errors.push(e);
+        }
+    }
+
+    // Windows: create registry entries pointing to the manifest files.
+    #[cfg(target_os = "windows")]
+    {
+        if let Ok(local) = std::env::var("LOCALAPPDATA") {
+            let base = PathBuf::from(&local).join("SentinelPass");
+            let chrome_json = base.join(&manifest_name);
+            let ff_json = base.join(format!("{}.firefox.json", NATIVE_HOST_NAME));
+
+            let reg_entries = [
+                (
+                    format!(
+                        r"HKCU\Software\Google\Chrome\NativeMessagingHosts\{}",
+                        NATIVE_HOST_NAME
+                    ),
+                    chrome_json.to_string_lossy().to_string(),
+                ),
+                (
+                    format!(
+                        r"HKCU\Software\Chromium\NativeMessagingHosts\{}",
+                        NATIVE_HOST_NAME
+                    ),
+                    chrome_json.to_string_lossy().to_string(),
+                ),
+                (
+                    format!(
+                        r"HKCU\Software\Mozilla\NativeMessagingHosts\{}",
+                        NATIVE_HOST_NAME
+                    ),
+                    ff_json.to_string_lossy().to_string(),
+                ),
+            ];
+
+            for (key, value) in &reg_entries {
+                let status = Command::new("reg")
+                    .args(["add", key, "/ve", "/t", "REG_SZ", "/d", value, "/f"])
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .status();
+                match status {
+                    Ok(s) if s.success() => {
+                        unlock_debug_log(&format!(
+                            "ensure_native_host_registered: registry set {}",
+                            key
+                        ));
+                    }
+                    Ok(s) => {
+                        errors.push(format!("reg add {} exited with {}", key, s));
+                    }
+                    Err(e) => {
+                        errors.push(format!("reg add {} failed: {}", key, e));
+                    }
+                }
+            }
+        }
+    }
+
+    if errors.is_empty() {
+        unlock_debug_log("ensure_native_host_registered: all manifests written successfully");
+        Ok(())
+    } else {
+        let combined = errors.join("; ");
+        unlock_debug_log(&format!(
+            "ensure_native_host_registered: partial failures: {}",
+            combined
+        ));
+        Err(combined)
     }
 }
 
@@ -762,6 +1030,13 @@ async fn remove_totp(entry_id: i64, state: State<'_, AppState>) -> Result<String
     Ok("TOTP removed".to_string())
 }
 
+// Command: Re-register native messaging host manifests
+#[tauri::command]
+async fn register_native_host() -> Result<String, String> {
+    ensure_native_host_registered()?;
+    Ok("Native messaging host registered for all browsers".to_string())
+}
+
 fn normalize_url_for_launch(url: &str) -> Result<String, String> {
     let trimmed = url.trim();
     if trimmed.is_empty() {
@@ -865,6 +1140,13 @@ fn main() {
                 let _ = RESOURCE_DIR.set(resource_dir.clone());
                 unlock_debug_log(&format!("setup: resource_dir={}", resource_dir.display()));
             }
+
+            // Auto-register native messaging host manifests so the browser
+            // extension can locate sentinelpass-host without manual install.
+            if let Err(e) = ensure_native_host_registered() {
+                unlock_debug_log(&format!("setup: native host registration failed: {}", e));
+            }
+
             let app_handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 let state = app_handle.state::<AppState>();
@@ -902,6 +1184,7 @@ fn main() {
             set_totp,
             remove_totp,
             open_entry_url,
+            register_native_host,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

@@ -4700,6 +4700,7 @@ name = "sentinelpass-ui"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "dirs 5.0.1",
  "sentinelpass-core",
  "serde",
  "serde_json",

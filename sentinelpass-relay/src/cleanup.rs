@@ -4,6 +4,7 @@ use crate::storage::RelayStorage;
 use std::time::Duration;
 use tokio::time;
 
+/// Spawn a background task that periodically prunes expired nonces, tombstones, and pairing blobs.
 #[allow(dead_code)]
 pub fn spawn_cleanup_task(storage: RelayStorage, tombstone_retention_days: u64) {
     tokio::spawn(async move {

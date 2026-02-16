@@ -501,4 +501,181 @@ mod tests {
             .to_string()
             .contains("Issuer in label does not match issuer query parameter"));
     }
+
+    #[test]
+    fn test_algorithm_as_db_value() {
+        assert_eq!(TotpAlgorithm::Sha1.as_db_value(), "SHA1");
+        assert_eq!(TotpAlgorithm::Sha256.as_db_value(), "SHA256");
+    }
+
+    #[test]
+    fn test_algorithm_display() {
+        assert_eq!(format!("{}", TotpAlgorithm::Sha1), "sha1");
+        assert_eq!(format!("{}", TotpAlgorithm::Sha256), "sha256");
+    }
+
+    #[test]
+    fn test_algorithm_from_str() {
+        assert_eq!(
+            "sha1".parse::<TotpAlgorithm>().unwrap(),
+            TotpAlgorithm::Sha1
+        );
+        assert_eq!(
+            "SHA1".parse::<TotpAlgorithm>().unwrap(),
+            TotpAlgorithm::Sha1
+        );
+        assert_eq!(
+            "sha256".parse::<TotpAlgorithm>().unwrap(),
+            TotpAlgorithm::Sha256
+        );
+        assert_eq!(
+            "SHA256".parse::<TotpAlgorithm>().unwrap(),
+            TotpAlgorithm::Sha256
+        );
+    }
+
+    #[test]
+    fn test_algorithm_from_str_invalid() {
+        let err = "sha512".parse::<TotpAlgorithm>().unwrap_err();
+        assert!(err.to_string().contains("Unsupported TOTP algorithm"));
+    }
+
+    #[test]
+    fn test_normalize_secret_strips_spaces_and_dashes() {
+        let result = normalize_secret("JBSW Y3DP EHPK 3PXP").unwrap();
+        assert_eq!(result, "JBSWY3DPEHPK3PXP");
+
+        let result = normalize_secret("JBSW-Y3DP-EHPK-3PXP").unwrap();
+        assert_eq!(result, "JBSWY3DPEHPK3PXP");
+    }
+
+    #[test]
+    fn test_normalize_secret_lowercases_to_upper() {
+        let result = normalize_secret("jbswy3dpehpk3pxp").unwrap();
+        assert_eq!(result, "JBSWY3DPEHPK3PXP");
+    }
+
+    #[test]
+    fn test_normalize_secret_empty_fails() {
+        assert!(normalize_secret("").is_err());
+        assert!(normalize_secret("   ").is_err());
+    }
+
+    #[test]
+    fn test_decode_secret_invalid_base32() {
+        assert!(decode_secret("!!!invalid!!!").is_err());
+    }
+
+    #[test]
+    fn test_percent_decode_basic() {
+        assert_eq!(percent_decode("hello%20world").unwrap(), "hello world");
+        assert_eq!(
+            percent_decode("alice%40example.com").unwrap(),
+            "alice@example.com"
+        );
+        assert_eq!(percent_decode("a+b").unwrap(), "a b");
+        assert_eq!(percent_decode("plain").unwrap(), "plain");
+    }
+
+    #[test]
+    fn test_percent_decode_invalid_truncated() {
+        assert!(percent_decode("hello%2").is_err());
+        assert!(percent_decode("hello%").is_err());
+    }
+
+    #[test]
+    fn test_percent_decode_invalid_hex() {
+        assert!(percent_decode("hello%GZ").is_err());
+    }
+
+    #[test]
+    fn test_generate_totp_invalid_digits() {
+        let err = generate_totp_code("JBSWY3DPEHPK3PXP", TotpAlgorithm::Sha1, 7, 30, 0);
+        assert!(err.is_err());
+    }
+
+    #[test]
+    fn test_generate_totp_invalid_period() {
+        let err = generate_totp_code("JBSWY3DPEHPK3PXP", TotpAlgorithm::Sha1, 6, 0, 0);
+        assert!(err.is_err());
+    }
+
+    #[test]
+    fn test_generate_totp_6_digit() {
+        let code = generate_totp_code("JBSWY3DPEHPK3PXP", TotpAlgorithm::Sha1, 6, 30, 0).unwrap();
+        assert_eq!(code.len(), 6);
+        assert!(code.chars().all(|c| c.is_ascii_digit()));
+    }
+
+    #[test]
+    fn test_generate_totp_8_digit() {
+        let code = generate_totp_code("JBSWY3DPEHPK3PXP", TotpAlgorithm::Sha256, 8, 30, 0).unwrap();
+        assert_eq!(code.len(), 8);
+        assert!(code.chars().all(|c| c.is_ascii_digit()));
+    }
+
+    #[test]
+    fn test_seconds_remaining_zero_period() {
+        assert_eq!(seconds_remaining(0, 100), 0);
+    }
+
+    #[test]
+    fn test_parse_otpauth_missing_secret() {
+        let err = parse_otpauth_uri("otpauth://totp/Test?issuer=Acme").unwrap_err();
+        assert!(err.to_string().contains("missing secret"));
+    }
+
+    #[test]
+    fn test_parse_otpauth_invalid_scheme() {
+        assert!(parse_otpauth_uri("https://totp/Test?secret=JBSWY3DPEHPK3PXP").is_err());
+    }
+
+    #[test]
+    fn test_parse_otpauth_hotp_rejected() {
+        assert!(parse_otpauth_uri("otpauth://hotp/Test?secret=JBSWY3DPEHPK3PXP").is_err());
+    }
+
+    #[test]
+    fn test_parse_otpauth_invalid_digits() {
+        let err =
+            parse_otpauth_uri("otpauth://totp/Test?secret=JBSWY3DPEHPK3PXP&digits=7").unwrap_err();
+        assert!(err.to_string().contains("digits must be 6 or 8"));
+    }
+
+    #[test]
+    fn test_parse_otpauth_zero_period() {
+        let err =
+            parse_otpauth_uri("otpauth://totp/Test?secret=JBSWY3DPEHPK3PXP&period=0").unwrap_err();
+        assert!(err.to_string().contains("period must be greater than 0"));
+    }
+
+    #[test]
+    fn test_parse_otpauth_no_label_split() {
+        // URI with no colon in label -- account_name only, no issuer
+        let parsed = parse_otpauth_uri("otpauth://totp/alice?secret=JBSWY3DPEHPK3PXP").unwrap();
+        assert!(parsed.issuer.is_none());
+        assert_eq!(parsed.account_name.as_deref(), Some("alice"));
+    }
+
+    #[test]
+    fn test_parse_otpauth_issuer_from_label_only() {
+        let parsed =
+            parse_otpauth_uri("otpauth://totp/Acme:alice?secret=JBSWY3DPEHPK3PXP").unwrap();
+        assert_eq!(parsed.issuer.as_deref(), Some("Acme"));
+        assert_eq!(parsed.account_name.as_deref(), Some("alice"));
+    }
+
+    #[test]
+    fn test_decrypt_totp_secret_wrong_nonce_length() {
+        let dek = DataEncryptionKey::new().unwrap();
+        let err = decrypt_totp_secret(&dek, &[0; 32], &[0; 5], &[0; 16]);
+        assert!(err.is_err());
+    }
+
+    #[test]
+    fn test_decrypt_totp_secret_wrong_auth_tag_length() {
+        let dek = DataEncryptionKey::new().unwrap();
+        let err = decrypt_totp_secret(&dek, &[0; 32], &[0; 12], &[0; 8]);
+        assert!(err.is_err());
+    }
 }

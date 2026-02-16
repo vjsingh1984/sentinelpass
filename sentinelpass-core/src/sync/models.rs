@@ -22,6 +22,7 @@ pub enum SyncState {
 }
 
 impl SyncState {
+    /// Convert sync state to its string representation.
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Synced => "synced",
@@ -30,6 +31,7 @@ impl SyncState {
         }
     }
 
+    /// Parse a sync state from its string representation.
     pub fn parse(s: &str) -> Self {
         match s {
             "synced" => Self::Synced,
@@ -63,7 +65,7 @@ pub struct SyncEntryBlob {
     pub origin_device_id: Uuid,
 }
 
-/// Plaintext credential payload (serialized to JSON, then encrypted).
+/// Decrypted credential data transported over sync.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CredentialPayload {
     pub title: String,
@@ -77,14 +79,14 @@ pub struct CredentialPayload {
     pub modified_at: i64,
 }
 
-/// Domain mapping inside a credential payload.
+/// Domain mapping within a credential sync payload.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DomainPayload {
     pub domain: String,
     pub is_primary: bool,
 }
 
-/// Plaintext SSH key payload.
+/// Decrypted SSH key data transported over sync.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SshKeyPayload {
     pub name: String,
@@ -100,7 +102,7 @@ pub struct SshKeyPayload {
     pub modified_at: i64,
 }
 
-/// Plaintext TOTP secret payload.
+/// Decrypted TOTP secret data transported over sync.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TotpPayload {
     pub secret_encrypted: Vec<u8>,
@@ -130,7 +132,7 @@ pub struct VaultBootstrap {
     pub vault_id: Uuid,
 }
 
-/// Sync status summary.
+/// Current sync status summary for the local device.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SyncStatus {
     pub enabled: bool,
@@ -141,7 +143,7 @@ pub struct SyncStatus {
     pub pending_changes: u64,
 }
 
-/// Device info as stored locally.
+/// Information about a registered sync device.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SyncDeviceInfo {
     pub device_id: Uuid,
@@ -154,14 +156,14 @@ pub struct SyncDeviceInfo {
     pub revoked_at: Option<i64>,
 }
 
-/// Push request body.
+/// Request body for pushing local changes to the relay.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PushRequest {
     pub device_sequence: u64,
     pub entries: Vec<SyncEntryBlob>,
 }
 
-/// Push response.
+/// Relay response after a push operation.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PushResponse {
     pub accepted: u64,
@@ -169,14 +171,14 @@ pub struct PushResponse {
     pub server_sequence: u64,
 }
 
-/// Pull request body.
+/// Request body for pulling remote changes from the relay.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PullRequest {
     pub since_sequence: u64,
     pub limit: Option<u64>,
 }
 
-/// Pull response.
+/// Relay response containing pulled entries.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PullResponse {
     pub entries: Vec<SyncEntryBlob>,
@@ -184,7 +186,7 @@ pub struct PullResponse {
     pub has_more: bool,
 }
 
-/// Custom base64 serialization for Vec<u8>.
+/// Custom base64 serialization for `Vec<u8>`.
 mod base64_bytes {
     use base64::{engine::general_purpose::STANDARD, Engine};
     use serde::{Deserialize, Deserializer, Serializer};

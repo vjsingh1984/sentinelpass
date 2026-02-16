@@ -2,6 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
+/// A registered device as stored in the relay database.
 #[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StoredDevice {
@@ -15,6 +16,7 @@ pub struct StoredDevice {
     pub revoked_at: Option<i64>,
 }
 
+/// An encrypted sync entry blob as stored in the relay database.
 #[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StoredSyncEntry {

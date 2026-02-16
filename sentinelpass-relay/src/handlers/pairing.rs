@@ -8,6 +8,7 @@ use base64::Engine;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 
+/// Request body for uploading an encrypted pairing bootstrap blob.
 #[derive(Deserialize)]
 pub struct UploadBootstrapRequest {
     pub pairing_token: String,
@@ -15,12 +16,14 @@ pub struct UploadBootstrapRequest {
     pub pairing_salt: String,        // base64
 }
 
+/// Response containing the encrypted bootstrap blob and pairing salt.
 #[derive(Serialize)]
 pub struct BootstrapResponse {
     pub encrypted_bootstrap: String, // base64
     pub pairing_salt: String,        // base64
 }
 
+/// POST /api/v1/pairing/bootstrap -- Upload an encrypted bootstrap blob for device pairing.
 pub async fn upload_bootstrap(
     State(storage): State<RelayStorage>,
     Json(req): Json<UploadBootstrapRequest>,
@@ -62,6 +65,7 @@ pub async fn upload_bootstrap(
     ))
 }
 
+/// GET /api/v1/pairing/bootstrap/{token} -- Fetch an encrypted bootstrap blob by pairing token.
 pub async fn fetch_bootstrap(
     State(storage): State<RelayStorage>,
     Path(token): Path<String>,

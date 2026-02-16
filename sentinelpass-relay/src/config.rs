@@ -3,6 +3,7 @@
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
+/// Configuration for the relay server, loaded from TOML file.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RelayConfig {
     pub listen_addr: String,
@@ -33,6 +34,7 @@ impl Default for RelayConfig {
 }
 
 impl RelayConfig {
+    /// Load configuration from a TOML file at the given path.
     pub fn load(path: &Path) -> anyhow::Result<Self> {
         let content = std::fs::read_to_string(path)?;
         let config: Self = toml_dep::from_str(&content)?;

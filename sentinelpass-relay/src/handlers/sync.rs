@@ -10,6 +10,7 @@ use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+/// Wire format for an encrypted sync entry received by the relay.
 #[derive(Deserialize)]
 pub struct SyncEntryBlob {
     pub sync_id: Uuid,
@@ -21,12 +22,14 @@ pub struct SyncEntryBlob {
     pub origin_device_id: Uuid,
 }
 
+/// Request body for pushing sync entries to the relay.
 #[derive(Deserialize)]
 pub struct PushRequest {
     pub device_sequence: u64,
     pub entries: Vec<SyncEntryBlob>,
 }
 
+/// Response after a push operation with acceptance counts.
 #[derive(Serialize)]
 pub struct PushResponse {
     pub accepted: u64,
@@ -34,12 +37,14 @@ pub struct PushResponse {
     pub server_sequence: u64,
 }
 
+/// Request body for pulling sync entries since a given sequence.
 #[derive(Deserialize)]
 pub struct PullRequest {
     pub since_sequence: u64,
     pub limit: Option<u64>,
 }
 
+/// A single entry in a pull response.
 #[derive(Serialize)]
 pub struct PullEntry {
     pub sync_id: String,
@@ -51,6 +56,7 @@ pub struct PullEntry {
     pub origin_device_id: String,
 }
 
+/// Response containing pulled entries and pagination state.
 #[derive(Serialize)]
 pub struct PullResponse {
     pub entries: Vec<PullEntry>,
@@ -58,6 +64,7 @@ pub struct PullResponse {
     pub has_more: bool,
 }
 
+/// POST /api/v1/sync/push -- Accept incremental entry pushes, validating versions and sequences.
 pub async fn push(
     State(storage): State<RelayStorage>,
     extensions: Extensions,
@@ -205,6 +212,7 @@ pub async fn push(
     }))
 }
 
+/// POST /api/v1/sync/pull -- Return entries newer than the requested sequence.
 pub async fn pull(
     State(storage): State<RelayStorage>,
     extensions: Extensions,
@@ -275,6 +283,7 @@ pub async fn pull(
     }))
 }
 
+/// POST /api/v1/sync/full-push -- Accept a full vault upload (initial sync).
 pub async fn full_push(
     State(storage): State<RelayStorage>,
     extensions: Extensions,
@@ -288,6 +297,7 @@ pub async fn full_push(
     push(State(storage), extensions, Json(req)).await
 }
 
+/// POST /api/v1/sync/full-pull -- Return all entries in the vault.
 pub async fn full_pull(
     State(storage): State<RelayStorage>,
     extensions: Extensions,
@@ -300,6 +310,7 @@ pub async fn full_pull(
     Ok(Json(response.0.entries))
 }
 
+/// GET /api/v1/sync/status -- Return sync status for the authenticated device.
 pub async fn status(
     State(storage): State<RelayStorage>,
     extensions: Extensions,

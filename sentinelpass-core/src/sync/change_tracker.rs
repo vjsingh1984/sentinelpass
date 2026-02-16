@@ -446,13 +446,97 @@ fn decrypt_blob(dek: &DataEncryptionKey, blob: &[u8]) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::crypto::cipher::DataEncryptionKey;
     use crate::database::Database;
 
     fn setup_db_with_sync_schema() -> Database {
         let db = Database::in_memory().unwrap();
         db.initialize_schema().unwrap();
-        // Schema already v2 from initialize_schema, no migration needed
         db
+    }
+
+    /// Insert a pending credential entry with encrypted fields and return its sync_id.
+    fn insert_pending_credential(
+        conn: &Connection,
+        dek: &DataEncryptionKey,
+        title: &str,
+        username: &str,
+        password: &str,
+        is_deleted: bool,
+    ) -> Uuid {
+        let sync_id = Uuid::new_v4();
+        let now = chrono::Utc::now().timestamp();
+
+        let title_enc = crate::encrypt_string(dek, title).unwrap();
+        let username_enc = crate::encrypt_string(dek, username).unwrap();
+        let password_enc = crate::encrypt_string(dek, password).unwrap();
+
+        let title_blob = bincode::serialize(&title_enc).unwrap();
+        let username_blob = bincode::serialize(&username_enc).unwrap();
+        let password_blob = bincode::serialize(&password_enc).unwrap();
+        let nonce_blob = bincode::serialize(&title_enc.nonce).unwrap();
+        let auth_tag_blob = bincode::serialize(&title_enc.auth_tag).unwrap();
+
+        conn.execute(
+            "INSERT INTO entries (
+                vault_id, title, username, password, url, notes,
+                entry_nonce, auth_tag, created_at, modified_at, favorite,
+                sync_id, sync_version, sync_state, is_deleted
+            ) VALUES (1, ?1, ?2, ?3, X'', X'', ?4, ?5, ?6, ?7, 0, ?8, 1, 'pending', ?9)",
+            rusqlite::params![
+                title_blob,
+                username_blob,
+                password_blob,
+                nonce_blob,
+                auth_tag_blob,
+                now,
+                now,
+                sync_id.to_string(),
+                is_deleted,
+            ],
+        )
+        .unwrap();
+
+        sync_id
+    }
+
+    /// Insert a pending SSH key entry and return its sync_id.
+    fn insert_pending_ssh_key(conn: &Connection, name: &str, is_deleted: bool) -> Uuid {
+        let sync_id = Uuid::new_v4();
+        let now = chrono::Utc::now().timestamp();
+
+        conn.execute(
+            "INSERT INTO ssh_keys (
+                name, comment, key_type, key_size, public_key,
+                private_key_encrypted, nonce, auth_tag, fingerprint,
+                created_at, modified_at,
+                sync_id, sync_version, sync_state, is_deleted
+            ) VALUES (?1, NULL, 'ed25519', 256, 'ssh-ed25519 AAAA...', X'deadbeef', X'aabb', X'ccdd', 'SHA256:test',
+                      ?2, ?3, ?4, 1, 'pending', ?5)",
+            rusqlite::params![name, now, now, sync_id.to_string(), is_deleted],
+        )
+        .unwrap();
+
+        sync_id
+    }
+
+    /// Insert a pending TOTP entry and return its sync_id.
+    fn insert_pending_totp(conn: &Connection, entry_id: i64, is_deleted: bool) -> Uuid {
+        let sync_id = Uuid::new_v4();
+        let now = chrono::Utc::now().timestamp();
+
+        conn.execute(
+            "INSERT INTO totp_secrets (
+                entry_id, secret_encrypted, nonce, auth_tag,
+                algorithm, digits, period, issuer, account_name, created_at,
+                sync_id, sync_version, sync_state, is_deleted
+            ) VALUES (?1, X'deadbeef', X'aabbccddeeff', X'00112233445566778899aabbccddeeff',
+                      'SHA1', 6, 30, 'Test', 'user@test.com', ?2, ?3, 1, 'pending', ?4)",
+            rusqlite::params![entry_id, now, sync_id.to_string(), is_deleted],
+        )
+        .unwrap();
+
+        sync_id
     }
 
     #[test]
@@ -460,5 +544,335 @@ mod tests {
         let db = setup_db_with_sync_schema();
         let count = count_pending_changes(db.conn()).unwrap();
         assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn count_pending_with_entries() {
+        let db = setup_db_with_sync_schema();
+        let conn = db.conn();
+        let dek = DataEncryptionKey::new().unwrap();
+
+        insert_pending_credential(conn, &dek, "Site A", "user1", "pass1", false);
+        insert_pending_credential(conn, &dek, "Site B", "user2", "pass2", false);
+        let sync_id_ssh = insert_pending_ssh_key(conn, "my-key", false);
+
+        let count = count_pending_changes(conn).unwrap();
+        assert_eq!(count, 3);
+
+        // Mark one as synced and verify count decreases
+        mark_entries_synced(conn, &[sync_id_ssh]).unwrap();
+        let count = count_pending_changes(conn).unwrap();
+        assert_eq!(count, 2);
+    }
+
+    #[test]
+    fn mark_entries_synced_updates_all_tables() {
+        let db = setup_db_with_sync_schema();
+        let conn = db.conn();
+        let dek = DataEncryptionKey::new().unwrap();
+
+        let cred_id = insert_pending_credential(conn, &dek, "Test", "user", "pass", false);
+        let ssh_id = insert_pending_ssh_key(conn, "key1", false);
+
+        assert_eq!(count_pending_changes(conn).unwrap(), 2);
+
+        mark_entries_synced(conn, &[cred_id, ssh_id]).unwrap();
+
+        assert_eq!(count_pending_changes(conn).unwrap(), 0);
+
+        // Verify sync_state is 'synced' in entries table
+        let state: String = conn
+            .query_row(
+                "SELECT sync_state FROM entries WHERE sync_id = ?1",
+                [cred_id.to_string()],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(state, "synced");
+
+        // Verify last_synced_at is set
+        let synced_at: Option<i64> = conn
+            .query_row(
+                "SELECT last_synced_at FROM ssh_keys WHERE sync_id = ?1",
+                [ssh_id.to_string()],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(synced_at.is_some());
+    }
+
+    #[test]
+    fn mark_tombstone_pushed_updates_flag() {
+        let db = setup_db_with_sync_schema();
+        let conn = db.conn();
+        let sync_id = Uuid::new_v4();
+        let now = chrono::Utc::now().timestamp();
+
+        conn.execute(
+            "INSERT INTO sync_tombstones (sync_id, entry_type, sync_version, deleted_at, origin_device_id, pushed)
+             VALUES (?1, 'credential', 1, ?2, ?3, 0)",
+            rusqlite::params![sync_id.to_string(), now, Uuid::new_v4().to_string()],
+        )
+        .unwrap();
+
+        mark_tombstone_pushed(conn, &sync_id).unwrap();
+
+        let pushed: bool = conn
+            .query_row(
+                "SELECT pushed FROM sync_tombstones WHERE sync_id = ?1",
+                [sync_id.to_string()],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(pushed);
+    }
+
+    #[test]
+    fn collect_pending_credential_blobs_empty_db() {
+        let db = setup_db_with_sync_schema();
+        let dek = DataEncryptionKey::new().unwrap();
+        let device_id = Uuid::new_v4();
+
+        let blobs = collect_pending_credential_blobs(db.conn(), &dek, device_id).unwrap();
+        assert!(blobs.is_empty());
+    }
+
+    #[test]
+    fn collect_pending_credential_blobs_returns_blobs() {
+        let db = setup_db_with_sync_schema();
+        let conn = db.conn();
+        let dek = DataEncryptionKey::new().unwrap();
+        let device_id = Uuid::new_v4();
+
+        let sync_id =
+            insert_pending_credential(conn, &dek, "GitHub", "dev@gh.com", "s3cret", false);
+
+        let blobs = collect_pending_credential_blobs(conn, &dek, device_id).unwrap();
+        assert_eq!(blobs.len(), 1);
+        assert_eq!(blobs[0].sync_id, sync_id);
+        assert_eq!(blobs[0].entry_type, SyncEntryType::Credential);
+        assert!(!blobs[0].is_tombstone);
+        assert_eq!(blobs[0].origin_device_id, device_id);
+        assert!(!blobs[0].encrypted_payload.is_empty());
+    }
+
+    #[test]
+    fn collect_pending_credential_blobs_tombstone() {
+        let db = setup_db_with_sync_schema();
+        let conn = db.conn();
+        let dek = DataEncryptionKey::new().unwrap();
+        let device_id = Uuid::new_v4();
+
+        let sync_id = insert_pending_credential(conn, &dek, "Deleted", "u", "p", true);
+
+        let blobs = collect_pending_credential_blobs(conn, &dek, device_id).unwrap();
+        assert_eq!(blobs.len(), 1);
+        assert_eq!(blobs[0].sync_id, sync_id);
+        assert!(blobs[0].is_tombstone);
+    }
+
+    #[test]
+    fn collect_pending_credential_with_domain_mappings() {
+        let db = setup_db_with_sync_schema();
+        let conn = db.conn();
+        let dek = DataEncryptionKey::new().unwrap();
+        let device_id = Uuid::new_v4();
+
+        insert_pending_credential(conn, &dek, "Multi Domain", "user", "pass", false);
+        let entry_id: i64 = conn
+            .query_row(
+                "SELECT entry_id FROM entries ORDER BY entry_id DESC LIMIT 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+
+        conn.execute(
+            "INSERT INTO domain_mappings (entry_id, domain, is_primary) VALUES (?1, 'example.com', 1)",
+            [entry_id],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO domain_mappings (entry_id, domain, is_primary) VALUES (?1, 'www.example.com', 0)",
+            [entry_id],
+        )
+        .unwrap();
+
+        let blobs = collect_pending_credential_blobs(conn, &dek, device_id).unwrap();
+        assert_eq!(blobs.len(), 1);
+
+        // Decrypt and verify domain mappings are included
+        let payload_json =
+            crate::sync::crypto::decrypt_from_sync(&dek, &blobs[0].encrypted_payload).unwrap();
+        let payload: CredentialPayload = serde_json::from_slice(&payload_json).unwrap();
+        assert_eq!(payload.domains.len(), 2);
+        assert_eq!(payload.domains[0].domain, "example.com");
+        assert!(payload.domains[0].is_primary);
+    }
+
+    #[test]
+    fn collect_pending_ssh_key_blobs_empty_db() {
+        let db = setup_db_with_sync_schema();
+        let dek = DataEncryptionKey::new().unwrap();
+        let device_id = Uuid::new_v4();
+
+        let blobs = collect_pending_ssh_key_blobs(db.conn(), &dek, device_id).unwrap();
+        assert!(blobs.is_empty());
+    }
+
+    #[test]
+    fn collect_pending_ssh_key_blobs_returns_blobs() {
+        let db = setup_db_with_sync_schema();
+        let conn = db.conn();
+        let dek = DataEncryptionKey::new().unwrap();
+        let device_id = Uuid::new_v4();
+
+        let sync_id = insert_pending_ssh_key(conn, "deploy-key", false);
+
+        let blobs = collect_pending_ssh_key_blobs(conn, &dek, device_id).unwrap();
+        assert_eq!(blobs.len(), 1);
+        assert_eq!(blobs[0].sync_id, sync_id);
+        assert_eq!(blobs[0].entry_type, SyncEntryType::SshKey);
+        assert!(!blobs[0].is_tombstone);
+    }
+
+    #[test]
+    fn collect_pending_ssh_key_blobs_tombstone() {
+        let db = setup_db_with_sync_schema();
+        let conn = db.conn();
+        let dek = DataEncryptionKey::new().unwrap();
+        let device_id = Uuid::new_v4();
+
+        let sync_id = insert_pending_ssh_key(conn, "revoked-key", true);
+
+        let blobs = collect_pending_ssh_key_blobs(conn, &dek, device_id).unwrap();
+        assert_eq!(blobs.len(), 1);
+        assert!(blobs[0].is_tombstone);
+        assert_eq!(blobs[0].sync_id, sync_id);
+    }
+
+    #[test]
+    fn collect_pending_totp_blobs_empty_db() {
+        let db = setup_db_with_sync_schema();
+        let dek = DataEncryptionKey::new().unwrap();
+        let device_id = Uuid::new_v4();
+
+        let blobs = collect_pending_totp_blobs(db.conn(), &dek, device_id).unwrap();
+        assert!(blobs.is_empty());
+    }
+
+    #[test]
+    fn collect_pending_totp_blobs_returns_blobs() {
+        let db = setup_db_with_sync_schema();
+        let conn = db.conn();
+        let dek = DataEncryptionKey::new().unwrap();
+        let device_id = Uuid::new_v4();
+
+        // Insert a parent credential first
+        let cred_sync_id = insert_pending_credential(conn, &dek, "TOTP Site", "u", "p", false);
+        let entry_id: i64 = conn
+            .query_row(
+                "SELECT entry_id FROM entries WHERE sync_id = ?1",
+                [cred_sync_id.to_string()],
+                |row| row.get(0),
+            )
+            .unwrap();
+
+        let totp_sync_id = insert_pending_totp(conn, entry_id, false);
+
+        let blobs = collect_pending_totp_blobs(conn, &dek, device_id).unwrap();
+        assert_eq!(blobs.len(), 1);
+        assert_eq!(blobs[0].sync_id, totp_sync_id);
+        assert_eq!(blobs[0].entry_type, SyncEntryType::TotpSecret);
+        assert!(!blobs[0].is_tombstone);
+
+        // Verify the parent_credential_sync_id is set in the payload
+        let payload_json =
+            crate::sync::crypto::decrypt_from_sync(&dek, &blobs[0].encrypted_payload).unwrap();
+        let payload: TotpPayload = serde_json::from_slice(&payload_json).unwrap();
+        assert_eq!(payload.parent_credential_sync_id, Some(cred_sync_id));
+    }
+
+    #[test]
+    fn collect_pending_totp_blobs_tombstone() {
+        let db = setup_db_with_sync_schema();
+        let conn = db.conn();
+        let dek = DataEncryptionKey::new().unwrap();
+        let device_id = Uuid::new_v4();
+
+        let cred_sync_id = insert_pending_credential(conn, &dek, "X", "u", "p", false);
+        let entry_id: i64 = conn
+            .query_row(
+                "SELECT entry_id FROM entries WHERE sync_id = ?1",
+                [cred_sync_id.to_string()],
+                |row| row.get(0),
+            )
+            .unwrap();
+
+        let sync_id = insert_pending_totp(conn, entry_id, true);
+
+        let blobs = collect_pending_totp_blobs(conn, &dek, device_id).unwrap();
+        assert_eq!(blobs.len(), 1);
+        assert!(blobs[0].is_tombstone);
+        assert_eq!(blobs[0].sync_id, sync_id);
+    }
+
+    #[test]
+    fn load_domain_mappings_empty() {
+        let db = setup_db_with_sync_schema();
+        let domains = load_domain_mappings(db.conn(), 999).unwrap();
+        assert!(domains.is_empty());
+    }
+
+    #[test]
+    fn load_domain_mappings_returns_entries() {
+        let db = setup_db_with_sync_schema();
+        let conn = db.conn();
+        let dek = DataEncryptionKey::new().unwrap();
+
+        insert_pending_credential(conn, &dek, "Test", "u", "p", false);
+        let entry_id: i64 = conn
+            .query_row(
+                "SELECT entry_id FROM entries ORDER BY entry_id DESC LIMIT 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+
+        conn.execute(
+            "INSERT INTO domain_mappings (entry_id, domain, is_primary) VALUES (?1, 'a.com', 1)",
+            [entry_id],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO domain_mappings (entry_id, domain, is_primary) VALUES (?1, 'b.com', 0)",
+            [entry_id],
+        )
+        .unwrap();
+
+        let domains = load_domain_mappings(conn, entry_id).unwrap();
+        assert_eq!(domains.len(), 2);
+    }
+
+    #[test]
+    fn mixed_pending_count() {
+        let db = setup_db_with_sync_schema();
+        let conn = db.conn();
+        let dek = DataEncryptionKey::new().unwrap();
+
+        insert_pending_credential(conn, &dek, "Cred1", "u", "p", false);
+        insert_pending_ssh_key(conn, "key1", false);
+
+        let cred2_sync = insert_pending_credential(conn, &dek, "Cred2", "u2", "p2", false);
+        let entry_id: i64 = conn
+            .query_row(
+                "SELECT entry_id FROM entries WHERE sync_id = ?1",
+                [cred2_sync.to_string()],
+                |row| row.get(0),
+            )
+            .unwrap();
+        insert_pending_totp(conn, entry_id, false);
+
+        assert_eq!(count_pending_changes(conn).unwrap(), 4);
     }
 }

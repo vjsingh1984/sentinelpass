@@ -172,4 +172,57 @@ mod tests {
         // Decrypt with wrong DEK should fail
         assert!(decrypt_from_sync(&dek2, &encrypted).is_err());
     }
+
+    #[test]
+    fn save_and_load_roundtrip() {
+        use crate::database::Database;
+        use crate::sync::config::SyncConfig;
+
+        let db = Database::in_memory().unwrap();
+        db.initialize_schema().unwrap();
+        let conn = db.conn();
+
+        // Ensure sync_metadata row exists
+        let config = SyncConfig::default();
+        config.save(conn).unwrap();
+
+        let dek = DataEncryptionKey::new().unwrap();
+        let identity = DeviceIdentity::generate("Test Laptop");
+
+        identity.save_to_db(conn, &dek).unwrap();
+
+        let loaded = DeviceIdentity::load_from_db(conn, &dek).unwrap().unwrap();
+        assert_eq!(loaded.device_id, identity.device_id);
+        assert_eq!(loaded.device_name, "Test Laptop");
+        assert_eq!(loaded.public_key_bytes(), identity.public_key_bytes());
+    }
+
+    #[test]
+    fn load_from_empty_db_returns_none() {
+        use crate::database::Database;
+
+        let db = Database::in_memory().unwrap();
+        db.initialize_schema().unwrap();
+
+        let dek = DataEncryptionKey::new().unwrap();
+        let loaded = DeviceIdentity::load_from_db(db.conn(), &dek).unwrap();
+        assert!(loaded.is_none());
+    }
+
+    #[test]
+    fn current_device_type_is_known() {
+        let device_type = DeviceIdentity::current_device_type();
+        assert!(
+            ["macos", "linux", "windows"].contains(&device_type),
+            "Unexpected device type: {}",
+            device_type
+        );
+    }
+
+    #[test]
+    fn verifying_key_matches_public_key_bytes() {
+        let identity = DeviceIdentity::generate("Key Test");
+        let vk = identity.verifying_key();
+        assert_eq!(vk.to_bytes().to_vec(), identity.public_key_bytes());
+    }
 }

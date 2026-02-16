@@ -3,6 +3,7 @@
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 
+/// Relay server error types mapped to HTTP status codes.
 #[derive(Debug)]
 #[allow(dead_code)]
 pub enum RelayError {

@@ -103,6 +103,13 @@ impl SyncConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::database::Database;
+
+    fn setup_db() -> Database {
+        let db = Database::in_memory().unwrap();
+        db.initialize_schema().unwrap();
+        db
+    }
 
     #[test]
     fn default_config() {
@@ -111,5 +118,87 @@ mod tests {
         assert!(config.vault_id.is_none());
         assert!(config.device_id.is_none());
         assert_eq!(config.last_push_sequence, 0);
+    }
+
+    #[test]
+    fn load_returns_default_when_no_table() {
+        // Create a bare DB without sync_metadata table
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        let config = SyncConfig::load(&conn).unwrap();
+        assert!(!config.sync_enabled);
+        assert!(config.vault_id.is_none());
+    }
+
+    #[test]
+    fn load_returns_default_when_no_rows() {
+        let db = setup_db();
+        // sync_metadata table exists but has no rows
+        let config = SyncConfig::load(db.conn()).unwrap();
+        assert!(!config.sync_enabled);
+        assert!(config.vault_id.is_none());
+        assert_eq!(config.last_push_sequence, 0);
+        assert_eq!(config.last_pull_sequence, 0);
+    }
+
+    #[test]
+    fn save_and_load_roundtrip() {
+        let db = setup_db();
+        let conn = db.conn();
+
+        let vault_id = Uuid::new_v4();
+        let device_id = Uuid::new_v4();
+
+        let config = SyncConfig {
+            sync_enabled: true,
+            vault_id: Some(vault_id),
+            device_id: Some(device_id),
+            device_name: Some("My Laptop".to_string()),
+            relay_url: Some("https://relay.example.com".to_string()),
+            last_push_sequence: 42,
+            last_pull_sequence: 37,
+            last_sync_at: Some(1700000000),
+        };
+
+        config.save(conn).unwrap();
+
+        let loaded = SyncConfig::load(conn).unwrap();
+        assert!(loaded.sync_enabled);
+        assert_eq!(loaded.vault_id, Some(vault_id));
+        assert_eq!(loaded.device_id, Some(device_id));
+        assert_eq!(loaded.device_name.as_deref(), Some("My Laptop"));
+        assert_eq!(
+            loaded.relay_url.as_deref(),
+            Some("https://relay.example.com")
+        );
+        assert_eq!(loaded.last_push_sequence, 42);
+        assert_eq!(loaded.last_pull_sequence, 37);
+        assert_eq!(loaded.last_sync_at, Some(1700000000));
+    }
+
+    #[test]
+    fn save_upserts_on_conflict() {
+        let db = setup_db();
+        let conn = db.conn();
+
+        let config1 = SyncConfig {
+            sync_enabled: true,
+            device_name: Some("First".to_string()),
+            last_push_sequence: 1,
+            ..Default::default()
+        };
+        config1.save(conn).unwrap();
+
+        let config2 = SyncConfig {
+            sync_enabled: false,
+            device_name: Some("Second".to_string()),
+            last_push_sequence: 99,
+            ..Default::default()
+        };
+        config2.save(conn).unwrap();
+
+        let loaded = SyncConfig::load(conn).unwrap();
+        assert!(!loaded.sync_enabled);
+        assert_eq!(loaded.device_name.as_deref(), Some("Second"));
+        assert_eq!(loaded.last_push_sequence, 99);
     }
 }

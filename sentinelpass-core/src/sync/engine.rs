@@ -18,7 +18,7 @@ use crate::{DatabaseError, PasswordManagerError, Result};
 use std::sync::{Arc, Mutex};
 use uuid::Uuid;
 
-/// The sync engine coordinates the full sync lifecycle.
+/// Orchestrates the full sync lifecycle: push local changes, pull remote changes, resolve conflicts.
 pub struct SyncEngine {
     client: SyncClient,
     db: Arc<Mutex<Database>>,
@@ -26,6 +26,7 @@ pub struct SyncEngine {
 }
 
 impl SyncEngine {
+    /// Create a new sync engine with the given client, database, and device identity.
     pub fn new(client: SyncClient, db: Arc<Mutex<Database>>, device_id: Uuid) -> Self {
         Self {
             client,

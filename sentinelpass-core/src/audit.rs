@@ -274,6 +274,13 @@ pub fn get_audit_log_path() -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn make_test_dir() -> PathBuf {
+        let dir = std::env::temp_dir()
+            .join("sentinelpass_test_audit")
+            .join(uuid::Uuid::new_v4().to_string());
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
 
     #[test]
     fn test_severity_levels() {
@@ -291,5 +298,219 @@ mod tests {
             AuditLogger::severity_for_event(&AuditEventType::IpcClientConnected),
             0
         );
+    }
+
+    #[test]
+    fn test_all_severity_levels_complete() {
+        // Critical (5)
+        assert_eq!(
+            AuditLogger::severity_for_event(&AuditEventType::VaultCreated),
+            5
+        );
+        assert_eq!(
+            AuditLogger::severity_for_event(&AuditEventType::DataExported {
+                format: "json".to_string()
+            }),
+            5
+        );
+
+        // High (4)
+        assert_eq!(
+            AuditLogger::severity_for_event(&AuditEventType::CredentialDeleted { entry_id: 1 }),
+            4
+        );
+
+        // Medium-high (3)
+        assert_eq!(
+            AuditLogger::severity_for_event(&AuditEventType::CredentialModified { entry_id: 1 }),
+            3
+        );
+
+        // Medium (2)
+        assert_eq!(
+            AuditLogger::severity_for_event(&AuditEventType::VaultLocked),
+            2
+        );
+        assert_eq!(
+            AuditLogger::severity_for_event(&AuditEventType::CredentialCreated { entry_id: 1 }),
+            2
+        );
+        assert_eq!(
+            AuditLogger::severity_for_event(&AuditEventType::CredentialViewed { entry_id: 1 }),
+            2
+        );
+        assert_eq!(
+            AuditLogger::severity_for_event(&AuditEventType::VaultAutoLocked),
+            2
+        );
+
+        // Low (1)
+        assert_eq!(
+            AuditLogger::severity_for_event(&AuditEventType::CredentialsListed { count: 5 }),
+            1
+        );
+        assert_eq!(
+            AuditLogger::severity_for_event(&AuditEventType::DataImported {
+                format: "csv".to_string(),
+                count: 10,
+            }),
+            1
+        );
+
+        // Info (0)
+        assert_eq!(
+            AuditLogger::severity_for_event(&AuditEventType::AuthenticationAttempt {
+                success: true
+            }),
+            0
+        );
+        assert_eq!(
+            AuditLogger::severity_for_event(&AuditEventType::VaultLockedManually),
+            0
+        );
+        assert_eq!(
+            AuditLogger::severity_for_event(&AuditEventType::AuthenticationFailure {
+                reason: "bad pw".to_string()
+            }),
+            0
+        );
+        assert_eq!(
+            AuditLogger::severity_for_event(&AuditEventType::VaultUnlocked { success: false }),
+            0
+        );
+        assert_eq!(
+            AuditLogger::severity_for_event(&AuditEventType::DaemonStarted),
+            0
+        );
+        assert_eq!(
+            AuditLogger::severity_for_event(&AuditEventType::DaemonStopped),
+            0
+        );
+        assert_eq!(
+            AuditLogger::severity_for_event(&AuditEventType::IpcServerStarted),
+            0
+        );
+    }
+
+    #[test]
+    fn test_audit_logger_creates_file() {
+        let tmp = make_test_dir();
+        let logger = AuditLogger::new(tmp.clone()).unwrap();
+        assert!(logger.log_file.exists());
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn test_audit_log_and_get_entries() {
+        let tmp = make_test_dir();
+        let logger = AuditLogger::new(tmp.clone()).unwrap();
+
+        logger
+            .log(AuditEventType::VaultCreated, "test vault")
+            .unwrap();
+        logger
+            .log(AuditEventType::VaultLocked, "locked after use")
+            .unwrap();
+
+        let entries = logger.get_entries(10).unwrap();
+        assert_eq!(entries.len(), 2);
+        // get_entries returns in reverse order (most recent first)
+        assert!(matches!(entries[0].event_type, AuditEventType::VaultLocked));
+        assert!(matches!(
+            entries[1].event_type,
+            AuditEventType::VaultCreated
+        ));
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn test_audit_get_entries_with_limit() {
+        let tmp = make_test_dir();
+        let logger = AuditLogger::new(tmp.clone()).unwrap();
+
+        for i in 0..5 {
+            logger
+                .log(AuditEventType::CredentialCreated { entry_id: i }, "adding")
+                .unwrap();
+        }
+
+        let entries = logger.get_entries(2).unwrap();
+        assert_eq!(entries.len(), 2);
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn test_audit_get_entries_since() {
+        let tmp = make_test_dir();
+        let logger = AuditLogger::new(tmp.clone()).unwrap();
+
+        let before = Utc::now() - chrono::Duration::seconds(2);
+
+        logger.log(AuditEventType::DaemonStarted, "start").unwrap();
+        logger.log(AuditEventType::VaultCreated, "create").unwrap();
+
+        let entries = logger.get_entries_since(before).unwrap();
+        assert_eq!(entries.len(), 2);
+
+        // Future timestamp should return none
+        let future = Utc::now() + chrono::Duration::seconds(60);
+        let entries = logger.get_entries_since(future).unwrap();
+        assert!(entries.is_empty());
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn test_audit_get_entries_by_severity() {
+        let tmp = make_test_dir();
+        let logger = AuditLogger::new(tmp.clone()).unwrap();
+
+        logger
+            .log(AuditEventType::DaemonStarted, "info event")
+            .unwrap(); // severity 0
+        logger
+            .log(AuditEventType::VaultCreated, "critical event")
+            .unwrap(); // severity 5
+        logger
+            .log(
+                AuditEventType::CredentialDeleted { entry_id: 1 },
+                "high event",
+            )
+            .unwrap(); // severity 4
+
+        let critical = logger.get_entries_by_severity(5).unwrap();
+        assert_eq!(critical.len(), 1);
+
+        let high_and_above = logger.get_entries_by_severity(4).unwrap();
+        assert_eq!(high_and_above.len(), 2);
+
+        let all = logger.get_entries_by_severity(0).unwrap();
+        assert_eq!(all.len(), 3);
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn test_audit_entry_serialization_roundtrip() {
+        let entry = AuditEntry {
+            timestamp: Utc::now(),
+            event_type: AuditEventType::CredentialViewed { entry_id: 42 },
+            severity: 2,
+            context: "test context".to_string(),
+            pid: Some(1234),
+            tid: None,
+        };
+
+        let json = serde_json::to_string(&entry).unwrap();
+        let deserialized: AuditEntry = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.severity, 2);
+        assert_eq!(deserialized.context, "test context");
+    }
+
+    #[test]
+    fn test_audit_log_paths() {
+        let dir = get_audit_log_dir();
+        assert!(dir.to_string_lossy().contains("audit"));
+
+        let path = get_audit_log_path();
+        assert!(path.to_string_lossy().ends_with("audit.log"));
     }
 }

@@ -440,4 +440,114 @@ mod tests {
         assert!(usernames_match(" User@Example.com ", "user@example.com"));
         assert!(!usernames_match("alice@example.com", "bob@example.com"));
     }
+
+    #[test]
+    fn test_normalize_host_strips_userinfo() {
+        assert_eq!(
+            normalize_host("https://user:pass@example.com/path"),
+            Some("example.com".to_string())
+        );
+        assert_eq!(
+            normalize_host("user@host.com"),
+            Some("host.com".to_string())
+        );
+    }
+
+    #[test]
+    fn test_normalize_host_strips_query_and_fragment() {
+        assert_eq!(
+            normalize_host("example.com/path?query=1#frag"),
+            Some("example.com".to_string())
+        );
+    }
+
+    #[test]
+    fn test_normalize_host_trailing_dots() {
+        assert_eq!(
+            normalize_host("example.com."),
+            Some("example.com".to_string())
+        );
+        assert_eq!(
+            normalize_host("..example.com.."),
+            Some("example.com".to_string())
+        );
+    }
+
+    #[test]
+    fn test_normalize_host_whitespace_only() {
+        assert_eq!(normalize_host("   "), None);
+        assert_eq!(normalize_host(" . "), None);
+    }
+
+    #[test]
+    fn test_normalize_host_bracketed_ipv6() {
+        assert_eq!(normalize_host("[::1]:8080"), Some("::1".to_string()));
+        assert_eq!(
+            normalize_host("https://[::1]:443/path"),
+            Some("::1".to_string())
+        );
+    }
+
+    #[test]
+    fn test_normalize_host_empty_bracketed_ipv6() {
+        assert_eq!(normalize_host("[]"), None);
+    }
+
+    #[test]
+    fn test_normalize_host_bare_ipv6() {
+        // Non-bracketed IPv6 -- colons not stripped since it looks like IPv6
+        let result = normalize_host("::1");
+        assert_eq!(result, Some("::1".to_string()));
+    }
+
+    #[test]
+    fn test_domains_match_both_empty() {
+        assert!(!domains_match("", ""));
+        assert!(!domains_match("", "example.com"));
+        assert!(!domains_match("example.com", ""));
+    }
+
+    #[test]
+    fn test_domains_match_different_schemes() {
+        assert!(domains_match(
+            "http://example.com",
+            "https://example.com/login"
+        ));
+    }
+
+    #[test]
+    fn test_domains_match_with_ports() {
+        assert!(domains_match(
+            "example.com:8443",
+            "https://example.com:443/"
+        ));
+    }
+
+    #[test]
+    fn test_vault_state_unlocked() {
+        let state = VaultState::Unlocked;
+        assert!(matches!(state, VaultState::Unlocked));
+    }
+
+    #[test]
+    fn test_credential_response_fields() {
+        let resp = CredentialResponse {
+            username: "alice".to_string(),
+            password: "secret".to_string(),
+            title: "Test Cred".to_string(),
+        };
+        assert_eq!(resp.username, "alice");
+        assert_eq!(resp.password, "secret");
+        assert_eq!(resp.title, "Test Cred");
+    }
+
+    #[test]
+    fn test_totp_code_response_fields() {
+        let resp = TotpCodeResponse {
+            code: "123456".to_string(),
+            seconds_remaining: 15,
+        };
+        assert_eq!(resp.code, "123456");
+        assert_eq!(resp.seconds_remaining, 15);
+    }
 }

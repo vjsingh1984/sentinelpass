@@ -10,6 +10,7 @@ use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+/// Request body for device registration.
 #[derive(Deserialize)]
 pub struct RegisterDeviceRequest {
     pub device_id: Uuid,
@@ -19,6 +20,7 @@ pub struct RegisterDeviceRequest {
     pub vault_id: Uuid,
 }
 
+/// Device information returned by the list devices endpoint.
 #[derive(Serialize)]
 pub struct DeviceInfo {
     pub device_id: String,
@@ -28,6 +30,7 @@ pub struct DeviceInfo {
     pub revoked: bool,
 }
 
+/// POST /api/v1/devices/register -- Register a new device with its Ed25519 public key.
 pub async fn register_device(
     State(storage): State<RelayStorage>,
     Json(req): Json<RegisterDeviceRequest>,
@@ -89,6 +92,7 @@ pub async fn register_device(
     Ok(Json(serde_json::json!({"status": "registered"})))
 }
 
+/// GET /api/v1/devices -- List all devices in the authenticated device's vault.
 pub async fn list_devices(
     State(storage): State<RelayStorage>,
     extensions: Extensions,
@@ -132,6 +136,7 @@ pub async fn list_devices(
     Ok(Json(devices))
 }
 
+/// POST /api/v1/devices/{id}/revoke -- Revoke a device, preventing further sync operations.
 pub async fn revoke_device(
     State(storage): State<RelayStorage>,
     axum::extract::Path(target_id): axum::extract::Path<String>,

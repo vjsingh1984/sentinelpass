@@ -14,6 +14,7 @@ pub struct RelayStorage {
 }
 
 impl RelayStorage {
+    /// Open a SQLite database at the given path and initialize the schema.
     pub fn open(path: &Path) -> Result<Self, anyhow::Error> {
         let conn = Connection::open(path)?;
         conn.execute("PRAGMA foreign_keys = ON", [])?;
@@ -26,6 +27,7 @@ impl RelayStorage {
         Ok(storage)
     }
 
+    /// Create an in-memory SQLite database for testing.
     #[allow(dead_code)]
     pub fn in_memory() -> Result<Self, anyhow::Error> {
         let conn = Connection::open_in_memory()?;
@@ -110,6 +112,7 @@ impl RelayStorage {
         Ok(())
     }
 
+    /// Acquire a lock on the database connection.
     pub fn conn(&self) -> Result<std::sync::MutexGuard<'_, Connection>, RelayError> {
         self.conn
             .lock()

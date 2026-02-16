@@ -392,10 +392,7 @@ fn native_messaging_dirs() -> Vec<(&'static str, PathBuf)> {
                 "chromium",
                 lib.join("Chromium").join("NativeMessagingHosts"),
             ));
-            dirs.push((
-                "firefox",
-                lib.join("Mozilla").join("NativeMessagingHosts"),
-            ));
+            dirs.push(("firefox", lib.join("Mozilla").join("NativeMessagingHosts")));
         }
     }
 
@@ -466,10 +463,7 @@ fn write_manifest(dir: &std::path::Path, filename: &str, contents: &str) -> Resu
     let path = dir.join(filename);
     std::fs::write(&path, contents)
         .map_err(|e| format!("Failed to write {}: {}", path.display(), e))?;
-    unlock_debug_log(&format!(
-        "write_manifest: wrote {}",
-        path.display()
-    ));
+    unlock_debug_log(&format!("write_manifest: wrote {}", path.display()));
     Ok(())
 }
 

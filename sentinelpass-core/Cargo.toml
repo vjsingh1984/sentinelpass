@@ -20,7 +20,6 @@ memsec = { workspace = true }
 subtle = { workspace = true }
 hex = { workspace = true }
 rusqlite = { workspace = true }
-refinery = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }

@@ -354,7 +354,7 @@ async function handleSaveCredential(data) {
             data: {
                 username: data.username,
                 password: data.password,
-                title: data.domain || data.url || 'Unknown', // Backward compatibility
+                title: data.domain || data.url || 'Unknown',
                 url: canonicalUrl
             }
         });

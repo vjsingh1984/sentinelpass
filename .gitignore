@@ -44,3 +44,8 @@ blogs/
 *.dylib
 *.dll
 *.exe
+
+# Runtime / generated
+audit/
+.victor/
+sentinelpass-ui/gen/

@@ -176,5 +176,5 @@ Every public function in vault.rs has a `///` doc comment. The docs are brief on
 |------|---------|---------|-----|
 | 2026-02-16 | v0.1.3 | Auto-register native messaging host on UI launch, stable Chrome extension ID, install.sh --from-app-bundle, README/BUILD docs rewrite | #15 |
 | 2026-02-16 | v0.1.3 | DeepSeek analysis verification, TECHNICAL_DEBT.md created | -- |
-| 2026-02-16 | v0.2.0 | Hardening: constant-time IPC token, schema error types, indexes/triggers, version validation, remove refinery, proptest, clipboard auto-clear | -- |
-| 2026-02-16 | v0.3.0 | Architecture: extract vault.rs into vault/ directory module (mod.rs + biometric_ops.rs + totp_ops.rs + ssh_ops.rs + tests.rs), add structured DatabaseError enum with 8 variants replacing catch-all String, migrate ~152 call sites across 10 files | -- |
+| 2026-02-16 | v0.2.0 | Hardening: constant-time IPC token, schema error types, indexes/triggers, version validation, remove refinery, proptest, clipboard auto-clear | #16 |
+| 2026-02-16 | v0.3.0 | Architecture: extract vault.rs into vault/ directory module (mod.rs + biometric_ops.rs + totp_ops.rs + ssh_ops.rs + tests.rs), add structured DatabaseError enum with 8 variants replacing catch-all String, migrate ~152 call sites across 10 files. CI fix: gate DatabaseError import for biometric platforms, exclude binary entry points from coverage. | #16 |

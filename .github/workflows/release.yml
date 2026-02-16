@@ -401,6 +401,44 @@ jobs:
         working-directory: browser-extension/e2e
         run: npm run test:e2e
 
+      - name: Inject extension version
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+          for manifest in browser-extension/chrome/manifest.json browser-extension/firefox/manifest.json; do
+            jq --arg v "$VERSION" '.version = $v' "$manifest" > tmp.$$.json && mv tmp.$$.json "$manifest"
+          done
+
+      - name: Package browser extensions
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+          mkdir -p dist/extensions
+
+          cd browser-extension/chrome
+          zip -r "../../dist/extensions/sentinelpass-chrome-${VERSION}.zip" . \
+            -x '*.ts' 'DEBUGGING.md'
+          cd ../..
+
+          cd browser-extension/firefox
+          zip -r "../../dist/extensions/sentinelpass-firefox-${VERSION}.zip" . \
+            -x '*.ts'
+          cd ../..
+
+          ls -lah dist/extensions/
+
+      - name: Upload extension artifacts
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-extensions
+          path: dist/extensions/*
+          if-no-files-found: error
+
   publish:
     name: Publish GitHub Release
     runs-on: ubuntu-latest

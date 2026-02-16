@@ -1,0 +1,162 @@
+//! Biometric authentication operations for VaultManager
+
+use super::VaultManager;
+use crate::{
+    audit::{get_audit_log_dir, AuditEventType, AuditLogger},
+    crypto::KeyHierarchy,
+    database::Database,
+    DatabaseError, PasswordManagerError, Result,
+};
+use std::path::Path;
+use std::sync::{Arc, Mutex};
+use zeroize::Zeroize;
+
+impl VaultManager {
+    /// Open an existing vault using biometric authentication and OS key storage.
+    pub fn open_with_biometric<P: AsRef<Path>>(path: P, reason: &str) -> Result<Self> {
+        let vault_path = path.as_ref().to_path_buf();
+        let db = Database::open(&vault_path)?;
+        db.initialize_schema()?;
+        db.validate_schema_version()?;
+
+        let (kdf_params, wrapped_dek) = Self::load_vault_metadata(&db)?;
+        let biometric_ref = Self::load_biometric_ref(&db)?.ok_or_else(|| {
+            PasswordManagerError::NotFound("Biometric unlock configuration".to_string())
+        })?;
+
+        match crate::biometric::BiometricManager::authenticate(reason) {
+            crate::biometric::BiometricResult::Success => {}
+            crate::biometric::BiometricResult::Cancelled => {
+                return Err(PasswordManagerError::InvalidInput(
+                    "Biometric authentication was cancelled".to_string(),
+                ));
+            }
+            crate::biometric::BiometricResult::NotAvailable => {
+                return Err(PasswordManagerError::NotFound(format!(
+                    "{} is not available on this system",
+                    crate::biometric::BiometricManager::get_method_name()
+                )));
+            }
+            crate::biometric::BiometricResult::NotEnrolled => {
+                return Err(PasswordManagerError::NotFound(format!(
+                    "{} is not enrolled on this system",
+                    crate::biometric::BiometricManager::get_method_name()
+                )));
+            }
+            crate::biometric::BiometricResult::Failed(err) => {
+                return Err(PasswordManagerError::from(DatabaseError::Other(format!(
+                    "Biometric authentication failed: {}",
+                    err
+                ))));
+            }
+        }
+
+        let mut master_password =
+            crate::biometric::BiometricManager::load_master_password(&biometric_ref)?;
+
+        let mut key_hierarchy = KeyHierarchy::new();
+        let unlock_result = key_hierarchy.unlock_vault(&master_password, &kdf_params, &wrapped_dek);
+        master_password.zeroize();
+        unlock_result.map_err(PasswordManagerError::Crypto)?;
+
+        Self::clear_failed_attempts(&db)?;
+
+        let audit_logger = AuditLogger::new(get_audit_log_dir()).map(Arc::new).ok();
+
+        let vault_manager = Self {
+            key_hierarchy,
+            db: Arc::new(Mutex::new(db)),
+            vault_path,
+            audit_logger,
+        };
+
+        if let Some(ref logger) = vault_manager.audit_logger {
+            let _ = logger.log(
+                AuditEventType::VaultUnlocked { success: true },
+                "Vault unlocked via biometric authentication",
+            );
+        }
+
+        Ok(vault_manager)
+    }
+
+    /// Check whether biometric unlock is configured for a vault path.
+    pub fn is_biometric_unlock_enabled<P: AsRef<Path>>(path: P) -> Result<bool> {
+        let db = Database::open(path)?;
+        db.initialize_schema()?;
+        Ok(Self::load_biometric_ref(&db)?.is_some())
+    }
+
+    /// Enable biometric unlock for this vault.
+    ///
+    /// This stores the provided master password in the OS key storage and
+    /// links it via `biometric_ref` metadata.
+    pub fn enable_biometric_unlock(&self, master_password: &[u8]) -> Result<()> {
+        if master_password.is_empty() {
+            return Err(PasswordManagerError::InvalidInput(
+                "Master password cannot be empty".to_string(),
+            ));
+        }
+
+        if !crate::biometric::BiometricManager::is_available() {
+            return Err(PasswordManagerError::NotFound(format!(
+                "{} is not available on this system",
+                crate::biometric::BiometricManager::get_method_name()
+            )));
+        }
+
+        if !crate::biometric::BiometricManager::is_enrolled() {
+            return Err(PasswordManagerError::NotFound(format!(
+                "{} is not enrolled on this system",
+                crate::biometric::BiometricManager::get_method_name()
+            )));
+        }
+
+        let db = self.db.lock().map_err(|_| {
+            PasswordManagerError::from(DatabaseError::LockPoisoned(
+                "Failed to lock database".to_string(),
+            ))
+        })?;
+
+        // Validate that the provided master password can actually unlock this vault.
+        let (kdf_params, wrapped_dek) = Self::load_vault_metadata(&db)?;
+        let mut verifier = KeyHierarchy::new();
+        verifier
+            .unlock_vault(master_password, &kdf_params, &wrapped_dek)
+            .map_err(PasswordManagerError::Crypto)?;
+        verifier.lock_vault();
+
+        let biometric_ref = crate::biometric::BiometricManager::store_master_password(
+            &self.vault_path,
+            master_password,
+        )?;
+        Self::set_biometric_ref(&db, Some(&biometric_ref))?;
+        Ok(())
+    }
+
+    /// Disable biometric unlock and clear keychain stored secret.
+    pub fn disable_biometric_unlock(&self) -> Result<()> {
+        let db = self.db.lock().map_err(|_| {
+            PasswordManagerError::from(DatabaseError::LockPoisoned(
+                "Failed to lock database".to_string(),
+            ))
+        })?;
+
+        if let Some(biometric_ref) = Self::load_biometric_ref(&db)? {
+            let _ = crate::biometric::BiometricManager::clear_master_password(&biometric_ref);
+        }
+
+        Self::set_biometric_ref(&db, None)?;
+        Ok(())
+    }
+
+    /// Check whether biometric unlock is enabled for this vault instance.
+    pub fn biometric_unlock_enabled(&self) -> Result<bool> {
+        let db = self.db.lock().map_err(|_| {
+            PasswordManagerError::from(DatabaseError::LockPoisoned(
+                "Failed to lock database".to_string(),
+            ))
+        })?;
+        Ok(Self::load_biometric_ref(&db)?.is_some())
+    }
+}

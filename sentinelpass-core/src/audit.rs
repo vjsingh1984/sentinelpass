@@ -1,6 +1,6 @@
 //! Audit logging for security events and operations
 
-use crate::{PasswordManagerError, Result};
+use crate::{DatabaseError, PasswordManagerError, Result};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::fs::{File, OpenOptions};
@@ -97,7 +97,10 @@ impl AuditLogger {
 
         // Ensure log directory exists
         std::fs::create_dir_all(&log_dir).map_err(|e| {
-            PasswordManagerError::Database(format!("Failed to create audit log directory: {}", e))
+            PasswordManagerError::from(DatabaseError::FileIo(format!(
+                "Failed to create audit log directory: {}",
+                e
+            )))
         })?;
 
         // Open log file in append mode
@@ -106,7 +109,10 @@ impl AuditLogger {
             .append(true)
             .open(&log_file)
             .map_err(|e| {
-                PasswordManagerError::Database(format!("Failed to open audit log: {}", e))
+                PasswordManagerError::from(DatabaseError::FileIo(format!(
+                    "Failed to open audit log: {}",
+                    e
+                )))
             })?;
 
         info!("Audit logger initialized: {:?}", log_file);
@@ -131,19 +137,30 @@ impl AuditLogger {
         };
 
         let json = serde_json::to_string(&entry).map_err(|e| {
-            PasswordManagerError::Database(format!("Failed to serialize audit entry: {}", e))
+            PasswordManagerError::from(DatabaseError::Serialization(format!(
+                "Failed to serialize audit entry: {}",
+                e
+            )))
         })?;
 
         let log_line = format!("{}\n", json);
 
         if let Some(ref mut writer) = *self.writer.lock().map_err(|_| {
-            PasswordManagerError::Database("Failed to lock audit writer".to_string())
+            PasswordManagerError::from(DatabaseError::LockPoisoned(
+                "Failed to lock audit writer".to_string(),
+            ))
         })? {
             writer.write_all(log_line.as_bytes()).map_err(|e| {
-                PasswordManagerError::Database(format!("Failed to write audit log: {}", e))
+                PasswordManagerError::from(DatabaseError::FileIo(format!(
+                    "Failed to write audit log: {}",
+                    e
+                )))
             })?;
             writer.flush().map_err(|e| {
-                PasswordManagerError::Database(format!("Failed to flush audit log: {}", e))
+                PasswordManagerError::from(DatabaseError::FileIo(format!(
+                    "Failed to flush audit log: {}",
+                    e
+                )))
             })?;
         }
 
@@ -188,7 +205,10 @@ impl AuditLogger {
     /// Get all audit entries
     pub fn get_entries(&self, limit: usize) -> Result<Vec<AuditEntry>> {
         let content = std::fs::read_to_string(&self.log_file).map_err(|e| {
-            PasswordManagerError::Database(format!("Failed to read audit log: {}", e))
+            PasswordManagerError::from(DatabaseError::FileIo(format!(
+                "Failed to read audit log: {}",
+                e
+            )))
         })?;
 
         let entries: Vec<AuditEntry> = content
@@ -205,7 +225,10 @@ impl AuditLogger {
     /// Get audit entries since a specific timestamp
     pub fn get_entries_since(&self, since: DateTime<Utc>) -> Result<Vec<AuditEntry>> {
         let content = std::fs::read_to_string(&self.log_file).map_err(|e| {
-            PasswordManagerError::Database(format!("Failed to read audit log: {}", e))
+            PasswordManagerError::from(DatabaseError::FileIo(format!(
+                "Failed to read audit log: {}",
+                e
+            )))
         })?;
 
         let entries: Vec<AuditEntry> = content
@@ -221,7 +244,10 @@ impl AuditLogger {
     /// Get audit entries by severity level
     pub fn get_entries_by_severity(&self, min_severity: u8) -> Result<Vec<AuditEntry>> {
         let content = std::fs::read_to_string(&self.log_file).map_err(|e| {
-            PasswordManagerError::Database(format!("Failed to read audit log: {}", e))
+            PasswordManagerError::from(DatabaseError::FileIo(format!(
+                "Failed to read audit log: {}",
+                e
+            )))
         })?;
 
         let entries: Vec<AuditEntry> = content

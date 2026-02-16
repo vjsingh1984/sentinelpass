@@ -69,7 +69,7 @@ jobs:
           if [[ "${GITHUB_REF_NAME}" == v* ]]; then
             VERSION="${GITHUB_REF_NAME#v}"
           else
-            VERSION=$(awk -F'"' '/\[workspace.package\]/,/^\[/{if(/^version/) print $2}' Cargo.toml | head -1)
+            VERSION=$(awk -F'"' '/^\[workspace\.package\]/{f=1;next} /^\[/{f=0} f && /^version/{print $2;exit}' Cargo.toml)
           fi
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
           sed -i.bak "/\[workspace\.package\]/,/^\[/{s/^version = \".*\"/version = \"${VERSION}\"/;}" Cargo.toml && rm -f Cargo.toml.bak
@@ -233,7 +233,7 @@ jobs:
           if [[ "${GITHUB_REF_NAME}" == v* ]]; then
             VERSION="${GITHUB_REF_NAME#v}"
           else
-            VERSION=$(awk -F'"' '/\[workspace.package\]/,/^\[/{if(/^version/) print $2}' Cargo.toml | head -1)
+            VERSION=$(awk -F'"' '/^\[workspace\.package\]/{f=1;next} /^\[/{f=0} f && /^version/{print $2;exit}' Cargo.toml)
           fi
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
           sed -i.bak "/\[workspace\.package\]/,/^\[/{s/^version = \".*\"/version = \"${VERSION}\"/;}" Cargo.toml && rm -f Cargo.toml.bak

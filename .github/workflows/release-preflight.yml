@@ -204,7 +204,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          VERSION=$(awk -F'"' '/\[workspace.package\]/,/^\[/{if(/^version/) print $2}' Cargo.toml | head -1)
+          VERSION=$(awk -F'"' '/^\[workspace\.package\]/{f=1;next} /^\[/{f=0} f && /^version/{print $2;exit}' Cargo.toml)
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
           jq --arg v "$VERSION" '.version = $v' sentinelpass-ui/tauri.conf.json > tmp.$$.json && mv tmp.$$.json sentinelpass-ui/tauri.conf.json
 

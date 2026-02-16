@@ -73,6 +73,7 @@ jobs:
           fi
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
           sed -i.bak "/\[workspace\.package\]/,/^\[/{s/^version = \".*\"/version = \"${VERSION}\"/;}" Cargo.toml && rm -f Cargo.toml.bak
+          cargo update --workspace
 
       - name: Build release binaries
         run: cargo build --release --locked --bin sentinelpass --bin sentinelpass-daemon --bin sentinelpass-host --bin sentinelpass-ui
@@ -238,6 +239,7 @@ jobs:
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
           sed -i.bak "/\[workspace\.package\]/,/^\[/{s/^version = \".*\"/version = \"${VERSION}\"/;}" Cargo.toml && rm -f Cargo.toml.bak
           jq --arg v "$VERSION" '.version = $v' sentinelpass-ui/tauri.conf.json > tmp.$$.json && mv tmp.$$.json sentinelpass-ui/tauri.conf.json
+          cargo update --workspace
 
       - name: Build daemon and host binaries
         run: cargo build --release --locked --bin sentinelpass-daemon --bin sentinelpass-host

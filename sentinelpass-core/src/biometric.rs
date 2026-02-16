@@ -1,6 +1,8 @@
 //! Biometric authentication support (Windows Hello, Touch ID)
 
-use crate::{DatabaseError, PasswordManagerError, Result};
+use crate::{PasswordManagerError, Result};
+#[cfg(any(windows, target_os = "macos"))]
+use crate::DatabaseError;
 use std::path::Path;
 #[cfg(any(windows, target_os = "macos"))]
 use zeroize::Zeroize;

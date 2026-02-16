@@ -17,7 +17,7 @@ pub fn derive_pairing_key(code: &str, salt: &[u8]) -> Result<[u8; 32], crate::cr
     let hkdf = Hkdf::<Sha256>::new(Some(salt), code.as_bytes());
     let mut key = [0u8; 32];
     hkdf.expand(b"sentinelpass-pairing-v1", &mut key)
-        .map_err(|e| CryptoError::KdfFailed(format!("HKDF expand failed: {}", e)))?;
+        .map_err(|e| crate::crypto::CryptoError::KdfFailed(format!("HKDF expand failed: {}", e)))?;
     Ok(key)
 }
 
@@ -31,8 +31,9 @@ pub fn encrypt_bootstrap(
     use crate::sync::crypto::encrypt_for_sync;
 
     let dek = DataEncryptionKey::from_bytes(*pairing_key);
-    let json = serde_json::to_vec(bootstrap)
-        .map_err(|e| CryptoError::EncryptionFailed(format!("Serialize bootstrap: {}", e)))?;
+    let json = serde_json::to_vec(bootstrap).map_err(|e| {
+        crate::crypto::CryptoError::EncryptionFailed(format!("Serialize bootstrap: {}", e))
+    })?;
     encrypt_for_sync(&dek, &json)
 }
 
@@ -47,8 +48,9 @@ pub fn decrypt_bootstrap(
 
     let dek = DataEncryptionKey::from_bytes(*pairing_key);
     let json = decrypt_from_sync(&dek, encrypted)?;
-    serde_json::from_slice(&json)
-        .map_err(|e| CryptoError::DecryptionFailed(format!("Deserialize bootstrap: {}", e)))
+    serde_json::from_slice(&json).map_err(|e| {
+        crate::crypto::CryptoError::DecryptionFailed(format!("Deserialize bootstrap: {}", e))
+    })
 }
 
 /// Generate a random 16-byte salt for HKDF.
@@ -61,6 +63,8 @@ pub fn generate_pairing_salt() -> [u8; 16] {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(feature = "sync")]
+    use crate::sync::models::VaultBootstrap;
 
     #[test]
     fn pairing_code_format() {

@@ -132,7 +132,7 @@ impl SyncClient {
         let body_bytes = serde_json::to_vec(&body)
             .map_err(|e| PasswordManagerError::InvalidInput(e.to_string()))?;
 
-        self.signed_post(&path, &body_bytes).await?;
+        self.signed_post(path, &body_bytes).await?;
         Ok(())
     }
 

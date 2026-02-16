@@ -37,10 +37,10 @@ impl SyncEngine {
     /// Perform a full sync cycle: push local changes, then pull remote changes.
     pub async fn sync(&self, dek: &DataEncryptionKey) -> Result<SyncStatus> {
         // 1. Collect and push pending changes
-        let push_count = self.push_changes(dek).await?;
+        let _push_count = self.push_changes(dek).await?;
 
         // 2. Pull and apply remote changes
-        let pull_count = self.pull_changes(dek).await?;
+        let _pull_count = self.pull_changes(dek).await?;
 
         // 3. Update sync metadata
         let db = self
@@ -85,12 +85,13 @@ impl SyncEngine {
         let sync_ids: Vec<Uuid> = blobs.iter().map(|b| b.sync_id).collect();
         let count = blobs.len() as u64;
 
-        let db = self
-            .db
-            .lock()
-            .map_err(|_| DatabaseError::LockPoisoned("push seq".to_string()))?;
-        let config = SyncConfig::load(db.conn())?;
-        drop(db);
+        let config = {
+            let db = self
+                .db
+                .lock()
+                .map_err(|_| DatabaseError::LockPoisoned("push seq".to_string()))?;
+            SyncConfig::load(db.conn())?
+        };
 
         let request = PushRequest {
             device_sequence: config.last_push_sequence + 1,

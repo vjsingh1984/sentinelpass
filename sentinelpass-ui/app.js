@@ -1,6 +1,33 @@
+/**
+ * SentinelPass Desktop UI — main application module.
+ *
+ * This file drives the entire Tauri frontend and is organised into three
+ * logical sections:
+ *
+ * 1. **Lifecycle & initialisation** — Tauri API detection, DOM-ready
+ *    bootstrapping, event-listener wiring, and periodic refresh timers.
+ *
+ * 2. **Vault & entry management** — vault create/unlock/lock flows,
+ *    entry CRUD, search & filter, password generation, TOTP configuration,
+ *    biometric settings, and daemon health monitoring.
+ *
+ * 3. **Utility & helper functions** — clipboard operations, toast
+ *    notifications, password-visibility toggling, HTML escaping, and date
+ *    formatting.
+ *
+ * All backend calls go through the Tauri `invoke` bridge to Rust commands
+ * defined in `src-tauri/src/main.rs`, which delegate to `sentinelpass-core`.
+ */
 import { normalizeLaunchUrl } from './url-utils.js';
 // Import Tauri API - wait for it to be loaded
 let invoke, confirm, writeText, readText;
+/**
+ * Detect the Tauri runtime and bind its core API helpers.
+ *
+ * Must be called before any `invoke`, `confirm`, or clipboard operations.
+ *
+ * @returns `true` if the Tauri API is available, `false` otherwise.
+ */
 function initTauriAPI() {
     if (window.__TAURI__) {
         invoke = window.__TAURI__.core.invoke;
@@ -38,7 +65,16 @@ const searchInput = document.getElementById('search-input');
 const noSelection = document.getElementById('no-selection');
 const entryDetail = document.getElementById('entry-detail');
 const daemonStatusIndicator = document.getElementById('daemon-status-indicator');
-// Initialize Application
+// ──────────────────────────────────────────────────────────────────────────────
+// Lifecycle & Initialisation
+// ──────────────────────────────────────────────────────────────────────────────
+/**
+ * Bootstrap the application after the Tauri API is available.
+ *
+ * Wires DOM event listeners, checks whether the vault is already unlocked,
+ * refreshes biometric and daemon status, and starts periodic background
+ * refresh timers (daemon health every 15 s, entries every 10 s).
+ */
 async function init() {
     setupEventListeners();
     await checkVaultUnlocked();
@@ -59,6 +95,10 @@ async function init() {
         }
     });
 }
+/**
+ * Register all DOM event handlers for the welcome screen, vault screen,
+ * entry detail pane, TOTP modal, filter buttons, and keyboard shortcuts.
+ */
 function setupEventListeners() {
     console.log('Setting up event listeners...');
     // Welcome Screen
@@ -128,6 +168,10 @@ function setupEventListeners() {
     document.getElementById('toggle-password').addEventListener('click', () => togglePasswordVisibility('master-password'));
     updateUrlOpenButtonState();
 }
+/**
+ * Check whether the vault is already unlocked (e.g. from a previous session)
+ * and, if so, transition directly to the vault screen.
+ */
 async function checkVaultUnlocked() {
     try {
         const unlocked = await invoke('is_unlocked');
@@ -140,6 +184,15 @@ async function checkVaultUnlocked() {
         console.error('Error checking vault status:', error);
     }
 }
+// ──────────────────────────────────────────────────────────────────────────────
+// Biometric & Daemon Status
+// ──────────────────────────────────────────────────────────────────────────────
+/**
+ * Query the backend for biometric availability, enrollment, and configuration,
+ * then update the biometric unlock button accordingly.
+ *
+ * @returns The biometric status object, or `null` on error.
+ */
 async function refreshBiometricStatus() {
     try {
         biometricStatus = await invoke('biometric_status');
@@ -151,6 +204,12 @@ async function refreshBiometricStatus() {
     updateBiometricButton();
     return biometricStatus;
 }
+/**
+ * Query the backend for the browser-integration daemon's health and update the
+ * status banner.
+ *
+ * @returns The daemon status object (`{ available, unlocked, message }`).
+ */
 async function refreshDaemonStatus() {
     try {
         daemonStatus = await invoke('daemon_status');
@@ -165,6 +224,12 @@ async function refreshDaemonStatus() {
     updateDaemonStatusBanner();
     return daemonStatus;
 }
+/**
+ * Show or hide the daemon-status banner based on the current `daemonStatus`.
+ *
+ * Hidden when the daemon is available and unlocked; shows a warning when the
+ * daemon vault is locked, or an error when the daemon is unreachable.
+ */
 function updateDaemonStatusBanner() {
     if (!daemonStatusIndicator)
         return;
@@ -190,6 +255,10 @@ function updateDaemonStatusBanner() {
     daemonStatusIndicator.classList.remove('warning', 'error');
     daemonStatusIndicator.classList.add(type);
 }
+/**
+ * Update the biometric unlock button's visibility and label based on the
+ * current `biometricStatus` (available, enrolled, configured).
+ */
 function updateBiometricButton() {
     const button = document.getElementById('unlock-biometric-btn');
     const label = document.getElementById('unlock-biometric-label');
@@ -204,7 +273,10 @@ function updateBiometricButton() {
         biometricStatus?.configured);
     button.classList.toggle('hidden', !canUseBiometricUnlock);
 }
-// Vault Creation/Unlock
+// ──────────────────────────────────────────────────────────────────────────────
+// Vault Creation / Unlock / Lock
+// ──────────────────────────────────────────────────────────────────────────────
+/** Switch the welcome screen to the "create new vault" password form. */
 function showCreateVault() {
     isCreateVault = true;
     vaultActions.classList.add('hidden');
@@ -214,6 +286,7 @@ function showCreateVault() {
     submitPasswordBtn.textContent = 'Create Vault';
     masterPasswordInput.focus();
 }
+/** Switch the welcome screen to the "unlock existing vault" password form. */
 function showUnlockVault() {
     isCreateVault = false;
     vaultActions.classList.add('hidden');
@@ -223,6 +296,7 @@ function showUnlockVault() {
     submitPasswordBtn.textContent = 'Unlock';
     masterPasswordInput.focus();
 }
+/** Hide the password form, clear its inputs, and restore the welcome actions. */
 function hidePasswordForm() {
     passwordForm.classList.add('hidden');
     confirmPasswordGroup.classList.add('hidden');
@@ -231,6 +305,12 @@ function hidePasswordForm() {
     confirmPasswordInput.value = '';
     strengthMeter.classList.add('hidden');
 }
+/**
+ * Handle keystrokes in the master-password input by running real-time
+ * password-strength analysis via the backend.
+ *
+ * @param e - The `input` event from the password field.
+ */
 async function handlePasswordInput(e) {
     const password = e.target.value;
     if (password.length > 0) {
@@ -242,6 +322,12 @@ async function handlePasswordInput(e) {
         strengthMeter.classList.add('hidden');
     }
 }
+/**
+ * Render the password-strength meter bar and label from an analysis result.
+ *
+ * @param analysis - Backend strength result with `strength`, `score`,
+ *   `entropy_bits`, and `crack_time_human` fields.
+ */
 function updateStrengthMeter(analysis) {
     const { strength, score, entropy_bits, crack_time_human } = analysis;
     strengthFill.style.width = `${(score / 5) * 100}%`;
@@ -256,6 +342,15 @@ function updateStrengthMeter(analysis) {
     strengthFill.style.backgroundColor = colors[strength] || '#6366f1';
     strengthText.textContent = `${strength} (${entropy_bits.toFixed(1)} bits) - ${crack_time_human}`;
 }
+/**
+ * Handle the password-form submit for both vault creation and unlock flows.
+ *
+ * On creation, validates that both password fields match before invoking
+ * `create_vault`. On unlock, invokes `unlock_vault` and transitions to the
+ * vault screen on success.
+ *
+ * @param e - The form `submit` event (default is prevented).
+ */
 async function handlePasswordSubmit(e) {
     e.preventDefault();
     const password = masterPasswordInput.value;
@@ -298,6 +393,10 @@ async function handlePasswordSubmit(e) {
         }
     }
 }
+/**
+ * Unlock the vault using platform biometric authentication (Touch ID /
+ * Windows Hello) and transition to the vault screen on success.
+ */
 async function unlockVaultWithBiometric() {
     try {
         console.log('[SentinelPass UI] Attempting unlock_vault_biometric invoke...');
@@ -318,6 +417,13 @@ async function unlockVaultWithBiometric() {
         showToast(error, 'error');
     }
 }
+/**
+ * Open the biometric settings flow.
+ *
+ * Checks availability and enrollment, then either offers to disable (if
+ * already configured) or enable biometric unlock.  Enabling requires the
+ * user to re-enter their master password via a secure modal.
+ */
 async function handleSettings() {
     const status = await refreshBiometricStatus();
     if (!status) {
@@ -372,6 +478,10 @@ async function handleSettings() {
         masterPassword = '';
     }
 }
+/**
+ * Lock the vault, clear all in-memory state (entries, TOTP metadata),
+ * return to the welcome screen, and refresh biometric/daemon status.
+ */
 async function lockVault() {
     try {
         await invoke('lock_vault');
@@ -391,12 +501,21 @@ async function lockVault() {
         showToast(error, 'error');
     }
 }
+/** Hide the welcome screen and show the main vault screen. */
 function showVaultScreen() {
     welcomeScreen.classList.add('hidden');
     vaultScreen.classList.remove('hidden');
     hidePasswordForm();
 }
+// ──────────────────────────────────────────────────────────────────────────────
 // Entry Management
+// ──────────────────────────────────────────────────────────────────────────────
+/**
+ * Load all vault entries from the backend, preserving the current selection.
+ *
+ * Convenience wrapper around {@link loadEntriesWithOptions} with default
+ * options.
+ */
 async function loadEntries() {
     return loadEntriesWithOptions({
         preserveSelection: true,
@@ -404,6 +523,10 @@ async function loadEntries() {
         selectionMissingToast: false
     });
 }
+/**
+ * Filter the in-memory entry list by the active filter ("all" or "favorites")
+ * and the search query, then render the result.
+ */
 function applyEntryFilters() {
     let filtered = [...entries];
     if (currentFilter === 'favorites') {
@@ -416,6 +539,18 @@ function applyEntryFilters() {
     }
     renderEntryList(filtered);
 }
+/**
+ * Core entry-loading routine with fine-grained control over behaviour.
+ *
+ * Guards against concurrent refreshes via the `entriesRefreshInFlight` flag.
+ *
+ * @param options
+ * @param options.preserveSelection - Keep the currently-selected entry
+ *   highlighted if it still exists after reload (default `true`).
+ * @param options.silent - Suppress error toasts on failure (default `false`).
+ * @param options.selectionMissingToast - Show a warning toast when the
+ *   previously-selected entry no longer exists (default `false`).
+ */
 async function loadEntriesWithOptions({ preserveSelection = true, silent = false, selectionMissingToast = false } = {}) {
     if (entriesRefreshInFlight) {
         return;
@@ -446,6 +581,10 @@ async function loadEntriesWithOptions({ preserveSelection = true, silent = false
         entriesRefreshInFlight = false;
     }
 }
+/**
+ * Silently refresh the entry list in the background when the vault screen
+ * is visible.  Called on a 10-second interval and on window-focus events.
+ */
 async function backgroundRefreshEntries() {
     if (vaultScreen.classList.contains('hidden')) {
         return;
@@ -456,6 +595,10 @@ async function backgroundRefreshEntries() {
         selectionMissingToast: false
     });
 }
+/**
+ * User-initiated manual refresh of the entry list with loading-spinner
+ * feedback on the refresh button and a success toast.
+ */
 async function refreshEntriesNow() {
     if (vaultScreen.classList.contains('hidden')) {
         return;
@@ -480,6 +623,13 @@ async function refreshEntriesNow() {
         }
     }
 }
+/**
+ * Render a list of entries into the sidebar DOM and attach click handlers
+ * that load the selected entry into the detail pane.
+ *
+ * @param filteredEntries - The entries to display, or `null` to use the
+ *   full unfiltered list.
+ */
 function renderEntryList(filteredEntries = null) {
     const listToRender = filteredEntries || entries;
     if (listToRender.length === 0) {
@@ -497,6 +647,15 @@ function renderEntryList(filteredEntries = null) {
         item.addEventListener('click', () => loadEntry(parseInt(item.dataset.id)));
     });
 }
+/**
+ * Fetch a single entry by ID from the backend and populate the detail pane.
+ *
+ * Updates the sidebar active state, fills the form fields (title, username,
+ * password, URL, notes), refreshes favourite state, metadata timestamps, and
+ * TOTP availability.
+ *
+ * @param entryId - The numeric entry ID to load.
+ */
 async function loadEntry(entryId) {
     try {
         const entry = await invoke('get_entry', { entryId });
@@ -527,6 +686,12 @@ async function loadEntry(entryId) {
         showToast(error, 'error');
     }
 }
+/**
+ * Clear the detail pane and prepare it for creating a new entry.
+ *
+ * Deselects any active list item, blanks all form fields, resets favourite
+ * state, and disables TOTP buttons.
+ */
 function createNewEntry() {
     currentEntry = null;
     currentTotpMetadata = null;
@@ -550,6 +715,13 @@ function createNewEntry() {
     setTotpButtonState(false, false);
     document.getElementById('detail-title').focus();
 }
+/**
+ * Persist the current detail-pane contents as a new or updated entry.
+ *
+ * Validates required fields (title, username, password), then calls
+ * `add_entry` or `update_entry` as appropriate.  Refreshes the entry list
+ * and re-selects the saved entry on success.
+ */
 async function saveEntry() {
     const entry = {
         entry_id: currentEntry?.entry_id || null,
@@ -584,6 +756,11 @@ async function saveEntry() {
         showToast(error, 'error');
     }
 }
+/**
+ * Delete the currently-selected entry after user confirmation.
+ *
+ * Clears the detail pane and refreshes the entry list on success.
+ */
 async function deleteEntry() {
     if (!currentEntry)
         return;
@@ -607,13 +784,26 @@ async function deleteEntry() {
         showToast(error, 'error');
     }
 }
+/** Toggle the favourite CSS class on the detail-pane favourite button. */
 function toggleFavorite() {
     document.getElementById('detail-favorite').classList.toggle('active');
 }
+// ──────────────────────────────────────────────────────────────────────────────
 // Search & Filter
+// ──────────────────────────────────────────────────────────────────────────────
+/**
+ * Handle input events on the search field by re-applying entry filters.
+ *
+ * @param e - The `input` event from the search field.
+ */
 function handleSearch(e) {
     applyEntryFilters();
 }
+/**
+ * Switch the active entry filter and refresh the displayed list.
+ *
+ * @param filter - The filter key (`"all"` or `"favorites"`).
+ */
 function handleFilter(filter) {
     currentFilter = filter;
     // Update active button
@@ -627,7 +817,13 @@ function handleFilter(filter) {
         applyEntryFilters();
     }
 }
+// ──────────────────────────────────────────────────────────────────────────────
 // Password Generation
+// ──────────────────────────────────────────────────────────────────────────────
+/**
+ * Generate a strong random password via the backend and fill it into the
+ * detail-pane password field.
+ */
 async function generatePasswordForEntry() {
     try {
         const password = await invoke('generate_password', {
@@ -641,6 +837,13 @@ async function generatePasswordForEntry() {
         showToast(error, 'error');
     }
 }
+// ──────────────────────────────────────────────────────────────────────────────
+// URL Handling
+// ──────────────────────────────────────────────────────────────────────────────
+/**
+ * Enable or disable the "open URL" button based on whether the URL input
+ * contains a non-empty value.
+ */
 function updateUrlOpenButtonState() {
     const urlInput = document.getElementById('detail-url');
     const openButton = document.getElementById('open-url-btn');
@@ -653,6 +856,10 @@ function updateUrlOpenButtonState() {
         ? 'Open URL in default browser'
         : 'Enter URL to open';
 }
+/**
+ * Normalise the current entry's URL and open it in the user's default
+ * system browser via the Tauri shell plugin.
+ */
 async function openEntryUrl() {
     const urlInput = document.getElementById('detail-url');
     if (!urlInput) {
@@ -675,6 +882,15 @@ async function openEntryUrl() {
         showToast(message, 'error');
     }
 }
+// ──────────────────────────────────────────────────────────────────────────────
+// TOTP Management
+// ──────────────────────────────────────────────────────────────────────────────
+/**
+ * Query the backend for TOTP metadata on the given entry and update the
+ * TOTP button states (copy, configure, remove) accordingly.
+ *
+ * @param entryId - The entry ID to check, or falsy to reset TOTP state.
+ */
 async function updateTotpAvailability(entryId) {
     if (!entryId) {
         currentTotpMetadata = null;
@@ -692,6 +908,12 @@ async function updateTotpAvailability(entryId) {
         setTotpButtonState(true, false);
     }
 }
+/**
+ * Enable or disable the TOTP copy, configure, and remove buttons.
+ *
+ * @param hasSelection - Whether an entry is currently selected.
+ * @param configured - Whether the selected entry has TOTP configured.
+ */
 function setTotpButtonState(hasSelection, configured) {
     const copyButton = document.getElementById('copy-totp');
     const configureButton = document.getElementById('configure-totp');
@@ -708,6 +930,13 @@ function setTotpButtonState(hasSelection, configured) {
     removeButton.disabled = !canCopyOrRemove;
     removeButton.title = canCopyOrRemove ? 'Remove TOTP' : 'No TOTP configured';
 }
+/**
+ * Normalise raw TOTP metadata from the backend into a consistent shape.
+ *
+ * @param metadata - The raw metadata object (may use snake_case or camelCase keys).
+ * @returns A normalised object with `algorithm`, `digits`, `period`, `issuer`,
+ *   and `accountName`, or `null` if no metadata was provided.
+ */
 function normalizeTotpMetadata(metadata) {
     if (!metadata)
         return null;
@@ -719,6 +948,10 @@ function normalizeTotpMetadata(metadata) {
         accountName: metadata.account_name || metadata.accountName || ''
     };
 }
+/**
+ * Copy the current entry's TOTP code to the clipboard, showing the number
+ * of seconds remaining before the code rotates.
+ */
 async function copyTotpForEntry() {
     if (!currentEntry?.entry_id) {
         showToast('Select an entry first', 'warning');
@@ -736,6 +969,10 @@ async function copyTotpForEntry() {
         await updateTotpAvailability(currentEntry.entry_id);
     }
 }
+/**
+ * Open the TOTP configuration modal, pre-populated with existing metadata
+ * if the entry already has TOTP configured.
+ */
 function openTotpModal() {
     if (!currentEntry?.entry_id) {
         showToast('Save the entry before configuring TOTP', 'warning');
@@ -773,6 +1010,7 @@ function openTotpModal() {
     modal.setAttribute('aria-hidden', 'false');
     secretInput.focus();
 }
+/** Close the TOTP configuration modal and clear its secret inputs. */
 function closeTotpModal() {
     const modal = document.getElementById('totp-modal');
     if (!modal)
@@ -786,6 +1024,14 @@ function closeTotpModal() {
     modal.classList.add('hidden');
     modal.setAttribute('aria-hidden', 'true');
 }
+/**
+ * Persist TOTP configuration from the modal form via the backend.
+ *
+ * Accepts either an `otpauth://` URI or a raw base32 secret, along with
+ * optional algorithm, digits, period, issuer, and account name overrides.
+ *
+ * @param event - The form `submit` event (default is prevented).
+ */
 async function saveTotpForEntry(event) {
     event.preventDefault();
     if (!currentEntry?.entry_id) {
@@ -822,6 +1068,10 @@ async function saveTotpForEntry(event) {
         showToast(error, 'error');
     }
 }
+/**
+ * Remove TOTP configuration for the currently-selected entry after user
+ * confirmation.
+ */
 async function removeTotpForEntry() {
     if (!currentEntry?.entry_id) {
         showToast('Select an entry first', 'warning');
@@ -847,7 +1097,17 @@ async function removeTotpForEntry() {
         showToast(error, 'error');
     }
 }
-// Utility Functions
+// ──────────────────────────────────────────────────────────────────────────────
+// Utility & Helper Functions
+// ──────────────────────────────────────────────────────────────────────────────
+/**
+ * Copy a string to the system clipboard via the Tauri clipboard plugin,
+ * showing a toast on success.  Automatically clears the clipboard after
+ * 30 seconds if the content has not changed.
+ *
+ * @param text - The text to copy.
+ * @param label - A human-readable label for the toast (e.g. "Password").
+ */
 async function copyToClipboard(text, label) {
     if (!text) {
         showToast('Nothing to copy', 'warning');
@@ -874,6 +1134,12 @@ async function copyToClipboard(text, label) {
         showToast(error, 'error');
     }
 }
+/**
+ * Toggle a password input between `type="password"` and `type="text"`,
+ * swapping the adjacent button's eye icon accordingly.
+ *
+ * @param inputId - The DOM id of the `<input>` element to toggle.
+ */
 function togglePasswordVisibility(inputId) {
     const input = document.getElementById(inputId);
     const button = input.nextElementSibling || input.parentElement.querySelector('.btn-icon');
@@ -888,6 +1154,16 @@ function togglePasswordVisibility(inputId) {
             button.innerHTML = `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>`;
     }
 }
+/**
+ * Show a secure modal prompting the user to re-enter their master password
+ * (required for enabling or disabling biometric unlock).
+ *
+ * Returns a promise that resolves with the entered password, or `null` if
+ * the user cancels (via button, overlay click, or Escape key).
+ *
+ * @param methodName - The biometric method name to display (e.g. "Touch ID").
+ * @returns The master password string, or `null` if cancelled.
+ */
 async function requestMasterPasswordForBiometric(methodName) {
     const modal = document.getElementById('secure-password-modal');
     const title = document.getElementById('secure-password-title');
@@ -958,6 +1234,12 @@ async function requestMasterPasswordForBiometric(methodName) {
         document.addEventListener('keydown', onEscape);
     });
 }
+/**
+ * Display a transient toast notification that auto-dismisses after 3 seconds.
+ *
+ * @param message - The message text to display.
+ * @param type - The toast style: `"success"`, `"warning"`, or `"error"`.
+ */
 function showToast(message, type = 'success') {
     const container = document.getElementById('toast-container');
     const toast = document.createElement('div');
@@ -968,11 +1250,24 @@ function showToast(message, type = 'success') {
         toast.remove();
     }, 3000);
 }
+/**
+ * Safely escape a string for insertion into HTML to prevent XSS.
+ *
+ * @param text - The raw text to escape.
+ * @returns The HTML-safe string.
+ */
 function escapeHtml(text) {
     const div = document.createElement('div');
     div.textContent = text;
     return div.innerHTML;
 }
+/**
+ * Format an ISO date string into a short human-readable form
+ * (e.g. "Feb 16, 2026, 03:45 PM").
+ *
+ * @param dateString - An ISO 8601 date string.
+ * @returns The formatted date string.
+ */
 function formatDate(dateString) {
     const date = new Date(dateString);
     return date.toLocaleDateString('en-US', {
@@ -983,6 +1278,9 @@ function formatDate(dateString) {
         minute: '2-digit'
     });
 }
+// ──────────────────────────────────────────────────────────────────────────────
+// Entry Point
+// ──────────────────────────────────────────────────────────────────────────────
 // Initialize on load - wait for DOM and Tauri
 if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', initializeApp);
@@ -990,6 +1288,12 @@ if (document.readyState === 'loading') {
 else {
     initializeApp();
 }
+/**
+ * Application entry point invoked after the DOM is ready.
+ *
+ * Binds the Tauri API and, if available, kicks off the main {@link init}
+ * sequence.
+ */
 function initializeApp() {
     // Wait for Tauri to be available
     if (!initTauriAPI()) {

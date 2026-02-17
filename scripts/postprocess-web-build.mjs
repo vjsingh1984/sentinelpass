@@ -35,7 +35,9 @@ const uiFilesToSync = [
   ['sentinelpass-ui/state.js', 'sentinelpass-ui/dist/state.js'],
   ['sentinelpass-ui/utils.js', 'sentinelpass-ui/dist/utils.js'],
   ['sentinelpass-ui/totp.js', 'sentinelpass-ui/dist/totp.js'],
-  ['sentinelpass-ui/entries.js', 'sentinelpass-ui/dist/entries.js']
+  ['sentinelpass-ui/entries.js', 'sentinelpass-ui/dist/entries.js'],
+  ['sentinelpass-ui/index.html', 'sentinelpass-ui/dist/index.html'],
+  ['sentinelpass-ui/styles.css', 'sentinelpass-ui/dist/styles.css']
 ];
 
 for (const [source, target] of uiFilesToSync) {

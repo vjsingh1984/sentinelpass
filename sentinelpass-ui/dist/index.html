@@ -93,6 +93,11 @@
                             <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
                         </svg>
                     </button>
+                    <button id="extensions-btn" class="btn-icon" title="Browser Extensions">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M20 16V7a2 2 0 0 0-2-2h-3a2 2 0 0 1-2-2 2 2 0 0 0-4 0 2 2 0 0 1-2 2H4a2 2 0 0 0-2 2v3a2 2 0 0 1 2 2 2 2 0 0 0 0 4 2 2 0 0 1-2 2v3a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-3a2 2 0 0 1-2-2 2 2 0 0 0 0-4 2 2 0 0 1 2-2z"/>
+                        </svg>
+                    </button>
                     <button id="settings-btn" class="btn-icon" title="Settings">
                         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                             <circle cx="12" cy="12" r="3"/>
@@ -322,6 +327,58 @@
                     <button type="button" id="cancel-totp" class="btn btn-secondary">Cancel</button>
                 </div>
             </form>
+        </div>
+    </div>
+
+    <!-- Browser Extensions Modal -->
+    <div id="extension-modal" class="modal-overlay hidden" aria-hidden="true">
+        <div class="modal-card modal-card-wide" role="dialog" aria-modal="true" aria-labelledby="extension-modal-title">
+            <h3 id="extension-modal-title">Browser Extensions</h3>
+            <p class="modal-description">
+                Extend SentinelPass to your browser for autofill, credential saving, and TOTP support.
+            </p>
+
+            <div class="extension-section">
+                <h4>Native Host</h4>
+                <p class="extension-detail-text">The native messaging host allows browsers to communicate with SentinelPass.</p>
+                <div class="status-row">
+                    <span class="status-dot" id="native-host-dot"></span>
+                    <span id="native-host-status">Checking...</span>
+                </div>
+                <div class="extension-actions">
+                    <button id="reregister-native-host" class="btn btn-secondary">Re-register Native Host</button>
+                </div>
+            </div>
+
+            <div class="extension-section">
+                <h4>Chrome / Chromium</h4>
+                <div class="extension-id"><code>nophfgfiiohedlodfeepjoioljbhggdd</code></div>
+                <ol class="install-steps">
+                    <li>Open <strong>chrome://extensions</strong> in Chrome</li>
+                    <li>Enable <strong>Developer mode</strong> (top right)</li>
+                    <li>Click <strong>Load unpacked</strong> and select the <code>browser-extension/chrome</code> folder</li>
+                </ol>
+                <div class="extension-actions">
+                    <button id="open-chrome-extensions" class="btn btn-secondary">Open Chrome Extensions</button>
+                </div>
+            </div>
+
+            <div class="extension-section">
+                <h4>Firefox</h4>
+                <div class="extension-id"><code>sentinelpass@localhost</code></div>
+                <ol class="install-steps">
+                    <li>Open <strong>about:debugging#/runtime/this-firefox</strong> in Firefox</li>
+                    <li>Click <strong>Load Temporary Add-on</strong></li>
+                    <li>Select <code>browser-extension/firefox/manifest.json</code></li>
+                </ol>
+                <div class="extension-actions">
+                    <button id="open-firefox-extensions" class="btn btn-secondary">Open Firefox Add-ons</button>
+                </div>
+            </div>
+
+            <div class="button-group">
+                <button id="close-extension-modal" class="btn btn-primary">Done</button>
+            </div>
         </div>
     </div>
 

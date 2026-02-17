@@ -508,6 +508,100 @@ body {
     margin-bottom: 1rem;
 }
 
+/* Extension Modal */
+.modal-card-wide {
+    max-width: 520px;
+    max-height: 80vh;
+    overflow-y: auto;
+}
+
+.extension-section {
+    background: var(--color-background);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius);
+    padding: 1rem;
+    margin-bottom: 1rem;
+}
+
+.extension-section h4 {
+    font-size: 1rem;
+    font-weight: 600;
+    margin-bottom: 0.5rem;
+}
+
+.extension-detail-text {
+    font-size: 0.875rem;
+    color: var(--color-text-muted);
+    margin-bottom: 0.75rem;
+}
+
+.status-row {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-bottom: 0.75rem;
+}
+
+.status-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: var(--color-text-muted);
+    flex-shrink: 0;
+}
+
+.status-dot.success {
+    background: var(--color-success);
+}
+
+.status-dot.error {
+    background: var(--color-danger);
+}
+
+.extension-id {
+    margin-bottom: 0.75rem;
+}
+
+.extension-id code {
+    font-family: "SF Mono", "Fira Code", "Cascadia Code", monospace;
+    font-size: 0.8rem;
+    padding: 0.25rem 0.5rem;
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: 4px;
+    word-break: break-all;
+}
+
+.install-steps {
+    font-size: 0.875rem;
+    color: var(--color-text-muted);
+    padding-left: 1.25rem;
+    margin-bottom: 0.75rem;
+}
+
+.install-steps li {
+    margin-bottom: 0.35rem;
+}
+
+.install-steps code {
+    font-family: "SF Mono", "Fira Code", "Cascadia Code", monospace;
+    font-size: 0.8rem;
+    padding: 0.1rem 0.35rem;
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: 3px;
+}
+
+.extension-actions {
+    display: flex;
+    gap: 0.5rem;
+}
+
+.extension-actions .btn {
+    font-size: 0.875rem;
+    padding: 0.5rem 1rem;
+}
+
 /* Toast Notifications */
 #toast-container {
     position: fixed;

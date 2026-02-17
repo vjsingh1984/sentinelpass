@@ -52,6 +52,7 @@ Changes touching these paths need extra care and explicit reasoning:
 - `browser-extension/`
 
 Read `SECURITY.md` and `SECURITY_ARCHITECTURE.md` before submitting security-critical changes.
+Check `TECHNICAL_DEBT.md` for known issues and verified technical debt before duplicating effort.
 
 ## License
 

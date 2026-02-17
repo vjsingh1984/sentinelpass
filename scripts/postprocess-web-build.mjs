@@ -13,7 +13,11 @@ const emittedFiles = [
   'browser-extension/firefox/background.js',
   'browser-extension/firefox/content.js',
   'browser-extension/firefox/popup.js',
-  'sentinelpass-ui/app.js'
+  'sentinelpass-ui/app.js',
+  'sentinelpass-ui/state.js',
+  'sentinelpass-ui/utils.js',
+  'sentinelpass-ui/totp.js',
+  'sentinelpass-ui/entries.js'
 ];
 
 for (const relativePath of emittedFiles) {
@@ -27,7 +31,11 @@ for (const relativePath of emittedFiles) {
 
 const uiFilesToSync = [
   ['sentinelpass-ui/app.js', 'sentinelpass-ui/dist/app.js'],
-  ['sentinelpass-ui/url-utils.js', 'sentinelpass-ui/dist/url-utils.js']
+  ['sentinelpass-ui/url-utils.js', 'sentinelpass-ui/dist/url-utils.js'],
+  ['sentinelpass-ui/state.js', 'sentinelpass-ui/dist/state.js'],
+  ['sentinelpass-ui/utils.js', 'sentinelpass-ui/dist/utils.js'],
+  ['sentinelpass-ui/totp.js', 'sentinelpass-ui/dist/totp.js'],
+  ['sentinelpass-ui/entries.js', 'sentinelpass-ui/dist/entries.js']
 ];
 
 for (const [source, target] of uiFilesToSync) {

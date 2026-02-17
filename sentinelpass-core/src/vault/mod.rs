@@ -69,7 +69,6 @@ impl VaultManager {
     pub fn open<P: AsRef<Path>>(path: P, master_password: &[u8]) -> Result<Self> {
         let vault_path = path.as_ref().to_path_buf();
         let db = Database::open(&vault_path)?;
-        db.initialize_schema()?;
         db.validate_schema_version()?;
 
         if let Some(remaining) = Self::get_remaining_lockout_seconds(&db)? {

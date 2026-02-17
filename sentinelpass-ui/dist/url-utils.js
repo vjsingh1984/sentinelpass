@@ -1,3 +1,13 @@
+/**
+ * Normalise a raw URL string for launching in the system browser.
+ *
+ * Prepends `https://` when no scheme is present and validates that the
+ * result is a well-formed `http:` or `https:` URL.
+ *
+ * @param rawUrl - The user-supplied URL string (may omit scheme).
+ * @returns The normalised, fully-qualified URL string.
+ * @throws {Error} If the input is empty, unparseable, or uses a non-HTTP scheme.
+ */
 export function normalizeLaunchUrl(rawUrl) {
     const trimmed = String(rawUrl || '').trim();
     if (!trimmed) {

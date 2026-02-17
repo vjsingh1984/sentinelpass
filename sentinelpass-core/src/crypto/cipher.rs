@@ -95,12 +95,6 @@ impl EncryptedEntry {
 /// - The nonce is generated randomly for each encryption
 /// - AES-256-GCM provides both confidentiality and authenticity
 pub fn encrypt_entry(dek: &DataEncryptionKey, plaintext: &[u8]) -> Result<EncryptedEntry> {
-    if plaintext.is_empty() {
-        return Err(CryptoError::EncryptionFailed(
-            "Cannot encrypt empty data".to_string(),
-        ));
-    }
-
     // Create cipher with the DEK
     let cipher = Aes256Gcm::new(dek.as_bytes().into());
 
@@ -147,12 +141,6 @@ pub fn encrypt_entry(dek: &DataEncryptionKey, plaintext: &[u8]) -> Result<Encryp
 /// - Returns error if authentication tag doesn't verify
 /// - This prevents tampering with encrypted data
 pub fn decrypt_entry(dek: &DataEncryptionKey, encrypted: &EncryptedEntry) -> Result<Vec<u8>> {
-    if encrypted.ciphertext.is_empty() {
-        return Err(CryptoError::DecryptionFailed(
-            "Cannot decrypt empty data".to_string(),
-        ));
-    }
-
     // Create cipher with the DEK
     let cipher = Aes256Gcm::new(dek.as_bytes().into());
 
@@ -268,14 +256,20 @@ mod tests {
     }
 
     #[test]
-    fn test_empty_data_fails() {
+    fn test_empty_data_roundtrip() {
         let dek = DataEncryptionKey::new().unwrap();
 
-        assert!(encrypt_entry(&dek, b"").is_err());
+        // AES-256-GCM handles zero-length plaintext (output is just the 16-byte auth tag)
+        let encrypted = encrypt_entry(&dek, b"").unwrap();
+        assert!(encrypted.ciphertext.is_empty());
+        let decrypted = decrypt_entry(&dek, &encrypted).unwrap();
+        assert!(decrypted.is_empty());
+
+        // Invalid auth tag should still fail authentication
         assert!(decrypt_entry(
             &dek,
             &EncryptedEntry {
-                nonce: [0u8; 12],
+                nonce: encrypted.nonce,
                 ciphertext: vec![],
                 auth_tag: [0u8; 16],
             }
@@ -287,7 +281,7 @@ mod tests {
 
     proptest! {
         #[test]
-        fn encrypt_decrypt_roundtrip_arbitrary_data(data in proptest::collection::vec(any::<u8>(), 1..4096)) {
+        fn encrypt_decrypt_roundtrip_arbitrary_data(data in proptest::collection::vec(any::<u8>(), 0..4096)) {
             let dek = DataEncryptionKey::new().unwrap();
             let encrypted = encrypt_entry(&dek, &data).unwrap();
             let decrypted = decrypt_entry(&dek, &encrypted).unwrap();

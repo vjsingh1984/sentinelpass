@@ -16,7 +16,6 @@ impl VaultManager {
     pub fn open_with_biometric<P: AsRef<Path>>(path: P, reason: &str) -> Result<Self> {
         let vault_path = path.as_ref().to_path_buf();
         let db = Database::open(&vault_path)?;
-        db.initialize_schema()?;
         db.validate_schema_version()?;
 
         let (kdf_params, wrapped_dek) = Self::load_vault_metadata(&db)?;
@@ -83,7 +82,6 @@ impl VaultManager {
     /// Check whether biometric unlock is configured for a vault path.
     pub fn is_biometric_unlock_enabled<P: AsRef<Path>>(path: P) -> Result<bool> {
         let db = Database::open(path)?;
-        db.initialize_schema()?;
         Ok(Self::load_biometric_ref(&db)?.is_some())
     }
 

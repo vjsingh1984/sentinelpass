@@ -32,6 +32,8 @@ cargo build --release
 | UI (debug) | `cargo run --package sentinelpass-ui` |
 | Daemon | `cargo run --package sentinelpass-daemon` |
 | CLI help | `cargo run --package sentinelpass-cli -- --help` |
+| Relay server | `cargo run --bin sentinelpass-relay` |
+| Relay (with sync) | `cargo build --features sync` |
 | Rust tests | `cargo test --workspace` |
 | Rust lint | `cargo clippy --workspace --all-targets -- -D warnings` |
 | TS typecheck | `npm run web:typecheck` |

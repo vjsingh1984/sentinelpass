@@ -8,7 +8,8 @@ Local-first password manager with a Rust core, Tauri desktop UI, and browser ext
 | --- | --- |
 | Secret model | Zero-knowledge, local vault; no cloud dependency |
 | Crypto | Argon2id key derivation + AES-256-GCM encryption |
-| App surfaces | CLI (`sentinelpass`), daemon, desktop UI, browser extension |
+| Multi-device sync | Optional E2E encrypted sync via relay (Ed25519 auth, LWW conflict resolution) |
+| App surfaces | CLI (`sentinelpass`), daemon, desktop UI, browser extension, relay server |
 | Platforms | Windows, macOS, Linux |
 | License | Apache License 2.0 |
 
@@ -22,14 +23,17 @@ Local-first password manager with a Rust core, Tauri desktop UI, and browser ext
 | Native host | `sentinelpass-host/` | Browser native messaging bridge |
 | Desktop app | `sentinelpass-ui/` | Tauri UI and user unlock workflow |
 | Browser extension | `browser-extension/` | Autofill + save prompts |
+| Relay server | `sentinelpass-relay/` | E2E encrypted sync relay (zero-knowledge) |
 
 ## Runtime Flow
 
 ```text
 Browser Extension -> sentinelpass-host -> sentinelpass-daemon -> sentinelpass-core (vault)
-                         ^
-                         |
-                    sentinelpass-ui (unlock + state)
+                         ^                      |
+                         |                      └── SyncEngine (optional)
+                    sentinelpass-ui                    |
+                    (unlock + state)             sentinelpass-relay
+                                                 (encrypted blobs only)
 ```
 
 ## Install
@@ -58,6 +62,16 @@ Browser Extension -> sentinelpass-host -> sentinelpass-daemon -> sentinelpass-co
 | Firefox | `about:debugging#/runtime/this-firefox` → **Load Temporary Add-on** → select `browser-extension/firefox/manifest.json` |
 
 After installing the extension, **restart the browser** so it picks up the native messaging host manifest written by the app.
+
+## Multi-Device Sync
+
+Sync your vault across devices using the E2E encrypted relay. The relay never sees plaintext.
+
+1. **Start the relay** (self-hosted): `cargo run --bin sentinelpass-relay`
+2. **Initialize sync** on the first device: `sentinelpass sync init --relay-url http://localhost:8743`
+3. **Pair additional devices**: run `sentinelpass sync pair-start` on device A, then `sentinelpass sync pair-join --relay-url <URL> --code <CODE>` on device B.
+
+See [`docs/SYNC.md`](docs/SYNC.md) for the full protocol reference, CLI commands, and relay configuration.
 
 ## Verify
 
@@ -92,6 +106,7 @@ You can also re-register the native host manually:
 | Rust tests | `cargo test --workspace` |
 | TypeScript typecheck | `npm run web:typecheck` |
 | TypeScript tests + coverage | `npm run test:ts` |
+| Relay server | `cargo run --bin sentinelpass-relay` |
 | Rust coverage (LLVM) | `bash scripts/coverage-rust.sh` |
 
 ## Release Artifacts
@@ -110,4 +125,5 @@ You can also re-register the native host manually:
 | Code of conduct | `CODE_OF_CONDUCT.md` |
 | OSS release checklist | `docs/OSS_RELEASE_CHECKLIST.md` |
 | Build details | `BUILD.md` |
+| Sync protocol & relay | `docs/SYNC.md` |
 | Security internals | `SECURITY_ARCHITECTURE.md` |

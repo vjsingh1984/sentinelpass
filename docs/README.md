@@ -35,6 +35,7 @@ Quick reference to all project documentation. Most docs live at the repository r
 | [browser-extension/chrome/DEBUGGING.md](../browser-extension/chrome/DEBUGGING.md) | Chrome extension debugging guide | extension, DevTools, content script, background worker, autofill |
 | [browser-extension/e2e/README.md](../browser-extension/e2e/README.md) | Browser integration test setup and usage | Playwright, e2e, extension test |
 | [sentinelpass-ui/README.md](../sentinelpass-ui/README.md) | Tauri desktop UI build and architecture | Tauri, UI, TypeScript, app.ts, native host |
+| [docs/SYNC.md](./SYNC.md) | Multi-device sync protocol, relay server, pairing, conflict resolution | sync, relay, Ed25519, pairing, HKDF, LWW, push, pull |
 
 ## Blog & Marketing
 
@@ -60,4 +61,8 @@ Looking for something specific? Use these pointers:
 | **Database models** | `sentinelpass-core/src/database/models.rs`, `sentinelpass-core/src/database/schema.rs` |
 | **Testing** | [CLAUDE.md](../CLAUDE.md) § Common Commands → Test, [BUILD.md](../BUILD.md) |
 | **Release process** | [OSS_RELEASE_CHECKLIST.md](./OSS_RELEASE_CHECKLIST.md), `.github/workflows/release.yml` |
+| **Sync protocol** | [docs/SYNC.md](./SYNC.md), `sentinelpass-core/src/sync/` |
+| **Relay server** | [docs/SYNC.md](./SYNC.md) § Relay Server, `sentinelpass-relay/src/` |
+| **Device pairing** | [docs/SYNC.md](./SYNC.md) § Sync Lifecycle → Pair, `sentinelpass-core/src/sync/pairing.rs` |
+| **Conflict resolution** | [docs/SYNC.md](./SYNC.md) § Conflict Resolution, `sentinelpass-core/src/sync/conflict.rs` |
 | **Rust API docs** | Run `cargo doc --no-deps --open` locally |

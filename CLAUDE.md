@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-SentinelPass is a secure, local-first password manager written in Rust with a Tauri desktop UI, browser extensions (Chrome/Firefox), and native messaging architecture. The project uses zero-knowledge architecture with military-grade encryption (Argon2id KDF + AES-256-GCM).
+SentinelPass is a secure, local-first password manager written in Rust with a Tauri desktop UI, browser extensions (Chrome/Firefox), native messaging architecture, and optional E2E encrypted multi-device sync. The project uses zero-knowledge architecture with military-grade encryption (Argon2id KDF + AES-256-GCM).
 
 ## Common Commands
 
@@ -14,6 +14,8 @@ cargo build --workspace                          # Dev build (all crates)
 cargo build --release                            # Release build
 npm install && npm run web:build                 # Build web assets (required before Tauri UI)
 cargo build --package sentinelpass-ui            # Build Tauri UI (needs web assets first)
+cargo build --package sentinelpass-relay          # Build relay server
+cargo build --features sync                      # Build with sync client enabled
 ```
 
 ### Test
@@ -41,6 +43,7 @@ cargo run --bin sentinelpass -- [args]            # CLI (binary name: sentinelpa
 cargo run --bin sentinelpass-daemon               # Daemon (required for browser extension)
 cargo run --bin sentinelpass-host                 # Native messaging host
 cargo run --package sentinelpass-ui               # Tauri desktop UI
+cargo run --bin sentinelpass-relay               # Relay server (default: 127.0.0.1:8743)
 ```
 
 ### Just shortcuts
@@ -65,7 +68,11 @@ sentinelpass-host
 sentinelpass-daemon
     ├── VaultManager (CRUD operations)
     ├── Crypto (Argon2id + AES-256-GCM)
-    └── Database (SQLite with encrypted entries)
+    ├── Database (SQLite with encrypted entries)
+    └── SyncEngine (optional, feature-gated)
+            ↓ HTTPS + Ed25519 signed requests
+         sentinelpass-relay
+            └── SQLite (encrypted blobs only)
 ```
 
 ### Key Components
@@ -75,6 +82,7 @@ sentinelpass-daemon
 - `daemon/` - `ipc.rs` (IPC server/client), `vault_state.rs` (DaemonVault with auto-lock), `native_messaging.rs` (browser protocol), `autolock.rs`
 - `database/` - `schema.rs` (SQLite ops), `models.rs` (Entry/DomainMapping/TotpSecret), `migrations.rs` (refinery runner)
 - `vault.rs` - VaultManager: central CRUD, encryption, lock/unlock, TOTP, SSH keys, biometric, import/export
+- `sync/` - `models.rs` (SyncEntryBlob/payloads), `crypto.rs` (encrypt/decrypt/pad), `auth.rs` (Ed25519 canonical signing), `device.rs` (DeviceIdentity), `pairing.rs` (HKDF pairing key), `conflict.rs` (LWW resolver), `change_tracker.rs` (pending collection), `config.rs` (SyncConfig), `client.rs` (HTTP client, feature-gated `sync`), `engine.rs` (push/pull orchestrator, feature-gated `sync`)
 - `audit.rs`, `lockout.rs`, `biometric.rs`, `ssh.rs`, `totp.rs`, `import_export.rs`, `platform.rs`
 
 **sentinelpass-daemon/** - Background service:
@@ -91,6 +99,7 @@ sentinelpass-daemon
 **sentinelpass-cli/** - Command-line interface (binary: `sentinelpass`):
 - Clap-based CLI with subcommands
 - Commands: init, add, list, search, edit, delete, generate, totp-add/code/remove, ssh-key-add/list/get/delete, export, import, check, biometric-enable/disable
+- Sync subcommands: sync init/now/status/device-list/device-revoke/pair-start/pair-join/disable
 
 **sentinelpass-ui/** - Tauri v2 desktop application (binary: `sentinelpass-ui`):
 - `src-tauri/src/main.rs` - Tauri backend with Rust commands
@@ -102,6 +111,12 @@ sentinelpass-daemon
 - `chrome/` - MV3 manifest, TypeScript sources (`.ts`) with transpiled JS
 - `firefox/` - MV2 manifest (shares content/background scripts)
 - `e2e/` - Playwright E2E tests
+
+**sentinelpass-relay/** - Sync relay server:
+- Axum-based HTTP server storing encrypted sync blobs
+- Ed25519 auth middleware (signature verification, nonce dedup, device revocation)
+- Handlers: device registration, push/pull sync, pairing bootstrap
+- Config via `relay.toml` (TOML); SQLite storage (`relay.db`)
 
 ## Communication Protocols
 
@@ -138,6 +153,43 @@ sentinelpass-daemon
 **Windows:** TCP localhost at `tcp://127.0.0.1:35873`
 **Auth:** All IPC requests require a 32-byte hex token from `~/.config/sentinelpass/ipc.token` (mode 0600). Messages use length-prefixed JSON with an envelope containing the token.
 
+### Sync Protocol
+
+**Auth Header:**
+```
+Authorization: SentinelPass-Ed25519 {device_id}:{timestamp}:{nonce}:{base64(signature)}
+```
+
+Signature covers the canonical string: `{METHOD}\n{PATH}\n{TIMESTAMP}\n{NONCE}\n{SHA256(BODY)}`
+
+**Push (incremental):**
+```json
+POST /api/v1/sync/push
+{
+  "device_sequence": 42,
+  "entries": [
+    {
+      "sync_id": "uuid",
+      "entry_type": "credential",
+      "sync_version": 3,
+      "modified_at": 1700000000,
+      "encrypted_payload": "<base64(nonce || ciphertext || tag)>",
+      "is_tombstone": false,
+      "origin_device_id": "uuid"
+    }
+  ]
+}
+```
+
+**Pull (incremental):**
+```json
+POST /api/v1/sync/pull
+{ "since_sequence": 100, "limit": 1000 }
+→ { "entries": [...], "server_sequence": 142, "has_more": false }
+```
+
+See `docs/SYNC.md` for the full endpoint table, pairing flow, and conflict resolution rules.
+
 ## Cryptographic Architecture
 
 ### Key Derivation
@@ -166,8 +218,14 @@ Master Key (32 bytes)
 └──────────────┴──────────────┴──────────────┘
   ↓
 Data Encryption Key (DEK)
-  ↓
-Per-entry AES-256-GCM encryption
+  ├── Per-entry AES-256-GCM encryption (local)
+  └── Sync payload AES-256-GCM encryption (per-blob nonce, padded)
+
+Ed25519 keypair (per device, stored encrypted with DEK)
+  └── Request signing (canonical string → signature)
+
+Pairing: 6-digit code + salt → HKDF-SHA256 → pairing key
+  └── AES-256-GCM encrypt VaultBootstrap (kdf_params, wrapped_dek, relay_url)
 ```
 
 ## Security-Critical Development Rules
@@ -181,6 +239,10 @@ Per-entry AES-256-GCM encryption
 6. **Write plaintext to disk** - Even for debugging
 7. **Trust domain from browser** - Validate daemon-side with TLD matching
 8. **Return full vault to extension** - Only return requested credential
+9. **Store plaintext on the relay** - Relay must only see encrypted blobs
+10. **Accept a sync entry without Ed25519 verification** - Always verify device signature
+11. **Reuse the DEK as a signing key** - Device identity uses a separate Ed25519 keypair
+12. **Accept a lower sync_version** - Sequence must be monotonically increasing (rollback protection)
 
 ### ALWAYS:
 1. Use parameterized queries only (SQL injection protection)
@@ -190,6 +252,9 @@ Per-entry AES-256-GCM encryption
 5. Use exponential backoff for failed auth attempts
 6. Implement constant-time operations for secret comparison
 7. Run `cargo clippy` and `cargo test` before committing
+8. Pad sync payloads to fixed bucket sizes before encryption (metadata leakage prevention)
+9. Verify auth nonce uniqueness on the relay (replay protection)
+10. Include body hash in the canonical signing string (tamper protection)
 
 ## Testing Browser Extension
 
@@ -263,6 +328,14 @@ cargo run --bin sentinelpass-daemon  # Daemon auto-runs migrations
 sqlite3 ~/.sentinelpass/vault.db ".schema"
 ```
 
+### Adding a New Sync Entry Type
+1. Add variant to `SyncEntryType` in `sync/models.rs`
+2. Create payload struct (e.g. `NewTypePayload`) with serde derives
+3. Add `collect_pending_*_blobs()` in `sync/change_tracker.rs`
+4. Add apply logic in `sync/engine.rs` `pull_changes()` match arm
+5. Add sync columns (`sync_id`, `sync_version`, `sync_state`, `last_synced_at`) to the backing table
+6. Update `count_pending_changes()` to include the new table
+
 ## Important File Locations
 
 - **Vault database:** `~/.sentinelpass/vault.db` (SQLite, encrypted entries)
@@ -270,6 +343,9 @@ sqlite3 ~/.sentinelpass/vault.db ".schema"
 - **Native messaging config:**
   - Windows: `C:\Program Files\PasswordManager\com.passwordmanager.host.json`
   - macOS/Linux: `~/.config/mozilla/native-messaging-hosts/`
+- **Sync metadata:** `sync_metadata` table in `vault.db` (device identity, config, sequences)
+- **Relay database:** `relay.db` (SQLite, encrypted blobs only)
+- **Relay config:** `relay.toml` (server settings)
 
 ## Known Limitations
 
@@ -278,6 +354,8 @@ sqlite3 ~/.sentinelpass/vault.db ".schema"
 3. SSH key storage and CLI management are implemented; advanced SSH workflows (UI, richer key lifecycle ops) remain limited
 4. No KeePass import/export yet (schema exists)
 5. Biometric unlock is integrated with Windows Hello and macOS LocalAuthentication (Touch ID); Linux remains unsupported
+6. Multi-device sync is feature-gated (`sync`); relay server does not include TLS by default (use a reverse proxy for production)
+7. Sync conflict resolution is Last-Write-Wins only; no manual merge UI
 
 ## CI/CD Pipeline
 

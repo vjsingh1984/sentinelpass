@@ -5,37 +5,39 @@
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                           USER INTERFACES                                     │
-├──────────────┬──────────────┬──────────────┬──────────────┬─────────────────┤
-│   Desktop    │   Chrome    │   Safari    │   Firefox   │    SSH Agent    │
-│   (Tauri)    │ Extension   │ Extension   │ Extension   │   Integration   │
-└──────┬───────┴──────┬───────┴──────┬───────┴──────┬──────┴────────┬────────┘
-       │              │              │              │               │
-       │    Native    │    Native    │    Native    │               │
-       │   Messaging  │   Messaging  │   Messaging  │               │
-       │              │              │              │               │
-       └──────────────┴──────────────┴──────────────┘               │
-                              │                                       │
-                              ▼                                       │
-                    ┌─────────────────────┐                          │
-                    │   Core Daemon       │                          │
-                    │   (Rust Binary)     │                          │
-                    └──────────┬──────────┘                          │
-                               │                                       │
-                               ▼                                       │
-                    ┌─────────────────────┐                          │
-                    │  Crypto Engine      │                          │
-                    │  - Argon2id KDF     │                          │
-                    │  - AES-256-GCM      │                          │
-                    │  - Key Management   │                          │
-                    └──────────┬──────────┘                          │
-                               │                                       │
-                               ▼                                       │
-                    ┌─────────────────────┐                          │
-                    │  SQLite Database    │                          │
-                    │  (Encrypted .kdbx)  │                          │
-                    └─────────────────────┘                          │
-                                                                       │
-                               ┌──────────────────────────────────────┘
+├──────────────┬──────────────┬──────────────┬──────────────────────────────────┤
+│   Desktop    │   Chrome    │   Firefox   │    SSH Agent Integration          │
+│   (Tauri)    │ Extension   │ Extension   │                                   │
+└──────┬───────┴──────┬───────┴──────┬──────┴───────────────────┬──────────────┘
+       │              │              │                           │
+       │    Native    │    Native    │                           │
+       │   Messaging  │   Messaging  │                           │
+       │              │              │                           │
+       └──────────────┴──────────────┘                           │
+                              │                                    │
+                              ▼                                    │
+                    ┌─────────────────────┐                       │
+                    │   Core Daemon       │                       │
+                    │   (Rust Binary)     │                       │
+                    └──────────┬──────────┘                       │
+                               │                                    │
+                         ┌─────┴──────┐                            │
+                         ▼            ▼                            │
+              ┌──────────────┐ ┌──────────────┐                   │
+              │ Crypto Engine│ │ Sync Engine  │                   │
+              │ - Argon2id   │ │ (optional)   │                   │
+              │ - AES-256-GCM│ │ - Ed25519    │                   │
+              │ - Key Mgmt   │ │ - HKDF       │                   │
+              └──────┬───────┘ └──────┬───────┘                   │
+                     │                │                              │
+                     ▼                ▼                              │
+              ┌──────────────┐ ┌──────────────┐                   │
+              │ SQLite DB    │ │ Relay Server │                   │
+              │ (encrypted   │ │ (opaque blobs│                   │
+              │  entries)    │ │  only)       │                   │
+              └──────────────┘ └──────────────┘                   │
+                                                                     │
+                               ┌─────────────────────────────────────┘
                                ▼
                     ┌─────────────────────┐
                     │  OS Keystore       │
@@ -61,6 +63,13 @@
 | **Timing Attacks** | Response time analysis | • Constant-time comparisons<br>• Fixed delay on auth<br>• Dummy operations for padding |
 | **Phishing** | Fake websites requesting credentials | • Domain matching with TLD validation<br>• Visual domain confirmation<br>• URL bar integration |
 | **CSRF on Autofill** | Malicious site triggering fill | • User gesture required<br>• Origin validation<br>• Frame depth checking |
+| **Relay Compromise** | Attacker gains relay server access | • All payloads encrypted with vault DEK (relay is zero-knowledge)<br>• Ed25519 device keys never stored on relay<br>• Relay holds only public keys + opaque blobs |
+| **Device Impersonation** | Forged sync requests | • Ed25519 signature over canonical request string<br>• Signing key stored encrypted with DEK locally<br>• Public key registered at pairing time |
+| **Replay Attack (Sync)** | Re-sending captured sync requests | • UUID nonce in every auth header, checked for uniqueness<br>• Timestamp freshness window (300s)<br>• Monotonic device_sequence validation |
+| **Pairing Interception** | Eavesdropping on pairing exchange | • Bootstrap encrypted with HKDF-derived key (6-digit code + salt)<br>• 5-minute TTL, single-use consumption<br>• Code transmitted out-of-band |
+| **Metadata Leakage (Sync)** | Payload size reveals entry type/length | • Payloads padded to fixed buckets (256, 512, 1024, 2048, 4096, 8192) before encryption<br>• Entry type visible but content opaque |
+| **Rollback Attack** | Pushing older entry versions | • sync_version must be monotonically increasing<br>• Lower versions rejected by both relay and client<br>• Tombstones require higher version |
+| **Cross-Vault Access** | Device accessing wrong vault | • vault_id scoped per device at registration<br>• Relay enforces vault isolation on all queries |
 
 ---
 
@@ -112,9 +121,28 @@
            │                                 │
            ▼                                 ▼
     ┌─────────────┐                 ┌─────────────┐
-    │ AES-256-GCM │                 │   OS        │
-    │ for entries │                 │ Keystore    │
-    └─────────────┘                 └─────────────┘
+    │     DEK     │                 │   OS        │
+    │ (32 bytes)  │                 │ Keystore    │
+    └──────┬──────┘                 └─────────────┘
+           │
+     ┌─────┴──────────────────┐
+     │                        │
+     ▼                        ▼
+  Local vault            Sync payloads
+  AES-256-GCM            AES-256-GCM
+  (per-entry nonce)      (per-blob nonce, padded)
+
+    ─── Device Identity (independent per device) ───
+
+    Ed25519 keypair
+    │  Signing key encrypted with DEK, stored in sync_metadata
+    └──▶ Request signatures (canonical string → Ed25519 sig)
+
+    ─── Pairing (ephemeral) ───
+
+    6-digit code + 16-byte random salt
+    └──▶ HKDF-SHA256 → 32-byte pairing key
+         └──▶ AES-256-GCM encrypt VaultBootstrap
 ```
 
 ### 3.3 Cryptographic Flow
@@ -159,6 +187,38 @@ For each credential entry:
 3. ciphertext = AES-256-GCM-Encrypt(DEK, entry_nonce, plaintext)
 4. Store: entry_nonce || ciphertext || auth_tag
 ```
+
+### 3.4 Sync Encryption
+
+**Wire Format (sync entry payload):**
+```
+┌──────────┬────────────────────────┬──────────┐
+│  Nonce   │      Ciphertext        │   Tag    │
+│ 12 bytes │    variable length     │ 16 bytes │
+└──────────┴────────────────────────┴──────────┘
+```
+Minimum blob size: 29 bytes. Encrypted with vault DEK (AES-256-GCM). Each blob gets a unique random nonce.
+
+**Payload Padding:**
+Plaintext is padded to fixed bucket sizes (256, 512, 1024, 2048, 4096, 8192 bytes) before encryption. Format: `len(8-bytes LE) || data || zero-padding`. This prevents metadata leakage through payload size analysis.
+
+**Pairing Flow:**
+```
+1. Device A generates 6-digit code + 16-byte random salt
+2. Derive pairing_key = HKDF-SHA256(code, salt, info="sentinelpass-v1") → 32 bytes
+3. Encrypt VaultBootstrap { kdf_params, wrapped_dek, relay_url, vault_id }
+4. Upload encrypted blob + salt to relay (5-minute TTL, single-use)
+5. Device B enters code, fetches blob + salt from relay
+6. Derive same pairing_key, decrypt VaultBootstrap
+7. Device B now has KDF params + wrapped DEK → can unlock vault with master password
+```
+
+**Auth Signature:**
+```
+Canonical string: {METHOD}\n{PATH}\n{TIMESTAMP}\n{NONCE}\n{SHA256(BODY)}
+Header: SentinelPass-Ed25519 {device_id}:{timestamp}:{nonce}:{base64(signature)}
+```
+Timestamp must be within 300s of server time. Nonce (UUID v4) checked for uniqueness to prevent replay.
 
 ---
 
@@ -317,123 +377,63 @@ CREATE INDEX idx_audit_timestamp ON audit_log(timestamp DESC);
 ### 5.2 Project Structure
 
 ```
-passwordmanager/
-├── Cargo.toml
-├── Cargo.lock
-├── src/
-│   ├── main.rs                 # Daemon entry point
-│   ├── lib.rs                  # Library exports
-│   ├── crypto/
-│   │   ├── mod.rs
-│   │   ├── kdf.rs              # Argon2id implementation
-│   │   ├── cipher.rs           # AES-256-GCM wrapper
-│   │   ├── keyring.rs          # Key hierarchy management
-│   │   └── zero.rs             # Zeroization utilities
-│   ├── database/
-│   │   ├── mod.rs
-│   │   ├── schema.rs           # Table definitions
-│   │   ├── migrations.rs       # Version migrations
-│   │   └── models.rs           # ORM-like structs
-│   ├── vault/
-│   │   ├── mod.rs
-│   │   ├── entries.rs          # CRUD for entries
-│   │   ├── ssh_keys.rs         # SSH key management
-│   │   └── totp.rs             # TOTP generation
-│   ├── daemon/
-│   │   ├── mod.rs
-│   │   ├── native_messaging.rs # Browser comm protocol
-│   │   └── ipc.rs              # Local socket/pipe server
-│   ├── platform/
-│   │   ├── mod.rs
-│   │   ├── macos.rs            # Touch ID, Keychain
-│   │   └── windows.rs          # Windows Hello, DPAPI
-│   ├── clipboard/
-│   │   ├── mod.rs
-│   │   └── manager.rs          # Secure clipboard handling
-│   └── ssh/
-│       ├── mod.rs
-│       └── agent.rs            # ssh-agent integration
-├── migrations/
-│   └── v1_initial.sql
-├── tauri-app/                  # Desktop UI (optional)
-│   ├── src/
+sentinelpass/                         # Workspace root
+├── Cargo.toml                        # Workspace manifest
+├── sentinelpass-core/                # Core library
+│   └── src/
+│       ├── crypto/                   # KDF, cipher, keyring, zeroization
+│       ├── daemon/                   # IPC, native messaging, auto-lock
+│       ├── database/                 # Schema, models, migrations
+│       ├── sync/                     # Sync models, crypto, auth, engine
+│       │   ├── models.rs             #   SyncEntryBlob, payloads
+│       │   ├── crypto.rs             #   encrypt/decrypt/pad for sync
+│       │   ├── auth.rs               #   Ed25519 canonical signing
+│       │   ├── device.rs             #   DeviceIdentity (keypair)
+│       │   ├── pairing.rs            #   HKDF pairing key derivation
+│       │   ├── conflict.rs           #   LWW conflict resolver
+│       │   ├── change_tracker.rs     #   Pending blob collection
+│       │   ├── config.rs             #   SyncConfig (DB persistence)
+│       │   ├── client.rs             #   HTTP client (feature: sync)
+│       │   └── engine.rs             #   Push/pull orchestrator (feature: sync)
+│       ├── vault.rs                  # VaultManager (CRUD, lock/unlock)
+│       └── ...                       # audit, biometric, ssh, totp, platform
+├── sentinelpass-cli/                 # CLI binary
+├── sentinelpass-daemon/              # Background daemon
+├── sentinelpass-host/                # Native messaging bridge
+├── sentinelpass-ui/                  # Tauri desktop app
 │   ├── src-tauri/
-│   └── package.json
+│   └── ...
+├── sentinelpass-relay/               # Sync relay server
+│   └── src/
+│       ├── main.rs                   #   CLI + startup
+│       ├── server.rs                 #   Axum router
+│       ├── config.rs                 #   relay.toml parsing
+│       ├── auth.rs                   #   Ed25519 middleware
+│       ├── storage/                  #   Relay SQLite schema
+│       └── handlers/                 #   devices, sync, pairing
 ├── browser-extension/
-│   ├── chrome/
-│   │   ├── manifest.json
-│   │   ├── background.js
-│   │   └── content.js
-│   ├── safari/
-│   └── firefox/
+│   ├── chrome/                       # MV3 extension
+│   └── firefox/                      # MV2 extension
 └── tests/
-    ├── integration/
-    └── crypto/
 ```
 
 ### 5.3 Core Dependencies
 
-```toml
-[package]
-name = "passwordmanager"
-version = "0.1.0"
-edition = "2021"
+The workspace uses centralized dependency management in the root `Cargo.toml`. Key security-relevant dependencies:
 
-[dependencies]
-# Cryptography
-argon2 = "0.5"
-aes-gcm = "0.10"
-rand = "0.8"
-zeroize = { version = "1.7", features = ["zeroize_derive"] }
+| Crate | Purpose |
+|-------|---------|
+| `argon2` | Argon2id key derivation |
+| `aes-gcm` | AES-256-GCM encryption |
+| `ed25519-dalek` | Ed25519 device signing (sync) |
+| `hkdf` + `sha2` | HKDF-SHA256 pairing key derivation (sync, feature-gated) |
+| `zeroize` | Secret memory zeroization |
+| `rusqlite` | SQLite (parameterized queries only) |
+| `subtle` | Constant-time comparisons |
+| `reqwest` | HTTP sync client (feature-gated `sync`) |
+| `axum` | Relay server HTTP framework |
 
-# Database
-rusqlite = { version = "0.30", features = ["bundled", "backup"] }
-refinery = { version = "0.8", features = ["rusqlite"] }
-
-# Serialization
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-
-# Async runtime
-tokio = { version = "1.35", features = ["full"] }
-tokio-util = { version = "0.7", features = ["io"] }
-
-# Platform-specific (conditional compilation)
-[target.'cfg(target_os = "macos")'.dependencies]
-security-framework = "2.9"
-objc = "0.2"
-
-[target.'cfg(target_os = "windows")'.dependencies]
-windows = { version = "0.52", features = [
-    "Win32_Security_Cryptography",
-    "Win32_Foundation",
-    "Win32_System_Memory",
-] }
-
-# SSH handling
-ssh-key = { version = "0.6", features = ["encryption"] }
-
-# TOTP
-totp-rs = { version = "5.4", features = ["gen_secret"] }
-
-# KeePass compatibility
-kdbx-rs = "0.6"
-
-# Error handling
-anyhow = "1.0"
-thiserror = "1.0"
-
-# Logging
-tracing = "0.1"
-tracing-subscriber = "0.3"
-
-# Memory locking
-memlock2 = "0.2"
-
-[dev-dependencies]
-criterion = "0.5"
-tempfile = "3.8"
-```
+See `Cargo.toml` (workspace root) and `CLAUDE.md` § Dependencies Note for the full list.
 
 ---
 
@@ -550,7 +550,13 @@ tempfile = "3.8"
 3. Audit log
 4. Additional browsers (Safari, Firefox)
 
-### Phase 7: Hardening & Testing (Weeks 21-24)
+### Phase 7: Multi-Device Sync (Weeks 21-24)
+1. E2E encrypted sync engine (push/pull with LWW conflict resolution)
+2. Relay server (Axum + SQLite, zero-knowledge)
+3. Device pairing (HKDF-SHA256 + Ed25519 identity)
+4. Device revocation
+
+### Phase 8: Hardening & Testing (Weeks 25-28)
 1. Security audit
 2. Penetration testing
 3. Performance optimization

@@ -218,9 +218,7 @@ function buildSaveNotificationDedupKey(data) {
     const username = typeof data?.username === 'string' ? data.username.trim().toLowerCase() : '';
     const url = typeof data?.url === 'string' ? data.url.split('#')[0] : '';
     const passwordLength = typeof data?.password === 'string' ? data.password.length : 0;
-    const requestSource = typeof data?.request_source === 'string' ? data.request_source : 'unknown';
-    const sourceBucket = requestSource === 'pending-login-check' ? 'pending-login-check' : 'submit-detection';
-    return `${sourceBucket}|${domain}|${username}|${url}|len:${passwordLength}`;
+    return `${domain}|${username}|${url}|len:${passwordLength}`;
 }
 function isDuplicateSaveNotification(data) {
     const now = Date.now();

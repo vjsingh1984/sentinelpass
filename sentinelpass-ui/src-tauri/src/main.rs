@@ -1064,9 +1064,7 @@ async fn open_browser_extensions_page(browser: String) -> Result<(), String> {
                         Command::new(path)
                             .arg("chrome://extensions")
                             .spawn()
-                            .map_err(|e| {
-                                format!("Failed to open Chrome extensions page: {}", e)
-                            })?;
+                            .map_err(|e| format!("Failed to open Chrome extensions page: {}", e))?;
                         launched = true;
                         break;
                     }
@@ -1077,14 +1075,15 @@ async fn open_browser_extensions_page(browser: String) -> Result<(), String> {
             }
             #[cfg(all(unix, not(target_os = "macos")))]
             {
-                let browsers = ["google-chrome", "google-chrome-stable", "chromium-browser", "chromium"];
+                let browsers = [
+                    "google-chrome",
+                    "google-chrome-stable",
+                    "chromium-browser",
+                    "chromium",
+                ];
                 let mut launched = false;
                 for bin in &browsers {
-                    if Command::new(bin)
-                        .arg("chrome://extensions")
-                        .spawn()
-                        .is_ok()
-                    {
+                    if Command::new(bin).arg("chrome://extensions").spawn().is_ok() {
                         launched = true;
                         break;
                     }
@@ -1116,9 +1115,7 @@ async fn open_browser_extensions_page(browser: String) -> Result<(), String> {
                         Command::new(path)
                             .arg("about:addons")
                             .spawn()
-                            .map_err(|e| {
-                                format!("Failed to open Firefox add-ons page: {}", e)
-                            })?;
+                            .map_err(|e| format!("Failed to open Firefox add-ons page: {}", e))?;
                         launched = true;
                         break;
                     }

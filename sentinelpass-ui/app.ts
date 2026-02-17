@@ -1,74 +1,57 @@
 /**
  * SentinelPass Desktop UI — main application module.
  *
- * This file drives the entire Tauri frontend and is organised into three
- * logical sections:
+ * This file drives the Tauri frontend and is responsible for:
  *
  * 1. **Lifecycle & initialisation** — Tauri API detection, DOM-ready
  *    bootstrapping, event-listener wiring, and periodic refresh timers.
  *
- * 2. **Vault & entry management** — vault create/unlock/lock flows,
- *    entry CRUD, search & filter, password generation, TOTP configuration,
- *    biometric settings, and daemon health monitoring.
+ * 2. **Vault lifecycle** — vault create/unlock/lock flows, biometric
+ *    settings, daemon health monitoring, password generation, URL
+ *    handling, and search/filter orchestration.
  *
- * 3. **Utility & helper functions** — clipboard operations, toast
- *    notifications, password-visibility toggling, HTML escaping, and date
- *    formatting.
- *
- * All backend calls go through the Tauri `invoke` bridge to Rust commands
- * defined in `src-tauri/src/main.rs`, which delegate to `sentinelpass-core`.
+ * Entry CRUD, TOTP management, and utility helpers have been extracted
+ * into dedicated modules (`entries.ts`, `totp.ts`, `utils.ts`) with
+ * shared state managed by `state.ts`.
  */
 
 import { normalizeLaunchUrl } from './url-utils.js';
+import {
+    initTauriAPI, invoke, confirm,
+    currentEntry, setCurrentEntry,
+    setCurrentTotpMetadata, setCurrentFilter,
+    vaultScreen, entryList, searchInput, noSelection, entryDetail
+} from './state.js';
+import { showToast, togglePasswordVisibility, copyToClipboard } from './utils.js';
+import {
+    setTotpButtonState, closeTotpModal, copyTotpForEntry,
+    openTotpModal, saveTotpForEntry, removeTotpForEntry
+} from './totp.js';
+import {
+    loadEntries, loadEntry, createNewEntry, saveEntry, deleteEntry,
+    refreshEntriesNow, backgroundRefreshEntries, applyEntryFilters
+} from './entries.js';
 
-// Import Tauri API - wait for it to be loaded
-let invoke, confirm, writeText, readText;
+// ──────────────────────────────────────────────────────────────────────────────
+// Local State (not shared across modules)
+// ──────────────────────────────────────────────────────────────────────────────
 
-/**
- * Detect the Tauri runtime and bind its core API helpers.
- *
- * Must be called before any `invoke`, `confirm`, or clipboard operations.
- *
- * @returns `true` if the Tauri API is available, `false` otherwise.
- */
-function initTauriAPI() {
-    if (window.__TAURI__) {
-        invoke = window.__TAURI__.core.invoke;
-        confirm = window.__TAURI__.dialog.confirm;
-        writeText = window.__TAURI__.clipboardManager.writeText;
-        readText = window.__TAURI__.clipboardManager.readText;
-        return true;
-    }
-    return false;
-}
-
-// Application State
-let currentEntry = null;
-let entries = [];
 let isCreateVault = false;
-let currentFilter = 'all';
 let biometricStatus = null;
 let daemonStatus = null;
-let currentTotpMetadata = null;
-let entriesRefreshInFlight = false;
 
-// DOM Elements
+// DOM Elements (welcome-screen-only, not needed by other modules)
 const welcomeScreen = document.getElementById('welcome-screen');
-const vaultScreen = document.getElementById('vault-screen');
 const vaultActions = document.getElementById('vault-actions');
 const passwordForm = document.getElementById('password-form');
-const masterPasswordInput = document.getElementById('master-password');
-const confirmPasswordInput = document.getElementById('confirm-password');
+const masterPasswordInput = document.getElementById('master-password') as HTMLInputElement;
+const confirmPasswordInput = document.getElementById('confirm-password') as HTMLInputElement;
 const confirmPasswordGroup = document.getElementById('confirm-password-group');
 const formTitle = document.getElementById('form-title');
 const submitPasswordBtn = document.getElementById('submit-password');
 const strengthMeter = document.getElementById('strength-meter');
 const strengthFill = document.getElementById('strength-fill');
 const strengthText = document.getElementById('strength-text');
-const entryList = document.getElementById('entry-list');
-const searchInput = document.getElementById('search-input');
-const noSelection = document.getElementById('no-selection');
-const entryDetail = document.getElementById('entry-detail');
 const daemonStatusIndicator = document.getElementById('daemon-status-indicator');
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -156,7 +139,7 @@ function setupEventListeners() {
 
     // Filter buttons
     document.querySelectorAll('.filter-btn').forEach(btn => {
-        btn.addEventListener('click', (e) => handleFilter(e.target.dataset.filter));
+        btn.addEventListener('click', (e) => handleFilter((e.target as HTMLElement).dataset.filter));
     });
 
     // Entry Detail
@@ -165,8 +148,8 @@ function setupEventListeners() {
     document.getElementById('detail-favorite').addEventListener('click', toggleFavorite);
     document.getElementById('toggle-detail-password').addEventListener('click', () => togglePasswordVisibility('detail-password'));
     document.getElementById('generate-password-btn').addEventListener('click', generatePasswordForEntry);
-    document.getElementById('copy-username').addEventListener('click', () => copyToClipboard(document.getElementById('detail-username').value, 'Username'));
-    document.getElementById('copy-password').addEventListener('click', () => copyToClipboard(document.getElementById('detail-password').value, 'Password'));
+    document.getElementById('copy-username').addEventListener('click', () => copyToClipboard((document.getElementById('detail-username') as HTMLInputElement).value, 'Username'));
+    document.getElementById('copy-password').addEventListener('click', () => copyToClipboard((document.getElementById('detail-password') as HTMLInputElement).value, 'Password'));
     document.getElementById('copy-totp').addEventListener('click', copyTotpForEntry);
     document.getElementById('configure-totp').addEventListener('click', openTotpModal);
     document.getElementById('remove-totp').addEventListener('click', removeTotpForEntry);
@@ -534,9 +517,8 @@ async function lockVault() {
         hidePasswordForm();
         welcomeScreen.classList.remove('hidden');
         vaultScreen.classList.add('hidden');
-        currentEntry = null;
-        currentTotpMetadata = null;
-        entries = [];
+        setCurrentEntry(null);
+        setCurrentTotpMetadata(null);
         setTotpButtonState(false, false);
         closeTotpModal();
         await refreshBiometricStatus();
@@ -552,323 +534,6 @@ function showVaultScreen() {
     welcomeScreen.classList.add('hidden');
     vaultScreen.classList.remove('hidden');
     hidePasswordForm();
-}
-
-// ──────────────────────────────────────────────────────────────────────────────
-// Entry Management
-// ──────────────────────────────────────────────────────────────────────────────
-
-/**
- * Load all vault entries from the backend, preserving the current selection.
- *
- * Convenience wrapper around {@link loadEntriesWithOptions} with default
- * options.
- */
-async function loadEntries() {
-    return loadEntriesWithOptions({
-        preserveSelection: true,
-        silent: false,
-        selectionMissingToast: false
-    });
-}
-
-/**
- * Filter the in-memory entry list by the active filter ("all" or "favorites")
- * and the search query, then render the result.
- */
-function applyEntryFilters() {
-    let filtered = [...entries];
-
-    if (currentFilter === 'favorites') {
-        filtered = filtered.filter(entry => entry.favorite);
-    }
-
-    const query = (searchInput?.value || '').trim().toLowerCase();
-    if (query) {
-        filtered = filtered.filter(entry =>
-            entry.title.toLowerCase().includes(query) ||
-            entry.username.toLowerCase().includes(query)
-        );
-    }
-
-    renderEntryList(filtered);
-}
-
-/**
- * Core entry-loading routine with fine-grained control over behaviour.
- *
- * Guards against concurrent refreshes via the `entriesRefreshInFlight` flag.
- *
- * @param options
- * @param options.preserveSelection - Keep the currently-selected entry
- *   highlighted if it still exists after reload (default `true`).
- * @param options.silent - Suppress error toasts on failure (default `false`).
- * @param options.selectionMissingToast - Show a warning toast when the
- *   previously-selected entry no longer exists (default `false`).
- */
-async function loadEntriesWithOptions({
-    preserveSelection = true,
-    silent = false,
-    selectionMissingToast = false
-} = {}) {
-    if (entriesRefreshInFlight) {
-        return;
-    }
-
-    entriesRefreshInFlight = true;
-    try {
-        const selectedEntryId = preserveSelection ? currentEntry?.entry_id : null;
-        entries = await invoke('list_entries');
-        if (selectedEntryId && !entries.some(entry => entry.entry_id === selectedEntryId)) {
-            currentEntry = null;
-            currentTotpMetadata = null;
-            setTotpButtonState(false, false);
-            noSelection.classList.remove('hidden');
-            entryDetail.classList.add('hidden');
-            if (selectionMissingToast) {
-                showToast('Selected entry is no longer available', 'warning');
-            }
-        }
-        applyEntryFilters();
-        document.getElementById('entry-count').textContent = `${entries.length} entries`;
-    } catch (error) {
-        if (!silent) {
-            showToast(error, 'error');
-        }
-    } finally {
-        entriesRefreshInFlight = false;
-    }
-}
-
-/**
- * Silently refresh the entry list in the background when the vault screen
- * is visible.  Called on a 10-second interval and on window-focus events.
- */
-async function backgroundRefreshEntries() {
-    if (vaultScreen.classList.contains('hidden')) {
-        return;
-    }
-
-    await loadEntriesWithOptions({
-        preserveSelection: true,
-        silent: true,
-        selectionMissingToast: false
-    });
-}
-
-/**
- * User-initiated manual refresh of the entry list with loading-spinner
- * feedback on the refresh button and a success toast.
- */
-async function refreshEntriesNow() {
-    if (vaultScreen.classList.contains('hidden')) {
-        return;
-    }
-
-    const refreshBtn = document.getElementById('refresh-entries-btn');
-    if (refreshBtn) {
-        refreshBtn.classList.add('loading');
-        refreshBtn.disabled = true;
-    }
-
-    try {
-        await loadEntriesWithOptions({
-            preserveSelection: true,
-            silent: false,
-            selectionMissingToast: true
-        });
-        showToast('Entries refreshed', 'success');
-    } finally {
-        if (refreshBtn) {
-            refreshBtn.classList.remove('loading');
-            refreshBtn.disabled = false;
-        }
-    }
-}
-
-/**
- * Render a list of entries into the sidebar DOM and attach click handlers
- * that load the selected entry into the detail pane.
- *
- * @param filteredEntries - The entries to display, or `null` to use the
- *   full unfiltered list.
- */
-function renderEntryList(filteredEntries = null) {
-    const listToRender = filteredEntries || entries;
-
-    if (listToRender.length === 0) {
-        entryList.innerHTML = '<div style="text-align:center; padding:2rem; color:var(--color-text-muted)">No entries found</div>';
-        return;
-    }
-
-    entryList.innerHTML = listToRender.map(entry => `
-        <div class="entry-item ${currentEntry?.entry_id === entry.entry_id ? 'active' : ''}" data-id="${entry.entry_id}">
-            <div class="entry-item-title">${escapeHtml(entry.title)}</div>
-            <div class="entry-item-username">${escapeHtml(entry.username)}</div>
-        </div>
-    `).join('');
-
-    // Add click listeners
-    document.querySelectorAll('.entry-item').forEach(item => {
-        item.addEventListener('click', () => loadEntry(parseInt(item.dataset.id)));
-    });
-}
-
-/**
- * Fetch a single entry by ID from the backend and populate the detail pane.
- *
- * Updates the sidebar active state, fills the form fields (title, username,
- * password, URL, notes), refreshes favourite state, metadata timestamps, and
- * TOTP availability.
- *
- * @param entryId - The numeric entry ID to load.
- */
-async function loadEntry(entryId) {
-    try {
-        const entry = await invoke('get_entry', { entryId });
-        currentEntry = entry;
-
-        // Update active state in list
-        document.querySelectorAll('.entry-item').forEach(item => {
-            item.classList.toggle('active', parseInt(item.dataset.id) === entryId);
-        });
-
-        // Show entry detail
-        noSelection.classList.add('hidden');
-        entryDetail.classList.remove('hidden');
-
-        // Populate form
-        document.getElementById('detail-title').value = entry.title;
-        document.getElementById('detail-username').value = entry.username;
-        document.getElementById('detail-password').value = entry.password;
-        document.getElementById('detail-url').value = entry.url || '';
-        document.getElementById('detail-notes').value = entry.notes || '';
-        updateUrlOpenButtonState();
-
-        // Update favorite button
-        const favBtn = document.getElementById('detail-favorite');
-        favBtn.classList.toggle('active', entry.favorite);
-
-        // Update metadata
-        document.getElementById('detail-created').textContent = `Created: ${formatDate(entry.created_at)}`;
-        document.getElementById('detail-modified').textContent = `Modified: ${formatDate(entry.modified_at)}`;
-        await updateTotpAvailability(entry.entry_id);
-    } catch (error) {
-        showToast(error, 'error');
-    }
-}
-
-/**
- * Clear the detail pane and prepare it for creating a new entry.
- *
- * Deselects any active list item, blanks all form fields, resets favourite
- * state, and disables TOTP buttons.
- */
-function createNewEntry() {
-    currentEntry = null;
-    currentTotpMetadata = null;
-
-    // Clear active state in list
-    document.querySelectorAll('.entry-item').forEach(item => item.classList.remove('active'));
-
-    // Show entry detail
-    noSelection.classList.add('hidden');
-    entryDetail.classList.remove('hidden');
-
-    // Clear form
-    document.getElementById('detail-title').value = '';
-    document.getElementById('detail-username').value = '';
-    document.getElementById('detail-password').value = '';
-    document.getElementById('detail-url').value = '';
-    document.getElementById('detail-notes').value = '';
-    updateUrlOpenButtonState();
-
-    // Reset favorite button
-    document.getElementById('detail-favorite').classList.remove('active');
-
-    // Clear metadata
-    document.getElementById('detail-created').textContent = '';
-    document.getElementById('detail-modified').textContent = '';
-    setTotpButtonState(false, false);
-
-    document.getElementById('detail-title').focus();
-}
-
-/**
- * Persist the current detail-pane contents as a new or updated entry.
- *
- * Validates required fields (title, username, password), then calls
- * `add_entry` or `update_entry` as appropriate.  Refreshes the entry list
- * and re-selects the saved entry on success.
- */
-async function saveEntry() {
-    const entry = {
-        entry_id: currentEntry?.entry_id || null,
-        title: document.getElementById('detail-title').value,
-        username: document.getElementById('detail-username').value,
-        password: document.getElementById('detail-password').value,
-        url: document.getElementById('detail-url').value || null,
-        notes: document.getElementById('detail-notes').value || null,
-        favorite: document.getElementById('detail-favorite').classList.contains('active'),
-        created_at: currentEntry?.created_at || new Date().toISOString(),
-        modified_at: new Date().toISOString()
-    };
-
-    if (!entry.title || !entry.username || !entry.password) {
-        showToast('Please fill in all required fields', 'warning');
-        return;
-    }
-
-    try {
-        if (currentEntry) {
-            await invoke('update_entry', { entryId: currentEntry.entry_id, entry });
-            showToast('Entry updated successfully!', 'success');
-        } else {
-            const entryId = await invoke('add_entry', { entry });
-            entry.entry_id = entryId;
-            showToast('Entry created successfully!', 'success');
-        }
-
-        currentEntry = entry;
-        await loadEntries();
-        loadEntry(entry.entry_id);
-    } catch (error) {
-        showToast(error, 'error');
-    }
-}
-
-/**
- * Delete the currently-selected entry after user confirmation.
- *
- * Clears the detail pane and refreshes the entry list on success.
- */
-async function deleteEntry() {
-    if (!currentEntry) return;
-
-    const confirmed = await confirm(`Are you sure you want to delete "${currentEntry.title}"?`, {
-        title: 'Delete Entry',
-        kind: 'warning'
-    });
-
-    if (!confirmed) return;
-
-    try {
-        await invoke('delete_entry', { entryId: currentEntry.entry_id });
-        showToast('Entry deleted successfully!', 'success');
-        currentEntry = null;
-        currentTotpMetadata = null;
-        setTotpButtonState(false, false);
-        await loadEntries();
-        noSelection.classList.remove('hidden');
-        entryDetail.classList.add('hidden');
-    } catch (error) {
-        showToast(error, 'error');
-    }
-}
-
-/** Toggle the favourite CSS class on the detail-pane favourite button. */
-function toggleFavorite() {
-    document.getElementById('detail-favorite').classList.toggle('active');
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -890,11 +555,11 @@ function handleSearch(e) {
  * @param filter - The filter key (`"all"` or `"favorites"`).
  */
 function handleFilter(filter) {
-    currentFilter = filter;
+    setCurrentFilter(filter);
 
     // Update active button
     document.querySelectorAll('.filter-btn').forEach(btn => {
-        btn.classList.toggle('active', btn.dataset.filter === filter);
+        btn.classList.toggle('active', (btn as HTMLElement).dataset.filter === filter);
     });
 
     if (filter === 'all') {
@@ -918,7 +583,7 @@ async function generatePasswordForEntry() {
             length: 16,
             includeSymbols: true
         });
-        document.getElementById('detail-password').value = password;
+        (document.getElementById('detail-password') as HTMLInputElement).value = password;
         showToast('Password generated!', 'success');
     } catch (error) {
         showToast(error, 'error');
@@ -934,8 +599,8 @@ async function generatePasswordForEntry() {
  * contains a non-empty value.
  */
 function updateUrlOpenButtonState() {
-    const urlInput = document.getElementById('detail-url');
-    const openButton = document.getElementById('open-url-btn');
+    const urlInput = document.getElementById('detail-url') as HTMLInputElement | null;
+    const openButton = document.getElementById('open-url-btn') as HTMLButtonElement | null;
     if (!urlInput || !openButton) {
         return;
     }
@@ -952,7 +617,7 @@ function updateUrlOpenButtonState() {
  * system browser via the Tauri shell plugin.
  */
 async function openEntryUrl() {
-    const urlInput = document.getElementById('detail-url');
+    const urlInput = document.getElementById('detail-url') as HTMLInputElement | null;
     if (!urlInput) {
         showToast('URL field unavailable', 'error');
         return;
@@ -975,294 +640,14 @@ async function openEntryUrl() {
     }
 }
 
-// ──────────────────────────────────────────────────────────────────────────────
-// TOTP Management
-// ──────────────────────────────────────────────────────────────────────────────
-
-/**
- * Query the backend for TOTP metadata on the given entry and update the
- * TOTP button states (copy, configure, remove) accordingly.
- *
- * @param entryId - The entry ID to check, or falsy to reset TOTP state.
- */
-async function updateTotpAvailability(entryId) {
-    if (!entryId) {
-        currentTotpMetadata = null;
-        setTotpButtonState(false, false);
-        return;
-    }
-
-    try {
-        const metadata = await invoke('get_totp_metadata', { entryId });
-        currentTotpMetadata = normalizeTotpMetadata(metadata);
-        setTotpButtonState(true, Boolean(currentTotpMetadata));
-    } catch (error) {
-        console.error('Error checking TOTP status:', error);
-        currentTotpMetadata = null;
-        setTotpButtonState(true, false);
-    }
-}
-
-/**
- * Enable or disable the TOTP copy, configure, and remove buttons.
- *
- * @param hasSelection - Whether an entry is currently selected.
- * @param configured - Whether the selected entry has TOTP configured.
- */
-function setTotpButtonState(hasSelection, configured) {
-    const copyButton = document.getElementById('copy-totp');
-    const configureButton = document.getElementById('configure-totp');
-    const removeButton = document.getElementById('remove-totp');
-    if (!copyButton || !configureButton || !removeButton) return;
-
-    const canCopyOrRemove = hasSelection && configured;
-    copyButton.disabled = !canCopyOrRemove;
-    copyButton.title = canCopyOrRemove ? 'Copy TOTP code' : 'No TOTP configured';
-
-    configureButton.disabled = !hasSelection;
-    configureButton.title = hasSelection
-        ? (configured ? 'Update TOTP' : 'Configure TOTP')
-        : 'Select a saved entry first';
-
-    removeButton.disabled = !canCopyOrRemove;
-    removeButton.title = canCopyOrRemove ? 'Remove TOTP' : 'No TOTP configured';
-}
-
-/**
- * Normalise raw TOTP metadata from the backend into a consistent shape.
- *
- * @param metadata - The raw metadata object (may use snake_case or camelCase keys).
- * @returns A normalised object with `algorithm`, `digits`, `period`, `issuer`,
- *   and `accountName`, or `null` if no metadata was provided.
- */
-function normalizeTotpMetadata(metadata) {
-    if (!metadata) return null;
-    return {
-        algorithm: String(metadata.algorithm || 'sha1').toLowerCase(),
-        digits: Number(metadata.digits || 6),
-        period: Number(metadata.period || 30),
-        issuer: metadata.issuer || '',
-        accountName: metadata.account_name || metadata.accountName || ''
-    };
-}
-
-/**
- * Copy the current entry's TOTP code to the clipboard, showing the number
- * of seconds remaining before the code rotates.
- */
-async function copyTotpForEntry() {
-    if (!currentEntry?.entry_id) {
-        showToast('Select an entry first', 'warning');
-        return;
-    }
-
-    try {
-        const response = await invoke('get_totp_code', { entryId: currentEntry.entry_id });
-        const code = response.code;
-        const secondsRemaining = response.seconds_remaining ?? response.secondsRemaining;
-        await writeText(code);
-        showToast(`TOTP copied (${secondsRemaining}s remaining)`, 'success');
-    } catch (error) {
-        showToast(error, 'error');
-        await updateTotpAvailability(currentEntry.entry_id);
-    }
-}
-
-/**
- * Open the TOTP configuration modal, pre-populated with existing metadata
- * if the entry already has TOTP configured.
- */
-function openTotpModal() {
-    if (!currentEntry?.entry_id) {
-        showToast('Save the entry before configuring TOTP', 'warning');
-        return;
-    }
-
-    const modal = document.getElementById('totp-modal');
-    const title = document.getElementById('totp-modal-title');
-    const uriInput = document.getElementById('totp-otpauth-uri');
-    const secretInput = document.getElementById('totp-secret');
-    const algorithmInput = document.getElementById('totp-algorithm');
-    const digitsInput = document.getElementById('totp-digits');
-    const periodInput = document.getElementById('totp-period');
-    const issuerInput = document.getElementById('totp-issuer');
-    const accountInput = document.getElementById('totp-account-name');
-
-    if (!modal || !uriInput || !secretInput || !algorithmInput || !digitsInput || !periodInput || !issuerInput || !accountInput) {
-        showToast('TOTP modal unavailable', 'error');
-        return;
-    }
-
-    const metadata = currentTotpMetadata || {
-        algorithm: 'sha1',
-        digits: 6,
-        period: 30,
-        issuer: '',
-        accountName: ''
-    };
-
-    title.textContent = currentTotpMetadata ? 'Update TOTP' : 'Configure TOTP';
-    uriInput.value = '';
-    secretInput.value = '';
-    algorithmInput.value = metadata.algorithm;
-    digitsInput.value = String(metadata.digits);
-    periodInput.value = String(metadata.period);
-    issuerInput.value = metadata.issuer;
-    accountInput.value = metadata.accountName;
-
-    modal.classList.remove('hidden');
-    modal.setAttribute('aria-hidden', 'false');
-    secretInput.focus();
-}
-
-/** Close the TOTP configuration modal and clear its secret inputs. */
-function closeTotpModal() {
-    const modal = document.getElementById('totp-modal');
-    if (!modal) return;
-    const uriInput = document.getElementById('totp-otpauth-uri');
-    const secretInput = document.getElementById('totp-secret');
-    if (uriInput) uriInput.value = '';
-    if (secretInput) secretInput.value = '';
-    modal.classList.add('hidden');
-    modal.setAttribute('aria-hidden', 'true');
-}
-
-/**
- * Persist TOTP configuration from the modal form via the backend.
- *
- * Accepts either an `otpauth://` URI or a raw base32 secret, along with
- * optional algorithm, digits, period, issuer, and account name overrides.
- *
- * @param event - The form `submit` event (default is prevented).
- */
-async function saveTotpForEntry(event) {
-    event.preventDefault();
-
-    if (!currentEntry?.entry_id) {
-        showToast('Save the entry before configuring TOTP', 'warning');
-        return;
-    }
-
-    const uri = document.getElementById('totp-otpauth-uri').value.trim();
-    const secret = document.getElementById('totp-secret').value.trim();
-    const algorithm = document.getElementById('totp-algorithm').value;
-    const digits = Number(document.getElementById('totp-digits').value);
-    const period = Number(document.getElementById('totp-period').value);
-    const issuer = document.getElementById('totp-issuer').value.trim();
-    const accountName = document.getElementById('totp-account-name').value.trim();
-
-    if (!uri && !secret) {
-        showToast('Provide otpauth URI or base32 secret', 'warning');
-        return;
-    }
-
-    try {
-        await invoke('set_totp', {
-            entryId: currentEntry.entry_id,
-            secret: secret || null,
-            otpauthUri: uri || null,
-            algorithm,
-            digits,
-            period,
-            issuer: issuer || null,
-            accountName: accountName || null
-        });
-        closeTotpModal();
-        await updateTotpAvailability(currentEntry.entry_id);
-        showToast('TOTP configuration saved', 'success');
-    } catch (error) {
-        showToast(error, 'error');
-    }
-}
-
-/**
- * Remove TOTP configuration for the currently-selected entry after user
- * confirmation.
- */
-async function removeTotpForEntry() {
-    if (!currentEntry?.entry_id) {
-        showToast('Select an entry first', 'warning');
-        return;
-    }
-
-    if (!currentTotpMetadata) {
-        showToast('No TOTP configured for this entry', 'warning');
-        return;
-    }
-
-    const confirmed = await confirm('Remove TOTP configuration for this entry?', {
-        title: 'Remove TOTP',
-        kind: 'warning'
-    });
-    if (!confirmed) return;
-
-    try {
-        await invoke('remove_totp', { entryId: currentEntry.entry_id });
-        currentTotpMetadata = null;
-        setTotpButtonState(true, false);
-        showToast('TOTP removed', 'success');
-    } catch (error) {
-        showToast(error, 'error');
-    }
+/** Toggle the favourite CSS class on the detail-pane favourite button. */
+function toggleFavorite() {
+    document.getElementById('detail-favorite').classList.toggle('active');
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
-// Utility & Helper Functions
+// Biometric Password Prompt
 // ──────────────────────────────────────────────────────────────────────────────
-
-/**
- * Copy a string to the system clipboard via the Tauri clipboard plugin,
- * showing a toast on success.  Automatically clears the clipboard after
- * 30 seconds if the content has not changed.
- *
- * @param text - The text to copy.
- * @param label - A human-readable label for the toast (e.g. "Password").
- */
-async function copyToClipboard(text, label) {
-    if (!text) {
-        showToast('Nothing to copy', 'warning');
-        return;
-    }
-
-    try {
-        await writeText(text);
-        showToast(`${label} copied to clipboard!`, 'success');
-
-        // Auto-clear after 30 seconds
-        setTimeout(async () => {
-            try {
-                const clipboard = await readText();
-                if (clipboard === text) {
-                    await writeText('');
-                    showToast('Clipboard cleared', 'success');
-                }
-            } catch (clearError) {
-                console.warn('Failed to clear clipboard:', clearError);
-            }
-        }, 30000);
-    } catch (error) {
-        showToast(error, 'error');
-    }
-}
-
-/**
- * Toggle a password input between `type="password"` and `type="text"`,
- * swapping the adjacent button's eye icon accordingly.
- *
- * @param inputId - The DOM id of the `<input>` element to toggle.
- */
-function togglePasswordVisibility(inputId) {
-    const input = document.getElementById(inputId);
-    const button = input.nextElementSibling || input.parentElement.querySelector('.btn-icon');
-
-    if (input.type === 'password') {
-        input.type = 'text';
-        if (button) button.innerHTML = `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-5.06 5.94M1 1l22 22"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-5.06 5.94M1 1l22 22"/></svg>`;
-    } else {
-        input.type = 'password';
-        if (button) button.innerHTML = `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>`;
-    }
-}
 
 /**
  * Show a secure modal prompting the user to re-enter their master password
@@ -1279,7 +664,7 @@ async function requestMasterPasswordForBiometric(methodName) {
     const title = document.getElementById('secure-password-title');
     const description = document.getElementById('secure-password-description');
     const form = document.getElementById('secure-password-form');
-    const input = document.getElementById('secure-master-password');
+    const input = document.getElementById('secure-master-password') as HTMLInputElement;
     const cancelButton = document.getElementById('cancel-secure-password');
     const toggleButton = document.getElementById('toggle-secure-master-password');
 
@@ -1351,54 +736,6 @@ async function requestMasterPasswordForBiometric(methodName) {
         toggleButton.addEventListener('click', onToggleVisibility);
         modal.addEventListener('click', onOverlayClick);
         document.addEventListener('keydown', onEscape);
-    });
-}
-
-/**
- * Display a transient toast notification that auto-dismisses after 3 seconds.
- *
- * @param message - The message text to display.
- * @param type - The toast style: `"success"`, `"warning"`, or `"error"`.
- */
-function showToast(message, type = 'success') {
-    const container = document.getElementById('toast-container');
-    const toast = document.createElement('div');
-    toast.className = `toast ${type}`;
-    toast.textContent = message;
-    container.appendChild(toast);
-
-    setTimeout(() => {
-        toast.remove();
-    }, 3000);
-}
-
-/**
- * Safely escape a string for insertion into HTML to prevent XSS.
- *
- * @param text - The raw text to escape.
- * @returns The HTML-safe string.
- */
-function escapeHtml(text) {
-    const div = document.createElement('div');
-    div.textContent = text;
-    return div.innerHTML;
-}
-
-/**
- * Format an ISO date string into a short human-readable form
- * (e.g. "Feb 16, 2026, 03:45 PM").
- *
- * @param dateString - An ISO 8601 date string.
- * @returns The formatted date string.
- */
-function formatDate(dateString) {
-    const date = new Date(dateString);
-    return date.toLocaleDateString('en-US', {
-        year: 'numeric',
-        month: 'short',
-        day: 'numeric',
-        hour: '2-digit',
-        minute: '2-digit'
     });
 }
 

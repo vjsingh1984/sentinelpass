@@ -299,6 +299,14 @@ See `browser-extension/chrome/DEBUGGING.md` for detailed debugging guide.
 - IPC uses Unix domain sockets
 - Native messaging: `~/.config/mozilla/native-messaging-hosts/`
 
+### Tauri v2 Plugin Permissions
+
+Tauri v2 uses a capability-based ACL. Every plugin command must be:
+1. Initialized in `main.rs` via `.plugin(tauri_plugin_*::init())`
+2. Granted in `src-tauri/capabilities/default.json`
+
+Current plugins: clipboard-manager, shell, dialog. See `default.json` for the full permission list.
+
 ## Common Development Workflows
 
 ### Adding a New Credential Field

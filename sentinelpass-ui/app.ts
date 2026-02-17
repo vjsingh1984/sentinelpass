@@ -165,6 +165,23 @@ function setupEventListeners() {
         });
     }
 
+    // Browser Extensions modal
+    const extensionsBtn = document.getElementById('extensions-btn');
+    if (extensionsBtn) {
+        extensionsBtn.addEventListener('click', openExtensionModal);
+    }
+    document.getElementById('close-extension-modal')?.addEventListener('click', closeExtensionModal);
+    document.getElementById('reregister-native-host')?.addEventListener('click', reregisterNativeHost);
+    document.getElementById('open-chrome-extensions')?.addEventListener('click', () => openBrowserExtensionsPage('chrome'));
+    document.getElementById('open-firefox-extensions')?.addEventListener('click', () => openBrowserExtensionsPage('firefox'));
+
+    const extensionModal = document.getElementById('extension-modal');
+    if (extensionModal) {
+        extensionModal.addEventListener('click', (event) => {
+            if (event.target === extensionModal) closeExtensionModal();
+        });
+    }
+
     // Toggle password visibility in welcome screen
     document.getElementById('toggle-password').addEventListener('click', () => togglePasswordVisibility('master-password'));
     updateUrlOpenButtonState();
@@ -643,6 +660,70 @@ async function openEntryUrl() {
 /** Toggle the favourite CSS class on the detail-pane favourite button. */
 function toggleFavorite() {
     document.getElementById('detail-favorite').classList.toggle('active');
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Browser Extensions Modal
+// ──────────────────────────────────────────────────────────────────────────────
+
+/** Open the browser extensions modal and check native host status. */
+async function openExtensionModal() {
+    const modal = document.getElementById('extension-modal');
+    if (!modal) return;
+    modal.classList.remove('hidden');
+    modal.setAttribute('aria-hidden', 'false');
+
+    // Check native host status
+    const dot = document.getElementById('native-host-dot');
+    const statusText = document.getElementById('native-host-status');
+    if (dot && statusText) {
+        try {
+            await invoke('register_native_host');
+            dot.classList.remove('error');
+            dot.classList.add('success');
+            statusText.textContent = 'Registered';
+        } catch {
+            dot.classList.remove('success');
+            dot.classList.add('error');
+            statusText.textContent = 'Not registered';
+        }
+    }
+}
+
+/** Close the browser extensions modal. */
+function closeExtensionModal() {
+    const modal = document.getElementById('extension-modal');
+    if (!modal) return;
+    modal.classList.add('hidden');
+    modal.setAttribute('aria-hidden', 'true');
+}
+
+/** Re-register native messaging host manifests and update the status indicator. */
+async function reregisterNativeHost() {
+    try {
+        await invoke('register_native_host');
+        const dot = document.getElementById('native-host-dot');
+        const statusText = document.getElementById('native-host-status');
+        if (dot) { dot.classList.remove('error'); dot.classList.add('success'); }
+        if (statusText) { statusText.textContent = 'Registered'; }
+        showToast('Native host re-registered successfully', 'success');
+    } catch (error) {
+        const dot = document.getElementById('native-host-dot');
+        const statusText = document.getElementById('native-host-status');
+        if (dot) { dot.classList.remove('success'); dot.classList.add('error'); }
+        if (statusText) { statusText.textContent = 'Registration failed'; }
+        showToast(error, 'error');
+    }
+}
+
+/** Open the browser's extensions management page. */
+async function openBrowserExtensionsPage(browser: string) {
+    try {
+        await invoke('open_browser_extensions_page', { browser });
+        showToast(`Opened ${browser} extensions page`, 'success');
+    } catch (error) {
+        showToast(error, 'error');
+    }
 }
 
 // ──────────────────────────────────────────────────────────────────────────────

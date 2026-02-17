@@ -1037,6 +1037,107 @@ async fn register_native_host() -> Result<String, String> {
     Ok("Native messaging host registered for all browsers".to_string())
 }
 
+// Command: Open browser extensions/add-ons page
+#[tauri::command]
+async fn open_browser_extensions_page(browser: String) -> Result<(), String> {
+    match browser.to_lowercase().as_str() {
+        "chrome" | "chromium" => {
+            #[cfg(target_os = "macos")]
+            {
+                Command::new("open")
+                    .arg("-a")
+                    .arg("Google Chrome")
+                    .arg("chrome://extensions")
+                    .spawn()
+                    .map_err(|e| format!("Failed to open Chrome extensions page: {}", e))?;
+            }
+            #[cfg(target_os = "windows")]
+            {
+                // Try common Chrome install locations
+                let chrome_paths = [
+                    r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+                    r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+                ];
+                let mut launched = false;
+                for path in &chrome_paths {
+                    if std::path::Path::new(path).exists() {
+                        Command::new(path)
+                            .arg("chrome://extensions")
+                            .spawn()
+                            .map_err(|e| format!("Failed to open Chrome extensions page: {}", e))?;
+                        launched = true;
+                        break;
+                    }
+                }
+                if !launched {
+                    return Err("Chrome not found at expected locations".to_string());
+                }
+            }
+            #[cfg(all(unix, not(target_os = "macos")))]
+            {
+                let browsers = [
+                    "google-chrome",
+                    "google-chrome-stable",
+                    "chromium-browser",
+                    "chromium",
+                ];
+                let mut launched = false;
+                for bin in &browsers {
+                    if Command::new(bin).arg("chrome://extensions").spawn().is_ok() {
+                        launched = true;
+                        break;
+                    }
+                }
+                if !launched {
+                    return Err("Chrome/Chromium not found".to_string());
+                }
+            }
+        }
+        "firefox" => {
+            #[cfg(target_os = "macos")]
+            {
+                Command::new("open")
+                    .arg("-a")
+                    .arg("Firefox")
+                    .arg("about:addons")
+                    .spawn()
+                    .map_err(|e| format!("Failed to open Firefox add-ons page: {}", e))?;
+            }
+            #[cfg(target_os = "windows")]
+            {
+                let firefox_paths = [
+                    r"C:\Program Files\Mozilla Firefox\firefox.exe",
+                    r"C:\Program Files (x86)\Mozilla Firefox\firefox.exe",
+                ];
+                let mut launched = false;
+                for path in &firefox_paths {
+                    if std::path::Path::new(path).exists() {
+                        Command::new(path)
+                            .arg("about:addons")
+                            .spawn()
+                            .map_err(|e| format!("Failed to open Firefox add-ons page: {}", e))?;
+                        launched = true;
+                        break;
+                    }
+                }
+                if !launched {
+                    return Err("Firefox not found at expected locations".to_string());
+                }
+            }
+            #[cfg(all(unix, not(target_os = "macos")))]
+            {
+                Command::new("firefox")
+                    .arg("about:addons")
+                    .spawn()
+                    .map_err(|e| format!("Failed to open Firefox add-ons page: {}", e))?;
+            }
+        }
+        _ => return Err(format!("Unknown browser: {}", browser)),
+    }
+
+    Ok(())
+}
+
 fn normalize_url_for_launch(url: &str) -> Result<String, String> {
     let trimmed = url.trim();
     if trimmed.is_empty() {
@@ -1185,6 +1286,7 @@ fn main() {
             remove_totp,
             open_entry_url,
             register_native_host,
+            open_browser_extensions_page,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

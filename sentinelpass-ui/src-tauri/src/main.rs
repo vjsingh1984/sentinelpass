@@ -291,23 +291,6 @@ async fn unlock_daemon_with_password(master_password: &str) -> std::result::Resu
     }
 }
 
-async fn unlock_daemon_with_biometric() -> std::result::Result<(), String> {
-    unlock_debug_log("unlock_daemon_with_biometric: requesting daemon biometric unlock");
-    let response = send_daemon_message(IpcMessage::UnlockVaultBiometric {
-        prompt_reason: Some("Unlock SentinelPass daemon for browser integration".to_string()),
-    })
-    .await?;
-
-    match response {
-        IpcMessage::UnlockVaultResponse { success, error } if success => Ok(()),
-        IpcMessage::UnlockVaultResponse {
-            success: false,
-            error,
-        } => Err(error.unwrap_or_else(|| "Daemon biometric unlock failed".to_string())),
-        _ => Err("Unexpected daemon response while biometric unlocking".to_string()),
-    }
-}
-
 async fn fetch_daemon_status() -> DaemonStatus {
     unlock_debug_log("fetch_daemon_status: querying daemon lock state");
     match send_daemon_message(IpcMessage::CheckVault).await {
@@ -676,23 +659,40 @@ async fn unlock_vault_biometric(state: State<'_, AppState>) -> Result<String, St
         return Err("No vault found".to_string());
     }
 
-    match VaultManager::open_with_biometric(&vault_path, "Unlock SentinelPass vault") {
+    // Retrieve master password via biometric first (single Touch ID prompt),
+    // then use it to unlock both the local vault and the daemon.  The daemon
+    // runs headless and cannot show its own biometric prompt.
+    let mut master_password = VaultManager::retrieve_master_password_via_biometric(
+        &vault_path,
+        "Unlock SentinelPass vault",
+    )
+    .map_err(|e| {
+        unlock_debug_log(&format!(
+            "unlock_vault_biometric: biometric password retrieval failed: {}",
+            e
+        ));
+        format!("Failed biometric unlock: {}", e)
+    })?;
+
+    let password_str = String::from_utf8_lossy(&master_password).to_string();
+
+    match VaultManager::open(&vault_path, &master_password) {
         Ok(vault) => {
-            unlock_debug_log("unlock_vault_biometric: local vault biometric unlock success");
+            unlock_debug_log("unlock_vault_biometric: local vault unlock success");
             *state.vault_manager.lock().unwrap() = Some(vault);
-            match ensure_daemon_running(&state).await {
-                Ok(_) => match unlock_daemon_with_biometric().await {
+            let daemon_result = match ensure_daemon_running(&state).await {
+                Ok(_) => match unlock_daemon_with_password(&password_str).await {
                     Ok(_) => {
-                        unlock_debug_log("unlock_vault_biometric: daemon biometric unlock success");
+                        unlock_debug_log("unlock_vault_biometric: daemon password unlock success");
                         Ok("Vault unlocked successfully via biometric authentication".to_string())
                     }
                     Err(error) => {
                         unlock_debug_log(&format!(
-                            "unlock_vault_biometric: daemon biometric unlock failed: {}",
+                            "unlock_vault_biometric: daemon password unlock failed: {}",
                             error
                         ));
                         Ok(format!(
-                            "Vault unlocked in app, but daemon biometric unlock failed: {}. Browser integration may still require unlock.",
+                            "Vault unlocked in app, but daemon unlock failed: {}. Browser integration may still require unlock.",
                             error
                         ))
                     }
@@ -707,11 +707,19 @@ async fn unlock_vault_biometric(state: State<'_, AppState>) -> Result<String, St
                         error
                     ))
                 }
-            }
+            };
+
+            // Zeroize the password material before returning.
+            use zeroize::Zeroize;
+            master_password.zeroize();
+
+            daemon_result
         }
         Err(e) => {
+            use zeroize::Zeroize;
+            master_password.zeroize();
             unlock_debug_log(&format!(
-                "unlock_vault_biometric: local biometric unlock failed: {}",
+                "unlock_vault_biometric: local vault unlock failed: {}",
                 e
             ));
             Err(format!("Failed biometric unlock: {}", e))

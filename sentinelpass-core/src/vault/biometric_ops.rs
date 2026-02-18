@@ -79,6 +79,53 @@ impl VaultManager {
         Ok(vault_manager)
     }
 
+    /// Perform biometric authentication and retrieve the stored master password.
+    ///
+    /// This is intended for scenarios where the caller needs the master password
+    /// to relay it to another process (e.g. the daemon) that cannot perform its
+    /// own biometric prompt because it runs headless.  The caller is responsible
+    /// for zeroizing the returned password after use.
+    pub fn retrieve_master_password_via_biometric<P: AsRef<Path>>(
+        path: P,
+        reason: &str,
+    ) -> Result<Vec<u8>> {
+        let vault_path = path.as_ref().to_path_buf();
+        let db = Database::open(&vault_path)?;
+
+        let biometric_ref = Self::load_biometric_ref(&db)?.ok_or_else(|| {
+            PasswordManagerError::NotFound("Biometric unlock configuration".to_string())
+        })?;
+
+        match crate::biometric::BiometricManager::authenticate(reason) {
+            crate::biometric::BiometricResult::Success => {}
+            crate::biometric::BiometricResult::Cancelled => {
+                return Err(PasswordManagerError::InvalidInput(
+                    "Biometric authentication was cancelled".to_string(),
+                ));
+            }
+            crate::biometric::BiometricResult::NotAvailable => {
+                return Err(PasswordManagerError::NotFound(format!(
+                    "{} is not available on this system",
+                    crate::biometric::BiometricManager::get_method_name()
+                )));
+            }
+            crate::biometric::BiometricResult::NotEnrolled => {
+                return Err(PasswordManagerError::NotFound(format!(
+                    "{} is not enrolled on this system",
+                    crate::biometric::BiometricManager::get_method_name()
+                )));
+            }
+            crate::biometric::BiometricResult::Failed(err) => {
+                return Err(PasswordManagerError::from(DatabaseError::Other(format!(
+                    "Biometric authentication failed: {}",
+                    err
+                ))));
+            }
+        }
+
+        crate::biometric::BiometricManager::load_master_password(&biometric_ref)
+    }
+
     /// Check whether biometric unlock is configured for a vault path.
     pub fn is_biometric_unlock_enabled<P: AsRef<Path>>(path: P) -> Result<bool> {
         let db = Database::open(path)?;

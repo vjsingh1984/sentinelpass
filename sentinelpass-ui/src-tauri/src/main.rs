@@ -291,7 +291,6 @@ async fn unlock_daemon_with_password(master_password: &str) -> std::result::Resu
     }
 }
 
-
 async fn fetch_daemon_status() -> DaemonStatus {
     unlock_debug_log("fetch_daemon_status: querying daemon lock state");
     match send_daemon_message(IpcMessage::CheckVault).await {
@@ -684,9 +683,7 @@ async fn unlock_vault_biometric(state: State<'_, AppState>) -> Result<String, St
             let daemon_result = match ensure_daemon_running(&state).await {
                 Ok(_) => match unlock_daemon_with_password(&password_str).await {
                     Ok(_) => {
-                        unlock_debug_log(
-                            "unlock_vault_biometric: daemon password unlock success",
-                        );
+                        unlock_debug_log("unlock_vault_biometric: daemon password unlock success");
                         Ok("Vault unlocked successfully via biometric authentication".to_string())
                     }
                     Err(error) => {

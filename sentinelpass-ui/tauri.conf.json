@@ -50,8 +50,6 @@
   "plugins": {
     "shell": {
       "open": true
-    },
-    "dialog": {},
-    "clipboard-manager": {}
+    }
   }
 }

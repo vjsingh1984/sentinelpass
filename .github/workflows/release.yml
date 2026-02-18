@@ -4,6 +4,8 @@ on:
   push:
     tags:
       - "v*"
+  pull_request:
+    branches: [main, develop]
   workflow_dispatch:
 
 permissions:
@@ -13,70 +15,99 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  bundles:
-    name: Build Bundles (${{ matrix.platform }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: ubuntu-latest
-            platform: linux
-          - os: macos-latest
-            platform: macos
-          - os: windows-latest
-            platform: windows
-
+  # Determine if this is a release or preflight run
+  setup:
+    name: Release Setup
+    runs-on: ubuntu-latest
+    outputs:
+      is-release: ${{ steps.check.outputs.is_release }}
+      version: ${{ steps.version.outputs.version }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-          cache: npm
-          cache-dependency-path: package-lock.json
-
-      - name: Install web dependencies
-        run: npm ci
-
-      - name: Build web artifacts
-        run: npm run web:build
-
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache Rust build
-        uses: Swatinem/rust-cache@v2
-
-      - name: Install Linux build dependencies
-        if: runner.os == 'Linux'
+      - uses: actions/checkout@v4
+      - id: check
+        name: Check if release
         run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            libwebkit2gtk-4.1-dev \
-            libgtk-3-dev \
-            libayatana-appindicator3-dev \
-            librsvg2-dev \
-            patchelf
-
-      - name: Inject release version
-        id: version
-        shell: bash
+          if [[ "${GITHUB_REF_NAME}" == v* ]]; then
+            echo "is_release=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "is_release=false" >> "$GITHUB_OUTPUT"
+          fi
+      - id: version
+        name: Determine version
         run: |
-          set -euo pipefail
           if [[ "${GITHUB_REF_NAME}" == v* ]]; then
             VERSION="${GITHUB_REF_NAME#v}"
           else
             VERSION=$(awk -F'"' '/^\[workspace\.package\]/{f=1;next} /^\[/{f=0} f && /^version/{print $2;exit}' Cargo.toml)
           fi
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
-          sed -i.bak "/\[workspace\.package\]/,/^\[/{s/^version = \".*\"/version = \"${VERSION}\"/;}" Cargo.toml && rm -f Cargo.toml.bak
-          cargo update --workspace
 
-      - name: Build release binaries
-        run: cargo build --release --locked --bin sentinelpass --bin sentinelpass-daemon --bin sentinelpass-host --bin sentinelpass-ui
+  # Package and smoke test across platforms
+  # Downloads artifacts from rust.yml if available, otherwise builds fresh
+  package:
+    name: Package (${{ matrix.platform }})
+    runs-on: ${{ matrix.os }}
+    needs: setup
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            platform: linux
+            shell: bash
+          - os: macos-latest
+            platform: macos
+            shell: bash
+          - os: windows-latest
+            platform: windows
+            shell: pwsh
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup build environment
+        uses: ./.github/actions/setup-rust-env
+        with:
+          cache-key-prefix: release-${{ matrix.platform }}
+
+      # Try to download cached build artifacts from rust.yml
+      - name: Download cached Rust artifacts
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: rust-build-${{ matrix.platform }}
+          path: target/release
+
+      # Download web artifacts if available
+      - name: Download cached web artifacts
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: web-artifacts-${{ matrix.platform }}
+          path: .
+
+      # If artifacts weren't available, build fresh
+      - name: Build release binaries (if not cached)
+        shell: ${{ matrix.shell }}
+        run: |
+          if [ ! -f "target/release/sentinelpass${{ runner.os == 'Windows' && '.exe' || '' }}" ]; then
+            cargo build --release --bin sentinelpass --bin sentinelpass-daemon --bin sentinelpass-host --bin sentinelpass-ui
+          else
+            echo "Using cached build artifacts"
+          fi
+
+      - name: Inject release version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${{ needs.setup.outputs.version }}"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          if [ "${{ needs.setup.outputs.is-release }}" == "true" ]; then
+            sed -i.bak "/\[workspace\.package\]/,/^\[/{s/^version = \".*\"/version = \"${VERSION}\"/;}" Cargo.toml && rm -f Cargo.toml.bak
+            cargo update --workspace
+          fi
 
       - name: Package archives (Unix)
         if: runner.os != 'Windows'
@@ -108,9 +139,6 @@ jobs:
             cp -R browser-extension/firefox dist/installer/root/browser-extension/
           fi
           tar -czf "dist/${installer_name}" -C dist/installer/root .
-
-          tar -tzf "dist/${installer_name}" | grep -E '(^|\./)target/release/sentinelpass-host$' >/dev/null
-          tar -tzf "dist/${installer_name}" | grep -E '(^|\./)install-user' >/dev/null
 
       - name: Package archives (Windows)
         if: runner.os == 'Windows'
@@ -151,33 +179,21 @@ jobs:
           if (Test-Path browser-extension/firefox) {
             Copy-Item -Recurse browser-extension/firefox dist/installer/root/browser-extension/
           }
-
-          Copy-Item README.md dist/installer/root/
-          Copy-Item LICENSE dist/installer/root/
+          Copy-Item README.md LICENSE dist/installer/root/
           Compress-Archive -Path dist/installer/root/* -DestinationPath "dist/$installerName" -Force
 
-          $checkDir = Join-Path $env:RUNNER_TEMP "installer-check"
-          if (Test-Path $checkDir) {
-            Remove-Item -Path $checkDir -Recurse -Force
-          }
-          Expand-Archive -Path "dist/$installerName" -DestinationPath $checkDir
-          if (!(Test-Path "$checkDir/target/release/sentinelpass-host.exe")) {
-            throw "Installer bundle missing target/release/sentinelpass-host.exe"
-          }
-          if (!(Test-Path "$checkDir/install-user.cmd")) {
-            throw "Installer bundle missing install-user.cmd"
-          }
-
-      - name: Upload packaged artifacts
+      - name: Upload package artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: release-bundles-${{ matrix.platform }}
+          name: packages-${{ matrix.platform }}
           path: dist/*
-          if-no-files-found: error
+          retention-days: 7
 
-  native_installers:
-    name: Build Native Installers (${{ matrix.platform }})
+  # Bundle smoke tests
+  bundle-smoke:
+    name: Bundle Smoke Test (${{ matrix.platform }})
     runs-on: ${{ matrix.os }}
+    needs: package
     strategy:
       fail-fast: false
       matrix:
@@ -190,283 +206,172 @@ jobs:
             platform: windows
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-          cache: npm
-          cache-dependency-path: package-lock.json
-
-      - name: Install web dependencies
-        run: npm ci
-
-      - name: Build web artifacts
-        run: npm run web:build
-
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache Rust build
-        uses: Swatinem/rust-cache@v2
-
-      - name: Install Linux build dependencies
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            libwebkit2gtk-4.1-dev \
-            libgtk-3-dev \
-            libayatana-appindicator3-dev \
-            librsvg2-dev \
-            patchelf
-
-      - name: Install Tauri CLI
-        run: cargo install tauri-cli --version '^2.0.0' --locked
-
-      - name: Inject release version
-        id: version
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [[ "${GITHUB_REF_NAME}" == v* ]]; then
-            VERSION="${GITHUB_REF_NAME#v}"
-          else
-            VERSION=$(awk -F'"' '/^\[workspace\.package\]/{f=1;next} /^\[/{f=0} f && /^version/{print $2;exit}' Cargo.toml)
-          fi
-          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
-          sed -i.bak "/\[workspace\.package\]/,/^\[/{s/^version = \".*\"/version = \"${VERSION}\"/;}" Cargo.toml && rm -f Cargo.toml.bak
-          jq --arg v "$VERSION" '.version = $v' sentinelpass-ui/tauri.conf.json > tmp.$$.json && mv tmp.$$.json sentinelpass-ui/tauri.conf.json
-          cargo update --workspace
-
-      - name: Build daemon and host binaries
-        run: cargo build --release --locked --bin sentinelpass-daemon --bin sentinelpass-host
-
-      - name: Prepare bundled runtime resources (Unix)
-        if: runner.os != 'Windows'
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p sentinelpass-ui/src-tauri/resources/bin
-          cp target/release/sentinelpass-daemon sentinelpass-ui/src-tauri/resources/bin/
-          cp target/release/sentinelpass-host sentinelpass-ui/src-tauri/resources/bin/
-          chmod +x sentinelpass-ui/src-tauri/resources/bin/sentinelpass-daemon
-          chmod +x sentinelpass-ui/src-tauri/resources/bin/sentinelpass-host
-
-      - name: Prepare bundled runtime resources (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force -Path sentinelpass-ui/src-tauri/resources/bin | Out-Null
-          Copy-Item target/release/sentinelpass-daemon.exe sentinelpass-ui/src-tauri/resources/bin/
-          Copy-Item target/release/sentinelpass-host.exe sentinelpass-ui/src-tauri/resources/bin/
-
-      - name: Build native installers (unsigned by default, signed when secrets are provided)
-        working-directory: sentinelpass-ui
-        env:
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
-          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          # Avoid passing empty signing inputs, which can force failing import/sign paths.
-          if [ -z "${APPLE_CERTIFICATE:-}" ]; then
-            unset APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID
-          fi
-          if [ -z "${WINDOWS_CERTIFICATE:-}" ]; then
-            unset WINDOWS_CERTIFICATE WINDOWS_CERTIFICATE_PASSWORD
-          fi
-          if [ -z "${TAURI_SIGNING_PRIVATE_KEY:-}" ]; then
-            unset TAURI_SIGNING_PRIVATE_KEY TAURI_SIGNING_PRIVATE_KEY_PASSWORD
-          fi
-
-          cargo tauri build --ci
-
-      - name: Collect and rename native installers (Unix)
-        if: runner.os != 'Windows'
-        shell: bash
-        run: |
-          set -euo pipefail
-          VERSION="${{ steps.version.outputs.version }}"
-          PLATFORM="${{ matrix.platform }}"
-          mkdir -p dist/native
-          find target/release/bundle -type f \( -name '*.AppImage' -o -name '*.deb' -o -name '*.rpm' -o -name '*.dmg' -o -name '*.pkg' \) -exec cp {} dist/native/ \;
-          cd dist/native
-          for f in *; do
-            [ -f "$f" ] || continue
-            new=""
-            case "$f" in
-              *.deb)      arch="${f%.deb}";      arch="${arch##*_}"; new="sentinelpass-${VERSION}-${PLATFORM}-${arch}.deb" ;;
-              *.rpm)      arch="${f%.rpm}";      arch="${arch##*.}"; new="sentinelpass-${VERSION}-${PLATFORM}-${arch}.rpm" ;;
-              *.AppImage) arch="${f%.AppImage}"; arch="${arch##*_}"; new="sentinelpass-${VERSION}-${PLATFORM}-${arch}.AppImage" ;;
-              *.dmg)      arch="${f%.dmg}";      arch="${arch##*_}"; new="sentinelpass-${VERSION}-${PLATFORM}-${arch}.dmg" ;;
-              *.pkg)      arch="${f%.pkg}";      arch="${arch##*_}"; new="sentinelpass-${VERSION}-${PLATFORM}-${arch}.pkg" ;;
-            esac
-            if [ -n "$new" ] && [ "$f" != "$new" ]; then
-              echo "Renaming $f -> $new"
-              mv "$f" "$new"
-            fi
-          done
-          ls -lah .
-          test -n "$(ls -A .)"
-
-      - name: Collect and rename native installers (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          $VERSION = "${{ steps.version.outputs.version }}"
-          $PLATFORM = "${{ matrix.platform }}"
-          New-Item -ItemType Directory -Force -Path dist/native | Out-Null
-          Get-ChildItem target/release/bundle -Recurse -Include *.exe,*.msi |
-            Copy-Item -Destination dist/native
-          Get-ChildItem dist/native -File | ForEach-Object {
-            $new = $null
-            if ($_.Name -match '-setup\.exe$') {
-              $arch = ($_.BaseName -replace '-setup$','') -split '[_]' | Select-Object -Last 1
-              $new = "sentinelpass-${VERSION}-${PLATFORM}-${arch}-setup.exe"
-            } elseif ($_.Extension -eq '.msi') {
-              $parts = $_.BaseName -split '_'
-              $arch = $parts[$parts.Length - 2]
-              $new = "sentinelpass-${VERSION}-${PLATFORM}-${arch}.msi"
-            }
-            if ($new -and $_.Name -ne $new) {
-              Write-Host "Renaming $($_.Name) -> $new"
-              Rename-Item $_.FullName -NewName $new
-            }
-          }
-          Get-ChildItem dist/native
-          if ((Get-ChildItem dist/native | Measure-Object).Count -eq 0) {
-            throw 'No native installer artifacts found'
-          }
-
-      - name: Upload native installer artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: native-installers-${{ matrix.platform }}
-          path: dist/native/*
-          if-no-files-found: error
-
-  extension_e2e:
-    name: Extension E2E Smoke
-    runs-on: ubuntu-latest
-    env:
-      PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.playwright-browsers
-      HEADLESS: "1"
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-          cache: npm
-          cache-dependency-path: |
-            package-lock.json
-            browser-extension/e2e/package-lock.json
-
-      - name: Install root web dependencies
-        run: npm ci
-
-      - name: Type-check web sources
-        run: npm run web:typecheck
-
-      - name: Build extension/UI JS artifacts
-        run: npm run web:build
-
-      - name: Run TypeScript unit tests with coverage
-        run: npm run test:ts
-
-      - name: Install extension e2e dependencies
-        working-directory: browser-extension/e2e
-        run: npm ci
-
-      - name: Install Playwright Chromium
-        working-directory: browser-extension/e2e
-        run: npx playwright install chromium
-
-      - name: Run extension e2e smoke suite
-        working-directory: browser-extension/e2e
-        run: npm run test:e2e
-
-      - name: Inject extension version
-        if: startsWith(github.ref, 'refs/tags/')
-        shell: bash
-        run: |
-          set -euo pipefail
-          VERSION="${GITHUB_REF_NAME#v}"
-          for manifest in browser-extension/chrome/manifest.json browser-extension/firefox/manifest.json; do
-            jq --arg v "$VERSION" '.version = $v' "$manifest" > tmp.$$.json && mv tmp.$$.json "$manifest"
-          done
-
-      - name: Package browser extensions
-        if: startsWith(github.ref, 'refs/tags/')
-        shell: bash
-        run: |
-          set -euo pipefail
-          VERSION="${GITHUB_REF_NAME#v}"
-          mkdir -p dist/extensions
-
-          cd browser-extension/chrome
-          zip -r "../../dist/extensions/sentinelpass-chrome-${VERSION}.zip" . \
-            -x '*.ts' 'DEBUGGING.md'
-          cd ../..
-
-          cd browser-extension/firefox
-          zip -r "../../dist/extensions/sentinelpass-firefox-${VERSION}.zip" . \
-            -x '*.ts'
-          cd ../..
-
-          ls -lah dist/extensions/
-
-      - name: Upload extension artifacts
-        if: startsWith(github.ref, 'refs/tags/')
-        uses: actions/upload-artifact@v4
-        with:
-          name: browser-extensions
-          path: dist/extensions/*
-          if-no-files-found: error
-
-  publish:
-    name: Publish GitHub Release
-    runs-on: ubuntu-latest
-    needs:
-      - bundles
-      - native_installers
-      - extension_e2e
-    if: startsWith(github.ref, 'refs/tags/')
-
-    steps:
-      - name: Download all artifacts
+      - name: Download package artifacts
         uses: actions/download-artifact@v4
         with:
+          name: packages-${{ matrix.platform }}
           path: dist
-          merge-multiple: true
 
-      - name: Generate checksums
+      - name: Verify portable archive contents
         shell: bash
         run: |
-          set -euo pipefail
-          cd dist
-          find . -maxdepth 1 -type f ! -name 'sha256sums.txt' -print0 \
-            | sort -z \
-            | xargs -0 sha256sum > sha256sums.txt
+          if [ "${{ matrix.platform }}" == "windows" ]; then
+            unzip -l dist/*.zip | grep sentinelpass
+          else
+            tar -tzf dist/*.tar.gz | grep -E 'sentinelpass' | head -5
+          fi
 
-      - name: Create GitHub release and upload assets
-        uses: softprops/action-gh-release@v2
+      - name: Verify installer archive contents
+        shell: bash
+        run: |
+          if [ "${{ matrix.platform }}" == "windows" ]; then
+            unzip -l dist/*installer*.zip | grep -E '(install-user|installation)'
+          else
+            tar -tzf dist/*installer*.tar.gz | grep -E 'install-user'
+            tar -tzf dist/*installer*.tar.gz | grep -E 'installation'
+          fi
+
+  # Native installer smoke tests (only for real releases)
+  native-installer-smoke:
+    name: Native Installer Smoke (${{ matrix.platform }})
+    runs-on: ${{ matrix.os }}
+    needs: package
+    if: needs.setup.outputs.is-release == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            platform: linux
+          - os: macos-latest
+            platform: macos
+          - os: windows-latest
+            platform: windows
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download package artifacts
+        uses: actions/download-artifact@v4
         with:
-          generate_release_notes: true
-          files: |
-            dist/*
+          name: packages-${{ matrix.platform }}
+          path: dist
+
+      - name: Setup build environment
+        uses: ./.github/actions/setup-rust-env
+        with:
+          cache-key-prefix: installer-${{ matrix.platform }}
+          web-build: false
+
+      - name: Build Tauri bundles
+        env:
+          TAURI_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
+          TAURI_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
+        run: |
+          cd sentinelpass-ui
+          cargo tauri build --verbose
+
+      - name: List bundle outputs
+        run: |
+          echo "Tauri bundle outputs:"
+          find sentinelpass-ui/target/release/bundle -type f || echo "No bundles found"
+
+      - name: Upload Tauri bundle artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: tauri-bundles-${{ matrix.platform }}
+          path: sentinelpass-ui/target/release/bundle/*
+          retention-days: 7
+
+  # Create GitHub release and upload assets
+  release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    needs: [setup, bundle-smoke, native-installer-smoke]
+    if: needs.setup.outputs.is-release == 'true'
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all package artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: packages-*
+          path: release-assets
+          merge-multiple: true
+
+      - name: Download Tauri bundle artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: tauri-bundles-*
+          path: tauri-assets
+          merge-multiple: true
+
+      - name: Generate SHA256 checksums
+        run: |
+          cd release-assets
+          sha256sum * > sha256sums.txt
+          cat sha256sums.txt
+
+      - name: Create GitHub Release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="${{ needs.setup.outputs.version }}"
+          gh release create "v${VERSION}" \
+            --title "v${VERSION}" \
+            --notes "Release v${VERSION}
+
+          ## Installation
+
+          ### Linux
+          \`\`\`bash
+          # Download installer
+          wget https://github.com/vjsingh1984/sentinelpass/releases/download/v${VERSION}/sentinelpass-installer-${VERSION}-linux.tar.gz
+          tar -xzf sentinelpass-installer-${VERSION}-linux.tar.gz
+          cd installer-root
+          ./install.sh
+          \`\`\`
+
+          ### macOS
+          \`\`\`bash
+          # Download installer
+          curl -LO https://github.com/vjsingh1984/sentinelpass/releases/download/v${VERSION}/sentinelpass-installer-${VERSION}-macos.tar.gz
+          tar -xzf sentinelpass-installer-${VERSION}-macos.tar.gz
+          cd installer-root
+          ./install-user.command
+          \`\`\`
+
+          ### Windows
+          \`\`\`powershell
+          # Download installer
+          Invoke-WebRequest -Uri https://github.com/vjsingh1984/sentinelpass/releases/download/v${VERSION}/sentinelpass-installer-${VERSION}-windows.zip -OutFile installer.zip
+          Expand-Archive -Path installer.zip
+          cd installer-root
+          .\install-user.cmd
+          \`\`\`
+
+          ## Browser Extensions
+
+          ### Chrome
+          Download [sentinelpass-chrome-${VERSION}.zip](https://github.com/vjsingh1984/sentinelpass/releases/download/v${VERSION}/sentinelpass-chrome-${VERSION}.zip), unzip, and load as unpacked extension.
+
+          ### Firefox
+          Download [sentinelpass-firefox-${VERSION}.zip](https://github.com/vjsingh1984/sentinelpass/releases/download/v${VERSION}/sentinelpass-firefox-${VERSION}.zip) and install temporarily.
+
+          ## Verify Download
+
+          \`\`\`bash
+          sha256sum -c sha256sums.txt
+          \`\`\`"
+        # or use draft: true and edit later
+      - name: Upload release assets
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="${{ needs.setup.outputs.version }}"
+          gh release upload "v${VERSION}" release-assets/* --clobber

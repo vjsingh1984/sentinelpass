@@ -1,0 +1,76 @@
+name: 'Setup Rust Build Environment'
+description: 'Composite action for setting up Rust build environment with caching and dependencies'
+
+inputs:
+  cache-key-prefix:
+    description: 'Prefix for cache key (e.g., "ci", "release")'
+    required: false
+    default: 'default'
+  use-web-cache:
+    description: 'Whether to cache web build artifacts'
+    required: false
+    default: 'true'
+  web-build:
+    description: 'Whether to build web artifacts'
+    required: false
+    default: 'true'
+  linux-deps:
+    description: 'Whether to install Linux UI build dependencies'
+    required: false
+    default: 'true'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Setup Rust toolchain
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        components: rustfmt, clippy
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+        cache: npm
+        cache-dependency-path: package-lock.json
+
+    - name: Cache Rust build
+      uses: Swatinem/rust-cache@v2
+      with:
+        cache-key: ${{ inputs.cache-key-prefix }}
+
+    - name: Cache web artifacts
+      if: inputs.use-web-cache == 'true'
+      uses: actions/cache@v4
+      with:
+        path: |
+          sentinelpass-ui/dist
+          sentinelpass-ui/node_modules/.cache
+          browser-extension/chrome/dist
+          browser-extension/firefox/dist
+        key: web-${{ runner.os }}-${{ hashFiles('sentinelpass-ui/**', 'browser-extension/**', 'package-lock.json') }}
+        restore-keys: |
+          web-${{ runner.os }}-
+
+    - name: Install Linux UI build dependencies
+      if: runner.os == 'Linux' && inputs.linux-deps == 'true'
+      shell: bash
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          libglib2.0-dev \
+          libwebkit2gtk-4.1-dev \
+          libgtk-3-dev \
+          libayatana-appindicator3-dev \
+          librsvg2-dev \
+          patchelf
+
+    - name: Install web dependencies
+      if: inputs.web-build == 'true'
+      shell: bash
+      run: npm ci
+
+    - name: Build web artifacts
+      if: inputs.web-build == 'true' && inputs.use-web-cache == 'false'
+      shell: bash
+      run: npm run web:build

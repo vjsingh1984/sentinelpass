@@ -4,55 +4,23 @@ use std::fmt;
 use thiserror::Error;
 
 /// Error codes that can be returned to mobile platforms
-///
-/// These are designed to be stable across FFI boundaries and map to
-/// platform-specific error types (NSError on iOS, Exception on Android).
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ErrorCode {
-    /// Operation completed successfully
     Success = 0,
-
-    /// Invalid parameter passed to function
     InvalidParam = -1,
-
-    /// Vault is currently locked
     VaultLocked = -2,
-
-    /// Entry not found
     NotFound = -3,
-
-    /// Cryptographic operation failed
     Crypto = -4,
-
-    /// Database operation failed
     Database = -5,
-
-    /// Input/Output operation failed
     Io = -6,
-
-    /// Vault is already unlocked
     AlreadyUnlocked = -7,
-
-    /// Invalid master password
     InvalidPassword = -8,
-
-    /// Vault not initialized (run init first)
     NotInitialized = -9,
-
-    /// Biometric operation failed
     Biometric = -10,
-
-    /// TOTP operation failed
     Totp = -11,
-
-    /// Sync operation failed
     Sync = -12,
-
-    /// Out of memory
     OutOfMemory = -13,
-
-    /// Unknown or internal error
     Unknown = -99,
 }
 
@@ -87,19 +55,19 @@ pub enum BridgeError {
     InvalidParam(String),
 
     #[error("Vault error: {0}")]
-    Vault(#[from] sentinelpass_core::vault::VaultError),
+    Vault(String),
 
     #[error("PasswordManager error: {0}")]
-    PasswordManager(#[from] sentinelpass_core::PasswordManagerError),
+    PasswordManager(String),
 
     #[error("Crypto error: {0}")]
-    Crypto(#[from] sentinelpass_core::crypto::CryptoError),
+    Crypto(String),
 
     #[error("Database error: {0}")]
-    Database(#[from] sentinelpass_core::database::DatabaseError),
+    Database(String),
 
     #[error("TOTP error: {0}")]
-    Totp(#[from] sentinelpass_core::totp::TotpError),
+    Totp(String), // Totp functions return PasswordManagerError
 
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
@@ -126,25 +94,31 @@ pub enum BridgeError {
     Unknown(String),
 }
 
+// Implement From conversions for core error types
+impl From<sentinelpass_core::PasswordManagerError> for BridgeError {
+    fn from(e: sentinelpass_core::PasswordManagerError) -> Self {
+        BridgeError::PasswordManager(e.to_string())
+    }
+}
+
+impl From<sentinelpass_core::crypto::CryptoError> for BridgeError {
+    fn from(e: sentinelpass_core::crypto::CryptoError) -> Self {
+        BridgeError::Crypto(e.to_string())
+    }
+}
+
+impl From<sentinelpass_core::DatabaseError> for BridgeError {
+    fn from(e: sentinelpass_core::DatabaseError) -> Self {
+        BridgeError::Database(e.to_string())
+    }
+}
+
 impl BridgeError {
-    /// Convert to ErrorCode for FFI return
     pub fn to_error_code(&self) -> ErrorCode {
         match self {
             BridgeError::InvalidParam(_) => ErrorCode::InvalidParam,
-            BridgeError::Vault(e) => match e {
-                sentinelpass_core::vault::VaultError::Locked => ErrorCode::VaultLocked,
-                sentinelpass_core::vault::VaultError::InvalidPassword => ErrorCode::InvalidPassword,
-                sentinelpass_core::vault::VaultError::AlreadyUnlocked => ErrorCode::AlreadyUnlocked,
-                sentinelpass_core::vault::VaultError::NotInitialized => ErrorCode::NotInitialized,
-                _ => ErrorCode::Unknown,
-            },
-            BridgeError::PasswordManager(e) => match e {
-                sentinelpass_core::PasswordManagerError::VaultLocked => ErrorCode::VaultLocked,
-                sentinelpass_core::PasswordManagerError::NotFound(_) => ErrorCode::NotFound,
-                sentinelpass_core::PasswordManagerError::InvalidInput(_) => ErrorCode::InvalidParam,
-                sentinelpass_core::PasswordManagerError::LockedOut(_) => ErrorCode::VaultLocked,
-                _ => ErrorCode::Unknown,
-            },
+            BridgeError::Vault(_) => ErrorCode::VaultLocked,
+            BridgeError::PasswordManager(_) => ErrorCode::VaultLocked,
             BridgeError::Crypto(_) => ErrorCode::Crypto,
             BridgeError::Database(_) => ErrorCode::Database,
             BridgeError::Totp(_) => ErrorCode::Totp,

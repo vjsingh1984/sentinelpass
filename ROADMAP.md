@@ -94,23 +94,25 @@ SentinelPass is a secure, local-first password manager with exceptional cryptogr
 
 #### Android App (Phone/Tablet)
 - [x] Core data layer using sentinelpass-core (JNI)
-- [ ] Kotlin/Jetpack Compose native Android app
-- [ ] Biometric unlock (fingerprint, face unlock)
-- [ ] Auto-fill service integration
+- [x] Kotlin/Jetpack Compose native Android app scaffold
+- [x] Biometric unlock (fingerprint, face unlock) UI
+- [ ] Auto-fill service integration (service stub created)
 - [ ] Camera QR code for TOTP setup
 - [ ] Local-only mode with optional Google Drive sync
+- [ ] Complete entry CRUD operations testing
+- [ ] Add unit tests for VaultBridge
 
 #### Cross-Platform Considerations
 - [x] Mobile bridge (FFI/JNI) implemented
 - [ ] Mobile sync architecture (relay.json or cloud APIs)
 - [ ] Mobile-specific crypto implementations (platform KeyStore)
-- [x] Responsive design patterns (iOS SwiftUI scaffolded)
+- [x] Responsive design patterns (iOS/Android scaffolded)
 - [x] Offline-first architecture
 
 **New Directories:**
 - [x] `sentinelpass-mobile-bridge/` - FFI/JNI bridge layer (COMPLETE)
-- [x] `ios/SentinelPass/` - iOS app scaffold (IN PROGRESS)
-- `sentinelpass-android/` - Android app (Kotlin/Compose) - TODO
+- [x] `ios/SentinelPass/` - iOS app scaffold (COMPLETE)
+- [x] `android/SentinelPass/` - Android app scaffold (COMPLETE)
 
 **Key Design Decisions:**
 1. Use platform-native UIs (not React Native/Flutter) for security

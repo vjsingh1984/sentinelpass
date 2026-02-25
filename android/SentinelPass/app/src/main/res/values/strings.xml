@@ -1,0 +1,22 @@
+<resources>
+    <string name="app_name">SentinelPass</string>
+    <string name="biometric_prompt_title">Biometric Unlock</string>
+    <string name="biometric_prompt_subtitle">Authenticate to access your password vault</string>
+    <string name="biometric_prompt_negative_button">Cancel</string>
+    <string name="password_visibility_toggle">Toggle password visibility</string>
+    <string name="copy_to_clipboard">Copy to clipboard</string>
+    <string name="copied_to_clipboard">Copied!</string>
+    <string name="entry_deleted">Entry deleted</string>
+    <string name="entry_saved">Entry saved</string>
+    <string name="vault_locked">Vault locked</string>
+    <string name="unlock_failed">Unlock failed</string>
+    <string name="invalid_password">Invalid master password</string>
+    <string name="passwords_do_not_match">Passwords do not match</string>
+    <string name="password_too_weak">Password is too weak</string>
+    <string name="totp_refreshed">TOTP codes refreshed</string>
+    <string name="password_generated">Password generated</string>
+    <string name="vault_created">Vault created successfully</string>
+    <string name="vault_creation_failed">Failed to create vault</string>
+    <string name="autofill_service_name">SentinelPass Autofill</string>
+    <string name="autofill_service_description">Automatically fill passwords in apps and browsers</string>
+</resources>

@@ -6,6 +6,7 @@ members = [
     "sentinelpass-host",
     "sentinelpass-ui",
     "sentinelpass-relay",
+    "sentinelpass-mobile-bridge",
 ]
 resolver = "2"
 
@@ -94,3 +95,6 @@ toml_dep = { package = "toml", version = "0.8" }
 
 # System
 hostname = "0.4"
+
+# Mobile bridge build-only (not in workspace dependencies to avoid optional issues)
+# These are added directly to sentinelpass-mobile-bridge/Cargo.toml

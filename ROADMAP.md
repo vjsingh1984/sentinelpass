@@ -79,19 +79,21 @@ SentinelPass is a secure, local-first password manager with exceptional cryptogr
 
 ### v0.4.0 - Mobile Apps (CRITICAL)
 **Target:** Q2-Q3 2026
-**Status:** Planned
+**Status:** In Progress - Bridge complete, iOS app scaffolded
 
 #### iOS App (iPhone/iPad)
-- [ ] Core data layer using sentinelpass-core (via C FFI or separate binary)
-- [ ] Swift/SwiftUI native iOS app
-- [ ] Face ID / Touch ID biometric unlock
+- [x] Core data layer using sentinelpass-core (via C FFI)
+- [x] Swift/SwiftUI native iOS app scaffold
+- [x] Face ID / Touch ID biometric unlock UI
 - [ ] Auto-fill integration with iOS Password Manager
 - [ ] Camera QR code for TOTP setup
 - [ ] Local-only mode with optional iCloud sync
 - [ ] Secure enclave integration for master key
+- [ ] Complete entry CRUD operations testing
+- [ ] Add unit tests for VaultBridge
 
 #### Android App (Phone/Tablet)
-- [ ] Core data layer using sentinelpass-core (JNI)
+- [x] Core data layer using sentinelpass-core (JNI)
 - [ ] Kotlin/Jetpack Compose native Android app
 - [ ] Biometric unlock (fingerprint, face unlock)
 - [ ] Auto-fill service integration
@@ -99,16 +101,16 @@ SentinelPass is a secure, local-first password manager with exceptional cryptogr
 - [ ] Local-only mode with optional Google Drive sync
 
 #### Cross-Platform Considerations
-- [ ] Define mobile IPC protocol (vs desktop IPC)
+- [x] Mobile bridge (FFI/JNI) implemented
 - [ ] Mobile sync architecture (relay.json or cloud APIs)
 - [ ] Mobile-specific crypto implementations (platform KeyStore)
-- [ ] Responsive design patterns
-- [ ] Offline-first architecture
+- [x] Responsive design patterns (iOS SwiftUI scaffolded)
+- [x] Offline-first architecture
 
 **New Directories:**
-- `sentinelpass-ios/` - iOS app (Swift/SwiftUI)
-- `sentinelpass-android/` - Android app (Kotlin/Compose)
-- `sentinelpass-mobile-bridge/` - FFI/JNI bridge layer
+- [x] `sentinelpass-mobile-bridge/` - FFI/JNI bridge layer (COMPLETE)
+- [x] `ios/SentinelPass/` - iOS app scaffold (IN PROGRESS)
+- `sentinelpass-android/` - Android app (Kotlin/Compose) - TODO
 
 **Key Design Decisions:**
 1. Use platform-native UIs (not React Native/Flutter) for security

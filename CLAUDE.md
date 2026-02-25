@@ -2,9 +2,32 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+**Current Date:** 2026-02-24 (This context may or may not be relevant to your task)
+
 ## Project Overview
 
 SentinelPass is a secure, local-first password manager written in Rust with a Tauri desktop UI, browser extensions (Chrome/Firefox), native messaging architecture, and optional E2E encrypted multi-device sync. The project uses zero-knowledge architecture with military-grade encryption (Argon2id KDF + AES-256-GCM).
+
+## Development Environment
+
+**Prerequisites:**
+- Rust 1.70+
+- Node.js 20+
+- npm 10+
+
+**Platform Dependencies:**
+| Platform | Extra system packages |
+| --- | --- |
+| Windows | None (Tauri Windows toolchain is sufficient) |
+| macOS | `brew install openssl` |
+| Ubuntu/Debian | `libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev libssl-dev build-essential` |
+
+**Quick Start:**
+```bash
+# First time setup
+npm install && npm run web:build
+cargo build --release
+```
 
 ## Common Commands
 
@@ -26,7 +49,23 @@ cargo test --package sentinelpass-core crypto::tests  # Single test module
 cargo test --workspace --test '*'                # Integration tests only
 cargo test --workspace security                  # Security tests only
 npm run test:ts                                  # TypeScript/Vitest tests
+npm run test:ts:watch                            # TypeScript tests (watch mode)
 bash scripts/coverage-rust.sh                    # Rust coverage (50% minimum)
+```
+
+### Extension E2E Testing
+```bash
+cd browser-extension/e2e
+npm install
+npm run test:e2e                                 # Run Playwright tests
+npm run test:e2e:headed                          # Run with visible browser
+```
+
+### Security Audits
+```bash
+./scripts/security-audit.sh                      # Runs cargo-audit and npm audit
+# Or use trivy if available:
+trivy fs --scanners vuln,misconfig,secret --severity HIGH,CRITICAL --no-progress .
 ```
 
 ### Lint & Format
@@ -94,7 +133,9 @@ sentinelpass-daemon
 **sentinelpass-host/** - Native messaging bridge:
 - stdin/stdout JSON protocol (length-prefixed)
 - Translates between browser extension and daemon
-- Must be registered in OS registry/manifest
+- The Tauri UI auto-registers native messaging host manifests for Chrome, Chromium, and Firefox on every launch
+- For manual CLI/daemon-only workflows, use `./installation/install.sh` (Unix) or `.\install.ps1` (Windows)
+- Chrome extension has stable extension ID: `nophfgfiiohedlodfeepjoioljbhggdd` (derived from manifest key)
 
 **sentinelpass-cli/** - Command-line interface (binary: `sentinelpass`):
 - Clap-based CLI with subcommands
@@ -103,6 +144,7 @@ sentinelpass-daemon
 
 **sentinelpass-ui/** - Tauri v2 desktop application (binary: `sentinelpass-ui`):
 - `src-tauri/src/main.rs` - Tauri backend with Rust commands
+- `src-tauri/capabilities/default.json` - Tauri v2 capability-based ACL for plugin permissions
 - `app.ts` / `app.js` - TypeScript source and transpiled frontend
 - `index.html` - UI markup
 - Requires `npm run web:build` before `cargo build`
@@ -280,6 +322,30 @@ Pairing: 6-digit code + salt → HKDF-SHA256 → pairing key
 
 See `browser-extension/chrome/DEBUGGING.md` for detailed debugging guide.
 
+## Debugging
+
+### Daemon Logs
+- **Unix (Linux/macOS):** Check syslog: `log stream --predicate 'process == "sentinelpass-daemon"'` (macOS) or `journalctl -f` (Linux)
+- **Windows:** Event Viewer → Windows Logs → Application
+
+### Extension Issues
+- Open DevTools (F12) → Console tab
+- Filter for `[SentinelPass]` logs for content script
+- Navigate to `chrome://extensions/` → Service worker for background script logs
+
+### Native Host Registration
+The Tauri UI auto-registers native messaging host manifests on launch. For manual registration:
+```bash
+# macOS / Linux — from installed app bundle
+./installation/install.sh --from-app-bundle
+
+# macOS / Linux — from source build
+./installation/install.sh
+
+# Windows (PowerShell)
+.\installation\install.ps1
+```
+
 ## Platform-Specific Notes
 
 ### Windows
@@ -302,10 +368,10 @@ See `browser-extension/chrome/DEBUGGING.md` for detailed debugging guide.
 ### Tauri v2 Plugin Permissions
 
 Tauri v2 uses a capability-based ACL. Every plugin command must be:
-1. Initialized in `main.rs` via `.plugin(tauri_plugin_*::init())`
+1. Initialized in `src-tauri/src/main.rs` via `.plugin(tauri_plugin_*::init())`
 2. Granted in `src-tauri/capabilities/default.json`
 
-Current plugins: clipboard-manager, shell, dialog. See `default.json` for the full permission list.
+Current plugins: clipboard-manager, shell, dialog. See `src-tauri/capabilities/default.json` for the full permission list.
 
 ## Common Development Workflows
 
@@ -347,6 +413,7 @@ sqlite3 ~/.sentinelpass/vault.db ".schema"
 ## Important File Locations
 
 - **Vault database:** `~/.sentinelpass/vault.db` (SQLite, encrypted entries)
+- **IPC token:** `~/.config/sentinelpass/ipc.token` (32-byte hex token for IPC auth)
 - **Daemon logs:** Platform-specific (Windows: Event Viewer, Unix: syslog)
 - **Native messaging config:**
   - Windows: `C:\Program Files\PasswordManager\com.passwordmanager.host.json`
@@ -383,9 +450,11 @@ All checks must pass before merging to main branch.
 
 - **Main branch:** `main` (protected, requires CI + review)
 - **Development branch:** `develop`
-- **Commit format:** Conventional Commits with scope, e.g. `feat(ui): add ...`, `fix(crypto): ...`
+- **Commit format:** `type(scope): imperative summary` (e.g., `fix(daemon): gate save path when vault is locked`)
 - **Branch protection:** CI required, 1 approval, no force pushes
 - **Pre-commit hook:** `.githooks/pre-commit` runs lint + test scripts for changed Rust/TS files. Configure with `git config core.hooksPath .githooks`
+
+See `CONTRIBUTING.md` for the full contribution workflow and pull request checklist.
 
 ## Coding Style
 
@@ -396,6 +465,21 @@ All checks must pass before merging to main branch.
 
 ## Dependencies Note
 
+## Adding Dependencies
+
 The workspace uses centralized dependency management in `Cargo.toml` [workspace.dependencies]. When adding new dependencies, prefer:
 - Adding to workspace dependencies if used by multiple crates
 - Using workspace version (`{ workspace = true }`) in crate Cargo.toml
+- Run `cargo update` after adding dependencies
+
+## Security-Sensitive Areas
+
+Changes touching these paths need extra care and explicit reasoning (see `CONTRIBUTING.md`):
+- `sentinelpass-core/src/crypto/`
+- `sentinelpass-core/src/vault.rs`
+- `sentinelpass-core/src/daemon/`
+- `sentinelpass-host/`
+- `browser-extension/`
+
+Read `SECURITY.md` and `SECURITY_ARCHITECTURE.md` before submitting security-critical changes.
+Check `TECHNICAL_DEBT.md` for known issues and verified technical debt before duplicating effort.

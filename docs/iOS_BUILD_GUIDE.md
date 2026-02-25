@@ -1,17 +1,15 @@
-# iOS App Build Guide
+# iOS App Build & Wire-Up Guide
 
-This guide explains how to build the SentinelPass iOS app from source.
+This guide explains how to build and wire up the SentinelPass iOS app with the Rust mobile bridge.
 
 ## Prerequisites
 
 - macOS 14.0+ (Sonoma or later)
 - Xcode 15.0+
-- Rust toolchain (stable)
+- Rust stable toolchain
 - iOS Device or Simulator (iOS 17.0+)
 
 ## Step 1: Build the Rust Mobile Bridge
-
-First, build the mobile bridge static library that the iOS app will link against:
 
 ```bash
 cd /path/to/sentinelpass
@@ -22,64 +20,70 @@ This produces:
 - Static library: `target/release/libsentinelpass_mobile_bridge.a`
 - C header: `sentinelpass-mobile-bridge/include/sentinelpass_bridge.h`
 
-## Step 2: Set Up Xcode Project
+## Step 2: Create Xcode Project
 
-### Option A: Create New Xcode Project
+Since we have SwiftUI source files but no Xcode project, you need to create one:
 
-If you haven't created an Xcode project yet:
+### Option A: Using Xcode (Recommended)
 
-1. **Create a new iOS App project**:
-   - Open Xcode
-   - File → New → Project
-   - Select "iOS" → "App"
+1. **Open Xcode** → File → New → Project
+2. Select **iOS** → **App**
+3. Configure:
    - Product Name: `SentinelPass`
-   - Interface: `SwiftUI`
-   - Language: `Swift`
-   - Storage: `SwiftData`
-   - Save to: `ios/SentinelPass/`
+   - Team: Your development team
+   - Organization Identifier: `com.sentinelpass`
+   - Interface: **SwiftUI**
+   - Language: **Swift**
+   - Storage: **SwiftData**
+   - Save to: `ios/SentinelPass/SentinelPass` (replace existing folder or use different location)
 
-2. **Add the Rust library**:
+4. **Replace/Delete auto-generated files** with our implementation:
+   - Delete `SentinelPassApp.swift` (auto-generated)
+   - Delete `ContentView.swift` (auto-generated)
+   - Copy all `.swift` files from our `ios/SentinelPass/SentinelPass/` to project
+   - Copy `SentinelPassBridge/` folder to project
 
-   - In Xcode, select the project in the navigator
-   - Select your app target
-   - Go to "Build Phases" → "Link Binary With Libraries"
-   - Click "+" → "Add Other..." → navigate to `target/release/libsentinelpass_mobile_bridge.a`
+### Option B: Manual Project Creation
 
-3. **Add the header search path**:
+Create `ios/SentinelPass/SentinelPass.xcodeproj/project.pbxproj` manually (not recommended).
 
-   - Go to "Build Settings" → "Header Search Paths"
-   - Add: `$(PROJECT_DIR)/../../sentinelpass-mobile-bridge/include` (recursive)
+## Step 3: Configure Xcode Project
 
-4. **Link required frameworks**:
+### 3.1 Add Static Library
 
-   - "Build Phases" → "Link Binary With Libraries"
-   - Add: `LocalAuthentication.framework`, `SwiftData.framework`
+1. Select project in navigator
+2. Select target → **Build Phases**
+3. **Link Binary With Libraries** → **+** → **Add Other...**
+4. Navigate to: `target/release/libsentinelpass_mobile_bridge.a`
+5. Click **Open**
 
-5. **Copy the Swift files**:
+### 3.2 Add Header Search Path
 
-   - Copy all `.swift` files from `ios/SentinelPass/SentinelPass/` to your Xcode project
-   - Copy `ios/SentinelPass/SentinelPassBridge/VaultBridge.swift` to your Xcode project
-   - Use "Create groups" when prompted
+1. Select target → **Build Settings**
+2. Search for "Header Search Paths"
+3. Add: `$(PROJECT_DIR)/../../sentinelpass-mobile-bridge/include`
+4. Set to **recursive** ✅
 
-### Option B: Use Existing Project Structure
+### 3.3 Add Module Map (for Swift-C interop)
 
-If you already have the project files from `ios/SentinelPass/`:
+1. Add `sentinelpass.modulemap` to project (already created in `ios/SentinelPass/`)
+2. In Build Settings:
+   - Search for "Import Paths"
+   - Add: `$(PROJECT_DIR)/` (path to modulemap)
 
-1. Open `ios/SentinelPass/SentinelPass.xcodeproj` in Xcode
-2. The project should already have the correct structure
+### 3.4 Link Required Frameworks
 
-## Step 3: Configure Signing & Capabilities
+**Build Phases** → **Link Binary With Libraries** → **+**:
+- `LocalAuthentication.framework`
+- `SwiftData.framework`
 
-1. **Select your development team**:
-   - Project settings → Signing & Capabilities
-   - Select your team (requires Apple Developer account for device testing)
+### 3.5 Configure Signing & Capabilities
 
-2. **Add capabilities**:
-   - "+ Capability" → "Face ID" (for biometric unlock)
+**Signing & Capabilities**:
+1. Select your development team
+2. **+ Capability** → **Face ID**
 
-## Step 4: Build and Run
-
-### Simulator Build
+## Step 4: Verify Build
 
 ```bash
 # From command line
@@ -89,173 +93,162 @@ xcodebuild -project ios/SentinelPass/SentinelPass.xcodeproj \
            clean build
 ```
 
-Or in Xcode:
-1. Select a simulator from the device menu (e.g., iPhone 15)
-2. Press `Cmd+R` or click the Play button
+Or press `Cmd+B` in Xcode.
 
-### Device Build
+## Step 5: Run on Simulator/Device
 
-```bash
-# From command line
-xcodebuild -project ios/SentinelPass/SentinelPass.xcodeproj \
-           -scheme SentinelPass \
-           -destination 'generic/platform=iOS' \
-           -configuration Release \
-           clean build
+1. Select a simulator or connected device
+2. Press `Cmd+R` or click Play button
+
+## Troubleshooting
+
+### "sentinelpass_bridge.h file not found"
+
+**Solution**: Add header search path:
 ```
+$(PROJECT_DIR)/../../sentinelpass-mobile-bridge/include
+```
+Set to recursive ✅
 
-Or in Xcode:
-1. Connect your iOS device
-2. Select your device from the device menu
-3. Press `Cmd+R` or click the Play button
+### "Undefined symbols: _sp_vault_init"
 
-## Architecture Considerations
+**Solution**:
+1. Ensure static library is linked in "Link Binary With Libraries"
+2. Verify library path points to `target/release/libsentinelpass_mobile_bridge.a`
+3. Check library architecture matches simulator/device
 
-The iOS app is built as a **universal binary** supporting both architectures:
+### "Cannot find 'VaultBridge' in scope"
 
-### Simulator
-- **arm64** (Apple Silicon Macs)
-- **x86_64** (Intel Macs - Rosetta)
+**Solution**:
+1. Ensure `VaultBridge.swift` is added to target
+2. Check "Target Membership" includes your app
 
-### Device
-- **arm64** (iPhone 6s+, all iPad Pro/Air/mini)
+### "Linker command failed" (arm64 vs x86_64)
 
-### Building for Multiple Architectures
-
-To build a universal library:
+**Solution**: Build for correct architecture:
 
 ```bash
-# Build for arm64 (device/Apple Silicon)
-cargo build --package sentinelpass-mobile-bridge --release --target aarch64-apple-ios
+# For Apple Silicon Mac simulators (arm64)
+cargo build --package sentinelpass-mobile-bridge --release
 
-# Build for x86_64 (Intel simulator)
+# For Intel Mac simulators (x86_64) - Rosetta
 cargo build --package sentinelpass-mobile-bridge --release --target x86_64-apple-ios
 
-# Combine using lipo
+# For physical devices (arm64)
+cargo build --package sentinelpass-mobile-bridge --release --target aarch64-apple-ios
+```
+
+Then combine with lipo for universal binary:
+
+```bash
 lipo -create \
   target/aarch64-apple-ios/release/libsentinelpass_mobile_bridge.a \
   target/x86_64-apple-ios/release/libsentinelpass_mobile_bridge.a \
   -output target/universal/libsentinelpass_mobile_bridge.a
 ```
 
-Then link the universal library in Xcode.
+### "Module 'sentinelpass' not found"
 
-## Troubleshooting
+**Solution**: The module map may not be needed. Our `VaultBridge.swift` directly declares C functions via imports. Instead, just ensure:
 
-### "Undefined symbols for architecture arm64"
+1. Header is in search path
+2. `VaultBridge.swift` uses proper function declarations
 
-This means the static library isn't being linked properly:
+Actually, for simplicity, our `VaultBridge.swift` doesn't need to import the module - it declares the C functions directly. The linker resolves them at build time.
 
-1. Verify the library path in "Link Binary With Libraries"
-2. Check that you built the library for the correct architecture
-3. Ensure the header search path includes the `include/` directory
+## Quick Start Script
 
-### "sentinelpass_bridge.h file not found"
-
-The header search path is incorrect:
-
-1. Add `$(PROJECT_DIR)/../../sentinelpass-mobile-bridge/include` to "Header Search Paths"
-2. Make sure it's set to "recursive" (✓)
-
-### "Cannot find 'VaultBridge' in scope"
-
-The Swift bridge file isn't included in the target:
-
-1. Select `VaultBridge.swift` in Xcode
-2. In File Inspector, verify "Target Membership" includes your app
-
-### Build fails on device but works on simulator
-
-Architecture mismatch - you need to build for arm64-ios:
+Save this as `ios/build.sh`:
 
 ```bash
-cargo build --package sentinelpass-mobile-bridge --release --target aarch64-apple-ios
+#!/bin/bash
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+
+echo "Building mobile bridge..."
+cd "$PROJECT_ROOT"
+cargo build --package sentinelpass-mobile-bridge --release
+
+echo "Static library: $(find target -name libsentinelpass_mobile_bridge.a)"
+echo "C header: $PROJECT_ROOT/sentinelpass-mobile-bridge/include/sentinelpass_bridge.h"
+echo ""
+echo "Next steps:"
+echo "1. Open ios/SentinelPass/SentinelPass.xcodeproj in Xcode"
+echo "2. Add static library to 'Link Binary With Libraries'"
+echo "3. Add header search path: \$(PROJECT_DIR)/../../sentinelpass-mobile-bridge/include"
+echo "4. Press Cmd+R to build and run"
 ```
 
-### Face ID not working
+Run: `chmod +x ios/build.sh && ./ios/build.sh`
 
-1. Verify `NSFaceIDUsageDescription` is in `Info.plist`
-2. Check that "Face ID" capability is added in Xcode
-3. Test on physical device (simulator has limited biometric support)
+## Architecture Notes
 
-## Running Tests
-
-The iOS app includes XCTest unit tests:
-
-```bash
-xcodebuild test -project ios/SentinelPass/SentinelPass.xcodeproj \
-               -scheme SentinelPass \
-               -destination 'platform=iOS Simulator,name=iPhone 15'
+### iOS App Architecture
+```
+SwiftUI Views
+    ↓
+VaultState (Observable)
+    ↓
+VaultBridge (Swift)
+    ↓ C FFI
+sentinelpass_mobile_bridge.a (Rust static lib)
+    ↓
+sentinelpass_core (Rust)
 ```
 
-## App Store Distribution
+### Memory Management
 
-When ready for App Store submission:
+- Rust returns owned C strings → Swift must call `sp_string_free()`
+- Rust returns arrays → Swift must call `sp_bytes_free()`
+- Swift `String` with `cString(using:)` for Rust consumption
 
-1. **Update version numbers**:
-   - Project settings → General → Version
-   - Project settings → General → Build
+### Threading
 
-2. **Create archive**:
-   - Product → Archive
-   - Wait for build to complete
+- All bridge calls are `async` and run on background thread
+- `@MainActor` ensures UI updates on main thread
+- `withCheckedContinuation` bridges async/await with C callbacks
 
-3. **Validate and distribute**:
-   - Window → Organizer
-   - Select your archive
-   - "Validate App" → fix any issues
-   - "Distribute App" → follow prompts
+## Testing the Integration
 
-### Required App Store Info
+1. **Create Vault**:
+   - App should show "Create Your Vault" screen
+   - Enter master password
+   - Should unlock to main screen
 
-- **Bundle Identifier**: `com.sentinelpass.ios` (or your own)
-- **Category**: Productivity → Utilities
-- **Privacy**: Local network, Face ID usage
-- **Age Rating**: 4+ (no offensive content)
+2. **Add Entry**:
+   - Navigate to Passwords tab
+   - Tap **+**
+   - Fill in entry details
+   - Save
 
-## Continuous Integration
+3. **Search**:
+   - Type in search bar
+   - Results should filter
 
-### GitHub Actions Example
+4. **TOTP**:
+   - Add entry with TOTP secret (via CLI first)
+   - Navigate to TOTP tab
+   - Should show code with countdown
 
-```yaml
-name: iOS Build
-
-on: [push, pull_request]
-
-jobs:
-  build:
-    runs-on: macos-latest
-
-    steps:
-    - uses: actions/checkout@v4
-
-    - name: Install Rust
-      uses: actions-rs/toolchain@v1
-      with:
-        toolchain: stable
-        override: true
-
-    - name: Build mobile bridge
-      run: |
-        cargo build --package sentinelpass-mobile-bridge --release
-
-    - name: Build iOS app
-      run: |
-        xcodebuild -project ios/SentinelPass/SentinelPass.xcodeproj \
-                   -scheme SentinelPass \
-                   -destination 'platform=iOS Simulator,name=iPhone 15' \
-                   clean build
-```
+5. **Biometric**:
+   - Enable biometric in Settings
+   - Lock vault
+   - Should prompt for Face ID/Touch ID
 
 ## Next Steps
 
-After building:
+After wiring up:
 
-1. Test the app in simulator
-2. Test on physical device
-3. Verify biometric authentication
-4. Test password CRUD operations
-5. Test TOTP generation
-6. Test password generator
+1. Test on physical device (simulator has limited biometric)
+2. Verify all CRUD operations work
+3. Test TOTP generation
+4. Test password generator
+5. Add unit tests for `VaultBridge`
 
-For app usage guide, see `ios/SentinelPass/README.md`.
+## Resources
+
+- [SwiftUI Documentation](https://developer.apple.com/documentation/swiftui)
+- [Swift-C Interop](https://developer.apple.com/documentation/swift/importing-c-headers-into-swift)
+- [Biometric Authentication](https://developer.apple.com/documentation/localauthentication)

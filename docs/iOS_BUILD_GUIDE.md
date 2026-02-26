@@ -75,13 +75,18 @@ Create `ios/SentinelPass/SentinelPass.xcodeproj/project.pbxproj` manually (not r
 
 **Build Phases** → **Link Binary With Libraries** → **+**:
 - `LocalAuthentication.framework`
-- `SwiftData.framework`
+- `CloudKit.framework` (for iCloud sync)
+
+Note: `SwiftData.framework` is optional and only needed if using SwiftData persistence.
 
 ### 3.5 Configure Signing & Capabilities
 
 **Signing & Capabilities**:
 1. Select your development team
 2. **+ Capability** → **Face ID**
+3. **+ Capability** → **iCloud** (for CloudKit sync):
+   - Check "CloudKit"
+   - Select or create a container (e.g., "iCloud.com.sentinelpass.sync")
 
 ## Step 4: Verify Build
 
@@ -246,9 +251,36 @@ After wiring up:
 3. Test TOTP generation
 4. Test password generator
 5. Add unit tests for `VaultBridge`
+6. **CloudKit Sync Integration**:
+   - Create `CloudKitService` instance in your app
+   - Initialize with device ID: `let cloudKit = CloudKitService(deviceID: UUID())`
+   - Check availability: `await cloudKit.checkCloudKitAvailability()`
+   - Push entries: `await cloudKit.pushEntries(records)`
+   - Pull entries: `let (records, nextToken) = await cloudKit.pullEntries()`
+   - Handle errors for auth, quota, network issues
+
+### CloudKit Sync Data Model
+
+Records are stored in CloudKit's private database:
+
+**Record Type**: `SyncEntry`
+- `encryptedPayload` (String): Base64-encoded encrypted sync blob
+- `modifiedAt` (Int64): Unix timestamp for LWW ordering
+- `isTombstone` (Bool): Soft delete marker
+- `entryType` (String): SyncEntryType discriminator
+- `syncVersion` (Int64): Monotonic version counter
+- `originDeviceId` (String): Source device UUID
+
+**Record Type**: `DeviceInfo` (for device registration)
+- `deviceID` (String): Device UUID
+- `deviceName` (String): Device display name
+- `deviceType` (String): "iOS"
+- `registeredAt` (Date): Registration timestamp
 
 ## Resources
 
 - [SwiftUI Documentation](https://developer.apple.com/documentation/swiftui)
 - [Swift-C Interop](https://developer.apple.com/documentation/swift/importing-c-headers-into-swift)
 - [Biometric Authentication](https://developer.apple.com/documentation/localauthentication)
+- [CloudKit Documentation](https://developer.apple.com/documentation/cloudkit)
+- [CloudKit Quick Start](https://developer.apple.com/library/archive/documentation/DataManagement/Conceptual/CloudKitQuickStart/)

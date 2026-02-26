@@ -1,0 +1,30 @@
+# Android build artifacts
+.gradle/
+build/
+app/build/
+local.properties
+
+# Android generated files
+*.apk
+*.ap_
+*.aab
+
+# Gradle wrapper JAR (generated - but you may want to commit gradlew scripts)
+gradle/wrapper/gradle-wrapper.jar
+
+# Android Studio
+.idea/
+*.iml
+.DS_Store
+/captures
+.externalNativeBuild
+.cxx
+
+# Additional generated directories
+android/
+
+# NDK
+.obj/
+
+# Android Profiling
+*.hprof

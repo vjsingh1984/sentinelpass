@@ -4,6 +4,7 @@
 //! including cryptographic operations, database management, and IPC.
 
 pub mod audit;
+pub mod autofill;
 pub mod biometric;
 pub mod crypto;
 pub mod daemon;
@@ -90,6 +91,9 @@ pub enum PasswordManagerError {
 
     #[error("Not found: {0}")]
     NotFound(String),
+
+    #[error("Not implemented: {0}")]
+    NotImplemented(String),
 
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),

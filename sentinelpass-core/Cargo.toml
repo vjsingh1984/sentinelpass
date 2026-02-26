@@ -55,6 +55,8 @@ windows = { version = "0.58", features = [
     "Win32_Security_Credentials",
     "Win32_Foundation",
     "Win32_System_Com",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_System_Threading",
     "Foundation",
     "Security_Credentials_UI"
 ] }

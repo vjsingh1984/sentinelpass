@@ -10,6 +10,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
@@ -123,20 +124,19 @@ fun SetupScreen(
                                 modifier = Modifier
                                     .weight(1f)
                                     .height(8.dp)
-                                    .then(
-                                        if (active) {
-                                            Modifier.then(
-                                                when (passwordStrength?.score ?: 0) {
-                                                    0, 1 -> Modifier.background(Color.Red)
-                                                    2 -> Modifier.background(Color(0xFFFFA500))
-                                                    3 -> Modifier.background(Color(0xFFFFFF00))
-                                                    else -> Modifier.background(Color(0xFF00FF00))
-                                                }
-                                            )
+                                    .drawBehind {
+                                        val color = if (active) {
+                                            when (passwordStrength?.score ?: 0) {
+                                                0, 1 -> Color.Red
+                                                2 -> Color(0xFFFFA500)
+                                                3 -> Color(0xFFFFFF00)
+                                                else -> Color(0xFF00FF00)
+                                            }
                                         } else {
-                                            Modifier.background(Color.Gray.copy(alpha = 0.3f))
+                                            Color.Gray.copy(alpha = 0.3f)
                                         }
-                                    )
+                                        drawRect(color)
+                                    }
                             )
                         }
                     }

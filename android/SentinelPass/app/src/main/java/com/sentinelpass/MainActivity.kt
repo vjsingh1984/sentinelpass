@@ -62,9 +62,7 @@ fun SentinelPassApp(
     ) {
         composable("setup") {
             SetupScreen(
-                onCreateVault = { masterPassword ->
-                    vaultState.createVault(masterPassword)
-                },
+                vaultState = vaultState,
                 onNavigateToLock = {
                     navController.navigate("lock") {
                         popUpTo("setup") { inclusive = true }

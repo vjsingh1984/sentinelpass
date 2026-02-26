@@ -95,7 +95,11 @@ class VaultState private constructor(private val context: Context) : ViewModel()
 
             val result = withContext(Dispatchers.IO) {
                 val bridge = VaultBridge(context)
-                bridge.initVault(vaultFile.absolutePath, masterPassword)
+                val success = bridge.initVault(vaultFile.absolutePath, masterPassword)
+                if (success) {
+                    vaultBridge = bridge
+                }
+                success
             }
 
             _uiState.value = _uiState.value.copy(
@@ -105,7 +109,6 @@ class VaultState private constructor(private val context: Context) : ViewModel()
             )
 
             if (result) {
-                vaultBridge = bridge
                 loadEntries()
             }
         }

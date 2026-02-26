@@ -457,7 +457,7 @@ data class PasswordAnalysis(
     val score: Int,
     val description: String
 ) {
-    val strengthColor: android.graphics.Color
+    val strengthColor: Int
         get() = when (score) {
             0, 1 -> android.graphics.Color.parseColor("#EF4444") // Red
             2 -> android.graphics.Color.parseColor("#F97316") // Orange

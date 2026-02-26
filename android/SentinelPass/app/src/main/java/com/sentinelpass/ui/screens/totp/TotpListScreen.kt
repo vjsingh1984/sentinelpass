@@ -44,6 +44,14 @@ fun TotpListScreen(
     var copiedCode by remember { mutableStateOf<String?>(null) }
     var currentTime by remember { mutableStateOf(System.currentTimeMillis()) }
 
+    suspend fun refreshAllCodes() {
+        entries.forEach { entry ->
+            vaultState.generateTotp(entry.id)?.let { code ->
+                totpCodes = totpCodes.toMutableMap().apply { put(entry.id, code) }
+            }
+        }
+    }
+
     // Refresh timer
     LaunchedEffect(Unit) {
         while (true) {
@@ -60,14 +68,6 @@ fun TotpListScreen(
     // Load codes on screen appear
     LaunchedEffect(entries) {
         refreshAllCodes()
-    }
-
-    suspend fun refreshAllCodes() {
-        entries.forEach { entry ->
-            vaultState.generateTotp(entry.id)?.let { code ->
-                totpCodes = totpCodes.toMutableMap().apply { put(entry.id, code) }
-            }
-        }
     }
 
     val secondsRemaining = 30 - (currentTime / 1000 % 30).toInt()
@@ -134,7 +134,7 @@ fun TotpListScreen(
                         ) {
                             Column(
                                 modifier = Modifier.padding(16.dp),
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
                                 Text(
                                     text = "Refreshing in $secondsRemaining seconds",

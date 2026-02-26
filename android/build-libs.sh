@@ -27,15 +27,12 @@ elif [ -d "$HOME/Android/Sdk/ndk" ]; then
     NDK=$(ls -d "$HOME/Android/Sdk/ndk"* 2>/dev/null | sort -V | tail -1)
 else
     echo -e "${RED}Error: Android NDK not found${NC}"
-    echo "Install via Android Studio: Settings → Appearance & Behavior → System Settings → Android SDK → SDK Tools → NDK (Side by side)"
+    echo "Install via Android Studio: Tools → SDK Manager → SDK Tools → NDK (Side by side)"
     echo "Then set ANDROID_NDK_HOME environment variable"
     exit 1
 fi
 
 echo -e "${GREEN}Using NDK: $NDK${NC}"
-
-# Set up toolchain paths
-export PATH="$NDK/toolchains/llvm/prebuilt/darwin-x86_64/bin:$PATH"
 
 # Detect host
 case "$(uname -s)" in
@@ -47,8 +44,6 @@ case "$(uname -s)" in
         exit 1
         ;;
 esac
-
-export PATH="$NDK/toolchains/llvm/prebuilt/$HOST/bin:$PATH"
 
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$PROJECT_ROOT"
@@ -67,22 +62,57 @@ for arch_pair in "${ARCHS[@]}"; do
 
     echo -e "${GREEN}Building for $android_arch ($rust_arch)...${NC}"
 
+    # Set environment for this architecture
+    export TARGET="$rust_arch"
+    export ANDROID_NDK_HOME="$NDK"
+    export PATH="$NDK/toolchains/llvm/prebuilt/$HOST/bin:$PATH"
+
+    # Set cargo flags for Android NDK linking
+    export CARGO_TARGET_APPLINK="$NDK/toolchains/llvm/prebuilt/$HOST/bin/aarch64-linux-android28-clang"
+    export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$NDK/toolchains/llvm/prebuilt/$HOST/bin/aarch64-linux-android28-clang"
+    export CC_aarch64_linux_android="$NDK/toolchains/llvm/prebuilt/$HOST/bin/aarch64-linux-android28-clang"
+    export CARGO_TARGET_AARCH64_LINUX_ANDROID_AR="$NDK/toolchains/llvm/prebuilt/$HOST/bin/llvm-ar"
+    export AR_aarch64_linux_android="$NDK/toolchains/llvm/prebuilt/$HOST/bin/llvm-ar"
+    export CMAKE_aarch64_linux_android="$NDK/toolchains/llvm/prebuilt/$HOST/bin/cmake"
+
+    if [[ "$rust_arch" == "armv7-linux-androideabi" ]]; then
+        export CARGO_TARGET_ARMV7_LINUX_ANDROIDEABI_LINKER="$NDK/toolchains/llvm/prebuilt/$HOST/bin/armv7-linux-androideabi28-clang"
+        export CC_armv7_linux_androideabi="$NDK/toolchains/llvm/prebuilt/$HOST/bin/armv7-linux-androideabi28-clang"
+        export AR_armv7_linux_androideabi="$NDK/toolchains/llvm/prebuilt/$HOST/bin/llvm-ar"
+    elif [[ "$rust_arch" == "x86_64-linux-android" ]]; then
+        export CARGO_TARGET_X86_64_LINUX_ANDROID_LINKER="$NDK/toolchains/llvm/prebuilt/$HOST/bin/x86_64-linux-android28-clang"
+        export CC_x86_64_linux_android="$NDK/toolchains/llvm/prebuilt/$HOST/bin/x86_64-linux-android28-clang"
+        export AR_x86_64_linux_android="$NDK/toolchains/llvm/prebuilt/$HOST/bin/llvm-ar"
+    fi
+
     cargo build \
         --package sentinelpass-mobile-bridge \
         --features jni \
         --release \
         --target "$rust_arch" \
-        2>&1 | grep -E "(Compiling|Finished|error)" || true
+        2>&1 | grep -E "(Compiling|Finished|error|warning: unused)" || true
 
-    # Copy to jniLibs
-    mkdir -p "android/SentinelPass/app/src/main/jniLibs/$android_arch"
-    cp "target/$rust_arch/release/libsentinelpass_mobile_bridge.so" \
-       "android/SentinelPass/app/src/main/jniLibs/$android_arch/"
-
-    echo -e "${GREEN}✓ Built $android_arch${NC}\n"
+    # Check if build succeeded
+    if [ -f "target/$rust_arch/release/libsentinelpass_mobile_bridge.so" ]; then
+        # Copy to jniLibs
+        mkdir -p "android/SentinelPass/app/src/main/jniLibs/$android_arch"
+        cp "target/$rust_arch/release/libsentinelpass_mobile_bridge.so" \
+           "android/SentinelPass/app/src/main/jniLibs/$android_arch/"
+        echo -e "${GREEN}✓ Built $android_arch${NC}\n"
+    else
+        echo -e "${RED}✗ Failed to build $android_arch${NC}"
+        echo "Check the error messages above for details.\n"
+    fi
 done
 
-echo -e "${GREEN}All JNI libraries built successfully!${NC}"
-echo ""
-echo "Library locations:"
-find android/SentinelPass/app/src/main/jniLibs -name "*.so"
+# Check if any libraries were built
+if find android/SentinelPass/app/src/main/jniLibs -name "*.so" | grep -q .; then
+    echo -e "${GREEN}JNI libraries built successfully!${NC}"
+    echo ""
+    echo "Library locations:"
+    find android/SentinelPass/app/src/main/jniLibs -name "*.so"
+else
+    echo -e "${RED}No JNI libraries were built.${NC}"
+    echo "Please check the error messages above."
+    exit 1
+fi

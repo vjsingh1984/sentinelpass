@@ -4,7 +4,8 @@ import android.app.Application
 import android.app.Application.ActivityLifecycleCallbacks
 import android.os.Bundle
 import androidx.lifecycle.ProcessLifecycleOwner
-import androidx.lifecycle.lifecycle
+import androidx.lifecycle.DefaultLifecycleObserver
+import androidx.lifecycle.LifecycleOwner
 import com.sentinelpass.data.VaultState
 
 /**
@@ -27,21 +28,21 @@ class SentinelPassApplication : Application() {
      * Lifecycle observer for detecting app background/foreground
      * Used for auto-lock functionality
      */
-    class AppLifecycleObserver : androidx.lifecycle.DefaultLifecycleObserver {
+    class AppLifecycleObserver : DefaultLifecycleObserver {
         private var wasInBackground = false
 
-        override fun onStart(owner: androidx.lifecycle.LifecycleOwner) {
+        override fun onStart(owner: LifecycleOwner) {
             if (wasInBackground) {
                 // App returning from background - check if vault should be locked
-                VaultState.checkAutoLock()
+                VaultState.current.checkAutoLock()
                 wasInBackground = false
             }
         }
 
-        override fun onStop(owner: androidx.lifecycle.LifecycleOwner) {
+        override fun onStop(owner: LifecycleOwner) {
             wasInBackground = true
             // Note: Lock timer starts in onStop, actual lock check in onStart
-            VaultState.scheduleAutoLock()
+            VaultState.current.scheduleAutoLock()
         }
     }
 }

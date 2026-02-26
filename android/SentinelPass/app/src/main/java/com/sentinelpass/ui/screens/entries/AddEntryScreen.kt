@@ -9,8 +9,11 @@ import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import com.sentinelpass.PasswordAnalysis
 import com.sentinelpass.data.VaultState
@@ -111,7 +114,7 @@ fun AddEntryScreen(
                 onValueChange = { password = it },
                 label = { Text("Password") },
                 singleLine = true,
-                visualTransformation = if (showPassword) PasswordVisualTransformation.None else PasswordVisualTransformation(),
+                visualTransformation = if (showPassword) VisualTransformation.None else PasswordVisualTransformation(),
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
                 modifier = Modifier.fillMaxWidth(),
                 leadingIcon = {
@@ -141,37 +144,41 @@ fun AddEntryScreen(
                         containerColor = MaterialTheme.colorScheme.surfaceVariant
                     )
                 ) {
-                    Row(
+                    Column(
                         modifier = Modifier.padding(16.dp),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        repeat(4) { index ->
-                            val active = index < (passwordStrength?.score ?: 0)
-                            Box(
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .height(8.dp)
-                                    .then(
-                                        if (active) {
-                                            Modifier.background(
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            repeat(4) { index ->
+                                val active = index < (passwordStrength?.score ?: 0)
+                                Box(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .height(8.dp)
+                                        .drawBehind {
+                                            val color = if (active) {
                                                 when (passwordStrength?.score ?: 0) {
                                                     0, 1 -> Color.Red
                                                     2 -> Color(0xFFFFA500)
                                                     3 -> Color(0xFFFFFF00)
                                                     else -> Color(0xFF00FF00)
                                                 }
-                                            )
-                                        } else {
-                                            Modifier.background(Color.Gray.copy(alpha = 0.3f))
+                                            } else {
+                                                Color.Gray.copy(alpha = 0.3f)
+                                            }
+                                            drawRect(color)
                                         }
-                                    )
-                            )
+                                )
+                            }
                         }
+                        Text(
+                            text = passwordStrength?.strengthText ?: "",
+                            style = MaterialTheme.typography.bodySmall
+                        )
                     }
-                    Text(
-                        text = passwordStrength?.strengthText ?: "",
-                        style = MaterialTheme.typography.bodySmall
-                    )
                 }
             }
 
@@ -244,14 +251,14 @@ fun PasswordGeneratorDialog(
     var generatedPassword by remember { mutableStateOf("") }
     val scope = rememberCoroutineScope()
 
-    LaunchedEffect(Unit) {
-        generatePassword()
-    }
-
     suspend fun generatePassword() {
         vaultState.generatePassword(length, includeSymbols)?.let {
             generatedPassword = it
         }
+    }
+
+    LaunchedEffect(Unit) {
+        generatePassword()
     }
 
     AlertDialog(

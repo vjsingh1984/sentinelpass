@@ -203,8 +203,8 @@ fun BiometricPrompt(
             .setTitle("Biometric Unlock")
             .setSubtitle("Authenticate to access your password vault")
             .setAllowedAuthenticators(
-                BiometricPrompt.Authenticators.BIOMETRIC_STRONG or
-                BiometricPrompt.Authenticators.DEVICE_CREDENTIAL
+                androidx.biometric.BiometricManager.Authenticators.BIOMETRIC_STRONG or
+                androidx.biometric.BiometricManager.Authenticators.DEVICE_CREDENTIAL
             )
             .build()
     }
@@ -224,7 +224,7 @@ fun BiometricPrompt(
 fun canAuthenticateBiometric(context: android.content.Context): Boolean {
     val biometricManager = androidx.biometric.BiometricManager.from(context)
     return biometricManager.canAuthenticate(
-        BiometricPrompt.Authenticators.BIOMETRIC_STRONG or
-        BiometricPrompt.Authenticators.DEVICE_CREDENTIAL
+        androidx.biometric.BiometricManager.Authenticators.BIOMETRIC_STRONG or
+        androidx.biometric.BiometricManager.Authenticators.DEVICE_CREDENTIAL
     ) == androidx.biometric.BiometricManager.BIOMETRIC_SUCCESS
 }

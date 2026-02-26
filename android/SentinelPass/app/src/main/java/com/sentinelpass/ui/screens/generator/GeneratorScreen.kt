@@ -3,7 +3,6 @@ package com.sentinelpass.ui.screens.generator
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -15,6 +14,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
@@ -155,6 +155,7 @@ fun GeneratorScreen(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.spacedBy(4.dp)
                         ) {
+                            val inactiveColor = MaterialTheme.colorScheme.surfaceVariant
                             repeat(4) { index ->
                                 val active = index < (passwordStrength?.score ?: 0)
                                 Box(
@@ -162,8 +163,8 @@ fun GeneratorScreen(
                                         .weight(1f)
                                         .height(12.dp)
                                         .clip(CircleShape)
-                                        .background(
-                                            if (active) {
+                                        .drawBehind {
+                                            val color = if (active) {
                                                 when (passwordStrength?.score ?: 0) {
                                                     0, 1 -> Color.Red
                                                     2 -> Color(0xFFFFA500)
@@ -171,9 +172,10 @@ fun GeneratorScreen(
                                                     else -> Color(0xFF00FF00)
                                                 }
                                             } else {
-                                                MaterialTheme.colorScheme.surfaceVariant
+                                                inactiveColor
                                             }
-                                        )
+                                            drawRect(color)
+                                        }
                                 )
                             }
                         }
@@ -235,6 +237,9 @@ fun GeneratorScreen(
                     Divider()
 
                     // Include Symbols Toggle
+                    Column(
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween,

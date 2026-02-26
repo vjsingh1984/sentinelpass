@@ -9,6 +9,7 @@ console.log('[SentinelPass Background] Host name:', HOST_NAME);
 // ========================================
 const SENSITIVE_LOG_KEYS = new Set(['password', 'secret', 'token', 'passphrase', 'totp_code']);
 const NEVER_SAVE_DOMAINS_KEY = 'neverSaveDomains';
+const ALLOWED_WEB_PROTOCOLS = new Set(['http:', 'https:']);
 function redactForLog(value) {
     if (!value || typeof value !== 'object') {
         return value;
@@ -29,6 +30,68 @@ function redactForLog(value) {
         }
     }
     return redacted;
+}
+function normalizeHostForSenderValidation(value) {
+    if (!value || typeof value !== 'string') {
+        return null;
+    }
+    const trimmed = value.trim();
+    if (!trimmed) {
+        return null;
+    }
+    if (trimmed.includes('://')) {
+        try {
+            const parsed = new URL(trimmed);
+            if (!ALLOWED_WEB_PROTOCOLS.has(parsed.protocol)) {
+                return null;
+            }
+            const host = parsed.hostname.trim().replace(/^\.+|\.+$/g, '').toLowerCase();
+            return host || null;
+        }
+        catch (_error) {
+            return null;
+        }
+    }
+    const host = trimmed.replace(/^\.+|\.+$/g, '').toLowerCase();
+    return host || null;
+}
+function collectSenderHosts(sender) {
+    const hosts = [];
+    const frameHost = normalizeHostForSenderValidation(sender?.url);
+    const tabHost = normalizeHostForSenderValidation(sender?.tab?.url);
+    if (frameHost) {
+        hosts.push(frameHost);
+    }
+    if (tabHost && !hosts.includes(tabHost)) {
+        hosts.push(tabHost);
+    }
+    return hosts;
+}
+function validateSenderDomainContext(sender, claimedDomainOrUrl, requestType) {
+    const claimedHost = normalizeHostForSenderValidation(claimedDomainOrUrl);
+    if (!claimedHost) {
+        return { ok: false, error: `Missing or invalid domain context for ${requestType}` };
+    }
+    const frameHost = normalizeHostForSenderValidation(sender?.url);
+    const tabHost = normalizeHostForSenderValidation(sender?.tab?.url);
+    const isSubframe = typeof sender?.frameId === 'number' && sender.frameId > 0;
+    if (isSubframe && frameHost && tabHost && frameHost !== tabHost) {
+        return {
+            ok: false,
+            error: `Cross-origin iframe sender blocked for ${requestType} (frame=${frameHost}, tab=${tabHost})`
+        };
+    }
+    const senderHosts = collectSenderHosts(sender);
+    if (senderHosts.length === 0) {
+        return { ok: false, error: `Missing sender URL context for ${requestType}` };
+    }
+    if (!senderHosts.includes(claimedHost)) {
+        return {
+            ok: false,
+            error: `Sender URL host mismatch for ${requestType} (claimed=${claimedHost}, sender=${senderHosts.join(',')})`
+        };
+    }
+    return { ok: true, claimedHost, senderHosts };
 }
 function normalizeDomainForPolicy(value) {
     if (!value || typeof value !== 'string') {
@@ -236,10 +299,14 @@ async function handleLockVault() {
     }
 }
 // Handle save notification request from content script
-async function handleSaveNotification(data) {
+async function handleSaveNotification(data, sender) {
     console.log('[SentinelPass Background] ========== HANDLE SAVE NOTIFICATION ==========');
     console.log('[SentinelPass Background] Notification payload:', redactForLog(data));
     try {
+        const validation = validateSenderDomainContext(sender, data?.domain || data?.url || '', 'request_save_notification');
+        if (!validation.ok) {
+            throw new Error(validation.error);
+        }
         const suppressPrompt = await shouldSuppressSavePrompt(data?.domain || data?.url || '');
         if (suppressPrompt) {
             console.log('[SentinelPass Background] Skipping save notification due to never-save policy');
@@ -282,6 +349,12 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     console.log('[SentinelPass Background] Request details:', redactForLog(request));
     if (request.type === 'get_credential') {
         console.log('[SentinelPass Background] Handling get_credential for domain:', request.domain);
+        const validation = validateSenderDomainContext(sender, request.domain, 'get_credential');
+        if (!validation.ok) {
+            console.warn('[SentinelPass Background] Blocked get_credential:', validation.error);
+            sendResponse({ success: false, error: validation.error });
+            return true;
+        }
         handleGetCredential(request.domain, request.request_id)
             .then(response => {
             console.log('[SentinelPass Background] Get credential response:', redactForLog(response));
@@ -298,6 +371,12 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     }
     if (request.type === 'get_totp_code') {
         console.log('[SentinelPass Background] Handling get_totp_code for domain:', request.domain);
+        const validation = validateSenderDomainContext(sender, request.domain, 'get_totp_code');
+        if (!validation.ok) {
+            console.warn('[SentinelPass Background] Blocked get_totp_code:', validation.error);
+            sendResponse({ success: false, error: validation.error });
+            return true;
+        }
         handleGetTotpCode(request.domain, request.request_id)
             .then(response => {
             console.log('[SentinelPass Background] Get TOTP response:', redactForLog(response));
@@ -316,6 +395,12 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         console.log('[SentinelPass Background] Handling save_credential');
         console.log('[SentinelPass Background] Domain:', request.data?.domain);
         console.log('[SentinelPass Background] URL:', request.data?.url);
+        const validation = validateSenderDomainContext(sender, request.data?.domain || request.data?.url || '', 'save_credential');
+        if (!validation.ok) {
+            console.warn('[SentinelPass Background] Blocked save_credential:', validation.error);
+            sendResponse({ success: false, error: validation.error });
+            return true;
+        }
         handleSaveCredential(request.data)
             .then(response => {
             console.log('[SentinelPass Background] Save credential response:', redactForLog(response));
@@ -332,6 +417,12 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     }
     if (request.type === 'check_credential_exists') {
         console.log('[SentinelPass Background] Handling check_credential_exists for domain:', request.domain);
+        const validation = validateSenderDomainContext(sender, request.domain, 'check_credential_exists');
+        if (!validation.ok) {
+            console.warn('[SentinelPass Background] Blocked check_credential_exists:', validation.error);
+            sendResponse({ success: false, exists: false, error: validation.error });
+            return true;
+        }
         handleCheckCredentialExists(request.domain)
             .then(exists => {
             console.log('[SentinelPass Background] Credential exists:', exists);
@@ -382,7 +473,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     }
     if (request.type === 'request_save_notification') {
         console.log('[SentinelPass Background] Handling request_save_notification');
-        handleSaveNotification(request.data)
+        handleSaveNotification(request.data, sender)
             .then(result => {
             console.log('[SentinelPass Background] Save notification result:', result);
             sendResponse({ success: result });

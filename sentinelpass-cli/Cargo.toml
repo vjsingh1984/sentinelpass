@@ -15,7 +15,7 @@ name = "sentinelpass"
 path = "src/main.rs"
 
 [dependencies]
-sentinelpass-core = { path = "../sentinelpass-core" }
+sentinelpass-core = { path = "../sentinelpass-core", features = ["sync"] }
 clap = { workspace = true }
 tokio = { workspace = true }
 anyhow = { workspace = true }

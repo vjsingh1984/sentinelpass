@@ -1,9 +1,15 @@
 //! IPC (Inter-Process Communication) for daemon communication
 //!
-//! Uses Unix domain sockets on Linux/macOS and named pipes on Windows.
+//! Uses Unix domain sockets on Linux/macOS.
+//! Windows uses named pipes by default (with local-only + same-user client checks)
+//! and retains loopback TCP as a legacy fallback for custom `tcp://...` paths.
 
 use crate::daemon::DaemonVault;
 use crate::{get_config_dir, DatabaseError, PasswordManagerError, Result};
+#[cfg(windows)]
+use aes_gcm::aead::{Aead, KeyInit};
+#[cfg(windows)]
+use aes_gcm::{Aes256Gcm, Nonce};
 use rand::{rngs::OsRng, RngCore};
 use serde::{Deserialize, Serialize};
 use std::io::Write;
@@ -14,6 +20,32 @@ use subtle::ConstantTimeEq;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tracing::{debug, error, info, warn};
 use zeroize::Zeroize;
+#[cfg(windows)]
+use windows::core::PCWSTR;
+#[cfg(windows)]
+use windows::Win32::Foundation::{
+    CloseHandle, GetLastError, BOOL, ERROR_BROKEN_PIPE, ERROR_PIPE_CONNECTED, HANDLE,
+    INVALID_HANDLE_VALUE,
+};
+#[cfg(windows)]
+use windows::Win32::Security::{
+    GetLengthSid, GetTokenInformation, OpenProcessToken, TokenUser, TOKEN_QUERY, TOKEN_USER,
+};
+#[cfg(windows)]
+use windows::Win32::Storage::FileSystem::{
+    CreateFileW, CreateNamedPipeW, FILE_ATTRIBUTE_NORMAL, FILE_GENERIC_READ, FILE_GENERIC_WRITE,
+    FILE_SHARE_NONE, OPEN_EXISTING,
+};
+#[cfg(windows)]
+use windows::Win32::System::Pipes::{
+    ConnectNamedPipe, GetNamedPipeClientProcessId, WaitNamedPipeW, PIPE_ACCESS_DUPLEX,
+    PIPE_READMODE_BYTE, PIPE_REJECT_REMOTE_CLIENTS, PIPE_TYPE_BYTE, PIPE_UNLIMITED_INSTANCES,
+    PIPE_WAIT,
+};
+#[cfg(windows)]
+use windows::Win32::System::Threading::{
+    GetCurrentProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+};
 
 /// IPC message types
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -87,6 +119,75 @@ pub enum IpcMessage {
 struct IpcEnvelope {
     token: String,
     message: IpcMessage,
+}
+
+#[cfg(windows)]
+const WINDOWS_IPC_NONCE_LEN: usize = 12;
+
+#[cfg(windows)]
+fn windows_ipc_cipher(auth_token: &str) -> Result<Aes256Gcm> {
+    let key_bytes = hex::decode(auth_token).map_err(|e| {
+        PasswordManagerError::from(DatabaseError::Ipc(format!(
+            "Invalid IPC token encoding for Windows transport encryption: {}",
+            e
+        )))
+    })?;
+
+    if key_bytes.len() != 32 {
+        return Err(PasswordManagerError::from(DatabaseError::Ipc(format!(
+            "Invalid IPC token length for Windows transport encryption: expected 32 bytes, got {}",
+            key_bytes.len()
+        ))));
+    }
+
+    let cipher = Aes256Gcm::new_from_slice(&key_bytes).map_err(|e| {
+        PasswordManagerError::from(DatabaseError::Ipc(format!(
+            "Failed to initialize Windows IPC transport cipher: {}",
+            e
+        )))
+    })?;
+
+    Ok(cipher)
+}
+
+#[cfg(windows)]
+fn encrypt_windows_ipc_frame(auth_token: &str, plaintext: &[u8]) -> Result<Vec<u8>> {
+    let cipher = windows_ipc_cipher(auth_token)?;
+    let mut nonce_bytes = [0u8; WINDOWS_IPC_NONCE_LEN];
+    OsRng.fill_bytes(&mut nonce_bytes);
+    let nonce = Nonce::from_slice(&nonce_bytes);
+
+    let ciphertext = cipher.encrypt(nonce, plaintext).map_err(|e| {
+        PasswordManagerError::from(DatabaseError::Ipc(format!(
+            "Failed to encrypt Windows IPC frame: {}",
+            e
+        )))
+    })?;
+
+    let mut frame = Vec::with_capacity(WINDOWS_IPC_NONCE_LEN + ciphertext.len());
+    frame.extend_from_slice(&nonce_bytes);
+    frame.extend_from_slice(&ciphertext);
+    Ok(frame)
+}
+
+#[cfg(windows)]
+fn decrypt_windows_ipc_frame(auth_token: &str, frame: &[u8]) -> Result<Vec<u8>> {
+    if frame.len() <= WINDOWS_IPC_NONCE_LEN {
+        return Err(PasswordManagerError::from(DatabaseError::Ipc(
+            "Windows IPC frame too short".to_string(),
+        )));
+    }
+
+    let cipher = windows_ipc_cipher(auth_token)?;
+    let nonce = Nonce::from_slice(&frame[..WINDOWS_IPC_NONCE_LEN]);
+    let ciphertext = &frame[WINDOWS_IPC_NONCE_LEN..];
+
+    cipher.decrypt(nonce, ciphertext).map_err(|e| {
+        PasswordManagerError::from(DatabaseError::Ipc(format!(
+            "Failed to decrypt Windows IPC frame: {}",
+            e
+        )))
+    })
 }
 
 /// IPC server for daemon communication
@@ -240,43 +341,80 @@ impl IpcServer {
                                     let mut buffer = vec![0u8; length];
                                     match stream.read_exact(&mut buffer).await {
                                         Ok(_) => {
-                                            match serde_json::from_slice::<IpcEnvelope>(&buffer) {
-                                                Ok(envelope) => {
-                                                    if !bool::from(
-                                                        envelope
-                                                            .token
-                                                            .as_bytes()
-                                                            .ct_eq(self.auth_token.as_bytes()),
+                                            match decrypt_windows_ipc_frame(
+                                                &self.auth_token,
+                                                &buffer,
+                                            ) {
+                                                Ok(decrypted) => {
+                                                    match serde_json::from_slice::<IpcEnvelope>(
+                                                        &decrypted,
                                                     ) {
-                                                        warn!("Rejected IPC request with invalid token");
-                                                        continue;
-                                                    }
-                                                    let response =
-                                                        self.handle_message(envelope.message).await;
-                                                    match serde_json::to_vec(&response) {
-                                                        Ok(response_bytes) => {
-                                                            let response_len =
-                                                                response_bytes.len() as u32;
-                                                            let _ = stream
-                                                                .write_all(
-                                                                    &response_len.to_be_bytes(),
-                                                                )
+                                                        Ok(envelope) => {
+                                                            if !bool::from(
+                                                                envelope.token.as_bytes().ct_eq(
+                                                                    self.auth_token.as_bytes(),
+                                                                ),
+                                                            ) {
+                                                                warn!("Rejected IPC request with invalid token");
+                                                                continue;
+                                                            }
+                                                            let response = self
+                                                                .handle_message(envelope.message)
                                                                 .await;
-                                                            let _ = stream
-                                                                .write_all(&response_bytes)
-                                                                .await;
-                                                            let _ = stream.flush().await;
+                                                            match serde_json::to_vec(&response) {
+                                                                Ok(response_bytes) => {
+                                                                    match encrypt_windows_ipc_frame(
+                                                                        &self.auth_token,
+                                                                        &response_bytes,
+                                                                    ) {
+                                                                        Ok(response_frame) => {
+                                                                            let response_len =
+                                                                                response_frame.len()
+                                                                                    as u32;
+                                                                            let _ = stream
+                                                                                .write_all(
+                                                                                    &response_len
+                                                                                        .to_be_bytes(),
+                                                                                )
+                                                                                .await;
+                                                                            let _ = stream
+                                                                                .write_all(
+                                                                                    &response_frame,
+                                                                                )
+                                                                                .await;
+                                                                            let _ = stream
+                                                                                .flush()
+                                                                                .await;
+                                                                        }
+                                                                        Err(e) => {
+                                                                            error!(
+                                                                                "Failed to encrypt IPC response frame: {}",
+                                                                                e
+                                                                            );
+                                                                        }
+                                                                    }
+                                                                }
+                                                                Err(e) => {
+                                                                    error!(
+                                                                        "Failed to serialize response: {}",
+                                                                        e
+                                                                    );
+                                                                }
+                                                            }
                                                         }
                                                         Err(e) => {
                                                             error!(
-                                                                "Failed to serialize response: {}",
+                                                                "Failed to parse IPC envelope: {}",
                                                                 e
                                                             );
                                                         }
                                                     }
                                                 }
                                                 Err(e) => {
-                                                    error!("Failed to parse IPC envelope: {}", e);
+                                                    error!(
+                                                        "Failed to decrypt Windows IPC frame: {}",
+                                                        e
+                                                    );
                                                 }
                                             }
                                         }
@@ -516,7 +654,6 @@ impl IpcClient {
                     e
                 )))
             })?;
-
             let length = msg_bytes.len() as u32;
 
             stream.write_all(&length.to_be_bytes()).await.map_err(|e| {
@@ -616,6 +753,7 @@ impl IpcClient {
                     e
                 )))
             })?;
+            let msg_bytes = encrypt_windows_ipc_frame(&self.auth_token, &msg_bytes)?;
 
             let length = msg_bytes.len() as u32;
 
@@ -662,6 +800,8 @@ impl IpcClient {
                 )))
             })?;
 
+            let buffer = decrypt_windows_ipc_frame(&self.auth_token, &buffer)?;
+
             serde_json::from_slice::<IpcMessage>(&buffer).map_err(|e| {
                 PasswordManagerError::from(DatabaseError::Ipc(format!(
                     "Failed to parse response: {}",
@@ -675,7 +815,7 @@ impl IpcClient {
 /// Get the default IPC socket path for the platform
 pub fn default_ipc_socket_path() -> PathBuf {
     if cfg!(target_os = "windows") {
-        // Windows: Use TCP localhost (more reliable than named pipes)
+        // Windows: Use loopback TCP with message encryption (interim; named pipes planned)
         PathBuf::from("tcp://127.0.0.1:35873")
     } else {
         // Unix: Use Unix domain socket

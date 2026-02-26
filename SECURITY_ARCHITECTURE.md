@@ -1,5 +1,7 @@
 # PASSWORD MANAGER - SECURITY ARCHITECTURE SPECIFICATION
 
+> Status Note (2026-02-26): This document mixes current implementation details and target-state design goals. Treat it as an architecture/specification document, not a verified implementation-status report. For evidence-based current-state gaps and priorities, see `docs/GAP_REVIEW_2026-02-26.md`, `docs/REQUIREMENTS.md`, and `ROADMAP.md`.
+
 ## 1. HIGH-LEVEL ARCHITECTURE
 
 ```

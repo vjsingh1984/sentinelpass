@@ -257,6 +257,102 @@ fn test_vault_add_and_list_ssh_keys() {
 }
 
 #[test]
+fn test_import_pairing_bootstrap_into_empty_vault() {
+    let password = b"pairing-password";
+    let relay_url = "https://relay.example.com";
+    let source_vault_id = uuid::Uuid::new_v4();
+
+    let source = VaultManager::create(":memory:", password).unwrap();
+    let source_identity = crate::sync::device::DeviceIdentity::generate("Source Device");
+    source
+        .init_sync(
+            relay_url,
+            "Source Device",
+            source_vault_id,
+            &source_identity,
+        )
+        .unwrap();
+    let bootstrap = source.export_pairing_bootstrap().unwrap();
+
+    let mut target = VaultManager::create(":memory:", password).unwrap();
+    {
+        let db = target.db.lock().unwrap();
+        db.conn()
+            .execute(
+                "INSERT INTO sync_devices (device_id, device_name, device_type, public_key, registered_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                rusqlite::params![
+                    uuid::Uuid::new_v4().to_string(),
+                    "Stale Device",
+                    "desktop",
+                    vec![1u8; 32],
+                    Utc::now().timestamp()
+                ],
+            )
+            .unwrap();
+    }
+    target
+        .import_pairing_bootstrap(password, &bootstrap)
+        .expect("pairing bootstrap import should succeed for empty vault");
+
+    let target_db = target.db.lock().unwrap();
+    let (target_kdf, target_wrapped) = VaultManager::load_vault_metadata(&target_db).unwrap();
+    let target_kdf_blob = bincode::serialize(&target_kdf).unwrap();
+    let target_wrapped_blob = bincode::serialize(&target_wrapped).unwrap();
+    let sync_device_count: i64 = target_db
+        .conn()
+        .query_row("SELECT COUNT(*) FROM sync_devices", [], |row| row.get(0))
+        .unwrap();
+    drop(target_db);
+
+    assert_eq!(target_kdf_blob, bootstrap.kdf_params_blob);
+    assert_eq!(target_wrapped_blob, bootstrap.wrapped_dek_blob);
+    assert_eq!(sync_device_count, 0);
+    assert!(target.key_hierarchy.dek().is_ok());
+}
+
+#[test]
+fn test_import_pairing_bootstrap_rejects_non_empty_vault() {
+    let password = b"pairing-password";
+
+    let source = VaultManager::create(":memory:", password).unwrap();
+    let source_identity = crate::sync::device::DeviceIdentity::generate("Source Device");
+    source
+        .init_sync(
+            "https://relay.example.com",
+            "Source Device",
+            uuid::Uuid::new_v4(),
+            &source_identity,
+        )
+        .unwrap();
+    let bootstrap = source.export_pairing_bootstrap().unwrap();
+
+    let mut target = VaultManager::create(":memory:", password).unwrap();
+    let entry = Entry {
+        entry_id: None,
+        title: "Local data".to_string(),
+        username: "user".to_string(),
+        password: "pass".to_string(),
+        url: None,
+        notes: None,
+        created_at: Utc::now(),
+        modified_at: Utc::now(),
+        favorite: false,
+    };
+    target.add_entry(&entry).unwrap();
+
+    let err = target
+        .import_pairing_bootstrap(password, &bootstrap)
+        .expect_err("non-empty vault should be rejected");
+    match err {
+        PasswordManagerError::InvalidInput(msg) => {
+            assert!(msg.contains("must be empty"));
+        }
+        other => panic!("unexpected error: {}", other),
+    }
+}
+
+#[test]
 fn test_vault_get_and_export_ssh_key() {
     let temp_path = ":memory:";
     let password = b"test_password";

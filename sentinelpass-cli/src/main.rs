@@ -365,6 +365,10 @@ enum SyncCommands {
         /// 6-digit pairing code
         #[arg(long)]
         code: String,
+
+        /// Pairing salt (base64) printed by `pair-start`
+        #[arg(long)]
+        salt: String,
     },
 
     /// Disable sync for this vault
@@ -403,6 +407,13 @@ fn open_vault_with_password(vault_path: &PathBuf, master_password: &[u8]) -> Res
         }
         Err(e) => Err(anyhow::anyhow!("Failed to unlock vault: {}", e)),
     }
+}
+
+fn run_async<T>(future: impl std::future::Future<Output = T>) -> Result<T> {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+    Ok(runtime.block_on(future))
 }
 
 fn default_public_key_path(
@@ -1336,7 +1347,8 @@ fn main() -> Result<()> {
 
 fn handle_sync_command(cli: &Cli, cmd: &SyncCommands) -> Result<()> {
     let vault_path = get_vault_path(cli, false);
-    if !vault_path.exists() {
+    let allow_missing_vault = matches!(cmd, SyncCommands::PairJoin { .. });
+    if !vault_path.exists() && !allow_missing_vault {
         anyhow::bail!("No vault found. Use 'sentinelpass init' to create a new vault");
     }
 
@@ -1394,7 +1406,14 @@ fn handle_sync_command(cli: &Cli, cmd: &SyncCommands) -> Result<()> {
                 anyhow::bail!("Sync is not initialized. Use 'sentinelpass sync init' first.");
             }
 
-            println!("Sync not yet connected to relay (client transport requires 'sync' feature).");
+            let status = run_async(vault.sync_now())??;
+            println!("Sync completed.");
+            if let Some(ts) = status.last_sync_at {
+                let dt = chrono::DateTime::from_timestamp(ts, 0)
+                    .map(|d| d.format("%Y-%m-%d %H:%M:%S UTC").to_string())
+                    .unwrap_or_else(|| ts.to_string());
+                println!("Last synced: {}", dt);
+            }
             println!("Pending changes: {}", status.pending_changes);
         }
 
@@ -1501,8 +1520,43 @@ fn handle_sync_command(cli: &Cli, cmd: &SyncCommands) -> Result<()> {
                 anyhow::bail!("Sync is not initialized. Use 'sentinelpass sync init' first.");
             }
 
+            let relay_url = status
+                .relay_url
+                .clone()
+                .ok_or_else(|| anyhow::anyhow!("Sync relay URL is missing"))?;
+            let device_identity = vault
+                .load_sync_device_identity()?
+                .ok_or_else(|| anyhow::anyhow!("Sync device identity is missing"))?;
+            let bootstrap = vault.export_pairing_bootstrap()?;
+
             let code = sentinelpass_core::sync::pairing::generate_pairing_code();
             let salt = sentinelpass_core::sync::pairing::generate_pairing_salt();
+            let pairing_key = sentinelpass_core::sync::pairing::derive_pairing_key(&code, &salt)?;
+            let registration_proof = sentinelpass_core::sync::pairing::derive_registration_proof(
+                &pairing_key,
+                &bootstrap.vault_id,
+            )?;
+            let encrypted_bootstrap =
+                sentinelpass_core::sync::pairing::encrypt_bootstrap(&pairing_key, &bootstrap)?;
+
+            let sentinelpass_core::sync::device::DeviceIdentity {
+                device_id,
+                signing_key,
+                ..
+            } = device_identity;
+            let client = sentinelpass_core::sync::client::SyncClient::new(
+                &relay_url,
+                device_id,
+                signing_key,
+            )?;
+            run_async(client.upload_bootstrap_with_proof(
+                &code,
+                &encrypted_bootstrap,
+                &salt,
+                Some(&registration_proof),
+            ))??;
+
+            let salt_b64 = base64::engine::general_purpose::STANDARD.encode(salt);
 
             println!();
             println!("Pairing Code: {}", code);
@@ -1510,31 +1564,113 @@ fn handle_sync_command(cli: &Cli, cmd: &SyncCommands) -> Result<()> {
             println!("Share this code with the new device. It expires in 5 minutes.");
             println!("On the new device, run:");
             println!(
-                "  sentinelpass sync pair-join --relay-url {} --code {}",
-                status
-                    .relay_url
-                    .unwrap_or_else(|| "<relay-url>".to_string()),
-                code
+                "  sentinelpass sync pair-join --relay-url {} --code {} --salt {}",
+                relay_url, code, salt_b64
             );
             println!();
-            println!(
-                "Pairing salt (base64): {}",
-                base64::engine::general_purpose::STANDARD.encode(salt)
-            );
-            println!("Note: Full pairing with relay upload requires the 'sync' feature.");
+            println!("Pairing bootstrap uploaded to relay.");
         }
 
         SyncCommands::PairJoin {
             ref relay_url,
             ref code,
+            ref salt,
         } => {
             if code.len() != 6 || !code.chars().all(|c| c.is_ascii_digit()) {
                 anyhow::bail!("Pairing code must be exactly 6 digits");
             }
 
-            println!("Pair-join flow requires the 'sync' feature for relay communication.");
-            println!("Relay URL: {}", relay_url);
-            println!("Code: {}", code);
+            let salt_bytes = base64::engine::general_purpose::STANDARD
+                .decode(salt)
+                .map_err(|e| anyhow::anyhow!("Invalid pairing salt: {}", e))?;
+            if salt_bytes.len() != 16 {
+                anyhow::bail!("Pairing salt must decode to 16 bytes");
+            }
+
+            let master_password = prompt_master_password(false)?;
+            let mut vault = if vault_path.exists() {
+                open_vault_with_password(&vault_path, master_password.as_bytes())?
+            } else {
+                VaultManager::create(&vault_path, master_password.as_bytes())
+                    .map_err(|e| anyhow::anyhow!("Failed to create local vault: {}", e))?
+            };
+
+            let status = vault.get_sync_status()?;
+            if status.enabled {
+                anyhow::bail!(
+                    "Sync is already initialized for this vault. Disable it first before pair-join."
+                );
+            }
+
+            let tmp_identity = sentinelpass_core::sync::device::DeviceIdentity::generate(
+                "pair-join-bootstrap-fetch",
+            );
+            let fetch_client = sentinelpass_core::sync::client::SyncClient::new(
+                relay_url,
+                tmp_identity.device_id,
+                tmp_identity.signing_key,
+            )?;
+            let (encrypted_bootstrap, relay_salt) = run_async(fetch_client.fetch_bootstrap(code))??;
+            if relay_salt != salt_bytes {
+                anyhow::bail!(
+                    "Pairing salt mismatch (relay returned different salt than provided)"
+                );
+            }
+
+            let pairing_key =
+                sentinelpass_core::sync::pairing::derive_pairing_key(code, &relay_salt)?;
+            let bootstrap = sentinelpass_core::sync::pairing::decrypt_bootstrap(
+                &pairing_key,
+                &encrypted_bootstrap,
+            )?;
+
+            if relay_url.trim_end_matches('/') != bootstrap.relay_url.trim_end_matches('/') {
+                anyhow::bail!(
+                    "Relay URL mismatch: fetched bootstrap is bound to {}",
+                    bootstrap.relay_url
+                );
+            }
+
+            let registration_proof = sentinelpass_core::sync::pairing::derive_registration_proof(
+                &pairing_key,
+                &bootstrap.vault_id,
+            )?;
+
+            vault.import_pairing_bootstrap(master_password.as_bytes(), &bootstrap)?;
+
+            let device_name = hostname::get()
+                .map(|h| h.to_string_lossy().to_string())
+                .unwrap_or_else(|_| "unknown".to_string());
+            let identity = sentinelpass_core::sync::device::DeviceIdentity::generate(&device_name);
+            let public_key = identity.public_key_bytes();
+            let register_client = sentinelpass_core::sync::client::SyncClient::new(
+                &bootstrap.relay_url,
+                identity.device_id,
+                identity.signing_key.clone(),
+            )?;
+            run_async(register_client.register_device_with_pairing(
+                &device_name,
+                sentinelpass_core::sync::device::DeviceIdentity::current_device_type(),
+                &public_key,
+                &bootstrap.vault_id,
+                Some(code.as_str()),
+                Some(&registration_proof),
+            ))??;
+
+            vault.init_sync(
+                &bootstrap.relay_url,
+                &device_name,
+                bootstrap.vault_id,
+                &identity,
+            )?;
+
+            println!("Pair-join completed: this device is now registered for sync.");
+            println!("  Device name: {}", device_name);
+            println!("  Device ID:   {}", identity.device_id);
+            println!("  Vault ID:    {}", bootstrap.vault_id);
+            println!("  Relay URL:   {}", bootstrap.relay_url);
+            println!();
+            println!("Next: run 'sentinelpass sync now' once sync transport is fully implemented.");
         }
 
         SyncCommands::Disable => {

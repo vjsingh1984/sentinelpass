@@ -26,6 +26,18 @@ Quick reference to all project documentation. Most docs live at the repository r
 | [CLAUDE.md](../CLAUDE.md) | Architecture reference, commands, protocols, coding style | architecture, IPC, native messaging, vault, crypto, TOTP, SSH, CLI, Tauri, daemon |
 | [AGENTS.md](../AGENTS.md) | Multi-agent task delegation configuration | agents, delegation |
 | [TECHNICAL_DEBT.md](../TECHNICAL_DEBT.md) | Verified issues tracker and roadmap | debt, migration, refinery, IPC token, constant-time |
+| [ROADMAP.md](../ROADMAP.md) | Active gap-driven roadmap and phase plan | roadmap, milestones, security hardening, mobile, paid tier |
+
+## Product and Planning
+
+| Document | Description | Keywords |
+|----------|-------------|----------|
+| [docs/GAP_REVIEW_2026-02-26.md](./GAP_REVIEW_2026-02-26.md) | Evidence-based gap audit across security, features, design, and implementation | audit, review, gaps, security posture |
+| [docs/PRD.md](./PRD.md) | Product requirements document (vision, users, scope, metrics, tiers) | prd, vision, users, scope, metrics |
+| [docs/REQUIREMENTS.md](./REQUIREMENTS.md) | Traceable functional/security/ops/commercial requirements | requirements, acceptance criteria, security requirements |
+| [docs/SOLUTION_DESIGN.md](./SOLUTION_DESIGN.md) | Gap-closing architecture and trust-boundary design | design, trust boundary, ipc, relay, extension |
+| [docs/IMPLEMENTATION_PLAN.md](./IMPLEMENTATION_PLAN.md) | 90-day execution plan and workstreams | plan, implementation, sequencing, verification |
+| [docs/OSS_COMMERCIAL_STRATEGY.md](./OSS_COMMERCIAL_STRATEGY.md) | Open-source/free/paid tier strategy and two-repo operating model | open source, paid tier, private repo, licensing |
 
 ## Subsystem Docs
 

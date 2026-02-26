@@ -2,7 +2,7 @@
 //!
 //! This module provides cross-platform auto-fill capabilities:
 //! - Windows: Detect password fields and auto-fill via SendInput/clipboard
-//! - macOS: Keychain integration and Accessibility API (future)
+//! - macOS: Keychain integration and Accessibility API
 //! - Linux: X11/Wayland support (future)
 
 #[cfg(windows)]
@@ -13,10 +13,6 @@ pub mod macos;
 
 #[cfg(target_os = "linux")]
 pub mod linux;
-
-// Re-export platform-specific types
-#[cfg(windows)]
-pub use windows::{AutoFillContext, AutoFillResult, CredentialMatch};
 
 /// Result of an auto-fill operation
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -44,16 +40,15 @@ pub struct CredentialMatch {
     pub title: String,
 }
 
-/// Context for auto-fill operation
+/// Context for auto-fill operation (platform-specific)
 #[cfg(windows)]
-pub struct AutoFillContext {
-    /// Active window handle
-    pub window_handle: windows::HWND,
-    /// Window title
-    pub window_title: String,
-    /// Detected domain/URL
-    pub domain: Option<String>,
-}
+pub use windows::AutoFillContext;
+
+#[cfg(target_os = "macos")]
+pub use macos::AutoFillContext;
+
+#[cfg(target_os = "linux")]
+pub use linux::AutoFillContext;
 
 /// Auto-fill manager (platform-specific)
 pub struct AutoFillManager {

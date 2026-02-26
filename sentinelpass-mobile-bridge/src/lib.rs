@@ -45,6 +45,8 @@ mod bridge;
 #[cfg(feature = "jni")]
 mod jni;
 
+mod icloud;
+
 // Re-export error types
 pub use error::{BridgeError, ErrorCode};
 

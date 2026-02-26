@@ -25,6 +25,9 @@ sentinelpass-core = { path = "../sentinelpass-core" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 
+# Encoding
+base64 = { workspace = true }
+
 # Error handling
 thiserror = { workspace = true }
 anyhow = { workspace = true }

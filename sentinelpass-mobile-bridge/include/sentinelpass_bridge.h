@@ -55,6 +55,11 @@ typedef struct SPEntrySummary {
 } SPEntrySummary;
 
 /**
+ * Handle to iCloud sync manager (opaque pointer)
+ */
+typedef uintptr_t ICloudSyncHandle;
+
+/**
  * FFI-safe password analysis result
  */
 typedef struct SPPasswordAnalysis {
@@ -136,6 +141,53 @@ enum SPErrorCode sp_entry_search(SPVaultHandle Handle,
                                  uintptr_t *OutCount);
 
 /**
+ * Initialize iCloud sync
+ *
+ * # Safety
+ * - `device_id` must be a valid null-terminated UTF-8 string
+ * - `container_name` can be null (uses default)
+ * - `out_handle` must point to valid memory
+ */
+sp
+int32_t sp_icloud_sync_init(const char *DeviceId,
+                            const char *ContainerName,
+                            ICloudSyncHandle *OutHandle);
+
+/**
+ * Prepare sync records for upload
+ *
+ * # Safety
+ * - `json_blobs` must be a valid null-terminated UTF-8 string (JSON array of SyncEntryBlob)
+ * - `out_json` must be either null or point to valid memory for output
+ * - Returns a JSON string that must be freed with `sp_string_free`
+ */
+sp
+int32_t sp_icloud_sync_prepare_upload(ICloudSyncHandle Handle,
+                                      const char *JsonBlobs,
+                                      char **OutJson);
+
+/**
+ * Process downloaded sync records
+ *
+ * # Safety
+ * - `json_records` must be a valid null-terminated UTF-8 string (JSON array of CloudKitRecord)
+ * - `out_json` must be either null or point to valid memory for output
+ * - Returns a JSON string that must be freed with `sp_string_free`
+ */
+sp
+int32_t sp_icloud_sync_process_download(ICloudSyncHandle Handle,
+                                        const char *JsonRecords,
+                                        char **OutJson);
+
+/**
+ * Update sync state after successful sync
+ */
+sp
+int32_t sp_icloud_sync_update_state(ICloudSyncHandle Handle,
+                                    int64_t LastSync,
+                                    uint64_t ServerSequence);
+
+/**
  * Check password strength
  */
 sp
@@ -184,5 +236,5 @@ sp enum SPErrorCode sp_vault_is_unlocked(SPVaultHandle Handle, bool *OutUnlocked
 sp enum SPErrorCode sp_vault_lock(SPVaultHandle Handle);
 
 #ifdef __cplusplus
-} // extern "C"
-#endif // __cplusplus
+}  // extern "C"
+#endif  // __cplusplus

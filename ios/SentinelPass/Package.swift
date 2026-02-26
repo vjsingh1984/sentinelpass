@@ -9,24 +9,28 @@ let package = Package(
         .iOS(.v17)
     ],
     products: [
-        .library(
-            name: "SentinelPass",
-            targets: ["SentinelPass"]
+        .executable(
+            name: "SentinelPassApp",
+            targets: ["SentinelPassApp"]
         ),
     ],
-    dependencies: [
-        // Add any external dependencies here
-    ],
+    dependencies: [],
     targets: [
-        .target(
-            name: "SentinelPass",
+        // iOS App target
+        .executableTarget(
+            name: "SentinelPassApp",
             dependencies: [],
             path: "SentinelPass",
-            linkerSettings: [
-                .unsafeFlags([
-                    "-L", "$(PROJECT_DIR)/../../target/release",
-                    "-lsentinelpass_mobile_bridge"
-                ])
+            exclude: ["Info.plist"],
+            sources: [
+                "SentinelPassApp.swift",
+                "ContentView.swift",
+                "Models",
+                "Services",
+                "Views"
+            ],
+            resources: [
+                .process("Assets.xcassets"),
             ]
         ),
     ]

@@ -46,6 +46,7 @@ mod bridge;
 mod jni;
 
 mod icloud;
+mod drive;
 
 // Re-export error types
 pub use error::{BridgeError, ErrorCode};

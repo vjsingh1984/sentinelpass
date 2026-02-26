@@ -3,10 +3,12 @@
 use crate::app_state::RelayAppState;
 use crate::auth::auth_middleware;
 use crate::handlers::{devices, pairing, sync};
+use axum::extract::ConnectInfo;
 use axum::middleware;
 use axum::routing::{get, post};
 use axum::Router;
 use axum::{body::Body, extract::State, http::Request, middleware::Next, response::Response};
+use std::net::SocketAddr;
 use tower_http::limit::RequestBodyLimitLayer;
 use tower_http::trace::TraceLayer;
 
@@ -55,7 +57,8 @@ async fn health() -> &'static str {
 
 async fn public_rate_limit_middleware(
     State(state): State<RelayAppState>,
-    request: Request<Body>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    mut request: Request<Body>,
     next: Next,
 ) -> Result<Response, crate::error::RelayError> {
     let path = request.uri().path().to_string();
@@ -63,18 +66,23 @@ async fn public_rate_limit_middleware(
         return Ok(next.run(request).await);
     }
 
-    // Prefer proxy-provided client IP if present; fall back to path-only key.
-    let client_hint = request
+    // Prefer proxy-provided client IP if present; fall back to direct connection IP.
+    let client_ip = request
         .headers()
         .get("x-forwarded-for")
         .and_then(|v| v.to_str().ok())
         .and_then(|s| s.split(',').next())
-        .map(str::trim)
+        .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
-        .unwrap_or("unknown");
+        .unwrap_or_else(|| addr.ip().to_string());
 
-    let key = format!("public:{}:{}", path, client_hint);
+    let key = format!("public:{}:{}", path, client_ip);
     if !state.rate_limiter.check(&key) {
+        tracing::warn!(
+            path = %path,
+            client_ip = %client_ip,
+            "Public endpoint rate limit exceeded"
+        );
         return Err(crate::error::RelayError::RateLimited);
     }
 

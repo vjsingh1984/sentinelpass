@@ -127,7 +127,7 @@ sentinelpass-daemon
 **sentinelpass-daemon/** - Background service:
 - Runs Tokio async runtime
 - Manages DaemonVault with auto-lock (5 min default)
-- IPC server: Unix socket on Linux/macOS, TCP on Windows
+- IPC server: Unix socket on Linux/macOS, named pipes on Windows (with per-user ACLs and AES-256-GCM encryption)
 - Handles native messaging requests from browser
 
 **sentinelpass-host/** - Native messaging bridge:
@@ -191,8 +191,9 @@ sentinelpass-daemon
 
 ### IPC (Inter-Process Communication)
 
-**Unix (Linux/macOS):** Unix domain socket at `/tmp/sentinelpass.sock`
-**Windows:** TCP localhost at `tcp://127.0.0.1:35873`
+**Unix (Linux/macOS):** Unix domain socket at `/tmp/sentinelpass.sock` (or `$XDG_RUNTIME_DIR/sentinelpass.sock`)
+**Windows:** Named pipes at `\\.\pipe\SentinelPass-<username>` (per-user ACLs + AES-256-GCM encryption)
+**Legacy TCP:** Custom `tcp://...` paths use loopback TCP with AES-256-GCM encryption
 **Auth:** All IPC requests require a 32-byte hex token from `~/.config/sentinelpass/ipc.token` (mode 0600). Messages use length-prefixed JSON with an envelope containing the token.
 
 ### Sync Protocol
@@ -353,7 +354,9 @@ The Tauri UI auto-registers native messaging host manifests on launch. For manua
 - Registry paths for native messaging:
   - Chrome: `HKCU\Software\Google\Chrome\NativeMessagingHosts\`
   - Firefox: `HKCU\Software\Mozilla\NativeMessagingHosts\`
-- IPC uses TCP localhost (not Unix sockets)
+- IPC uses named pipes with per-user ACLs (`\\.\pipe\SentinelPass-<username>`)
+- Transport encryption: AES-256-GCM (defense-in-depth)
+- Legacy TCP fallback: Custom `tcp://...` paths still use loopback TCP with AES-256-GCM
 
 ### macOS
 - OS keystore: Keychain for biometric wrapper

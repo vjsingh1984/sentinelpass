@@ -21,6 +21,28 @@ pub fn derive_pairing_key(code: &str, salt: &[u8]) -> Result<[u8; 32], crate::cr
     Ok(key)
 }
 
+/// Derive a vault-bound registration proof for authorizing a new device join.
+#[cfg(feature = "sync")]
+pub fn derive_registration_proof(
+    pairing_key: &[u8; 32],
+    vault_id: &uuid::Uuid,
+) -> Result<[u8; 32], crate::crypto::CryptoError> {
+    use hmac::{Hmac, Mac};
+    use sha2::Sha256;
+
+    type HmacSha256 = Hmac<Sha256>;
+
+    let mut mac = HmacSha256::new_from_slice(pairing_key)
+        .map_err(|e| crate::crypto::CryptoError::KdfFailed(format!("HMAC init failed: {}", e)))?;
+    mac.update(b"sentinelpass-pairing-registration-proof-v1");
+    mac.update(vault_id.as_bytes());
+
+    let bytes = mac.finalize().into_bytes();
+    let mut out = [0u8; 32];
+    out.copy_from_slice(&bytes);
+    Ok(out)
+}
+
 /// Encrypt a VaultBootstrap blob with the pairing key.
 #[cfg(feature = "sync")]
 pub fn encrypt_bootstrap(
@@ -135,5 +157,20 @@ mod tests {
 
         let encrypted = encrypt_bootstrap(&correct_key, &bootstrap).unwrap();
         assert!(decrypt_bootstrap(&wrong_key, &encrypted).is_err());
+    }
+
+    #[cfg(feature = "sync")]
+    #[test]
+    fn registration_proof_is_deterministic_and_vault_bound() {
+        let pairing_key = [7u8; 32];
+        let vault_a = uuid::Uuid::new_v4();
+        let vault_b = uuid::Uuid::new_v4();
+
+        let a1 = derive_registration_proof(&pairing_key, &vault_a).unwrap();
+        let a2 = derive_registration_proof(&pairing_key, &vault_a).unwrap();
+        let b = derive_registration_proof(&pairing_key, &vault_b).unwrap();
+
+        assert_eq!(a1, a2);
+        assert_ne!(a1, b);
     }
 }

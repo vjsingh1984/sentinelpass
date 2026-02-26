@@ -1,19 +1,19 @@
 //! Axum router setup.
 
+use crate::app_state::RelayAppState;
 use crate::auth::auth_middleware;
-use crate::config::RelayConfig;
 use crate::handlers::{devices, pairing, sync};
-use crate::storage::RelayStorage;
 use axum::middleware;
 use axum::routing::{get, post};
 use axum::Router;
-use tower_http::cors::CorsLayer;
+use axum::{body::Body, extract::State, http::Request, middleware::Next, response::Response};
 use tower_http::limit::RequestBodyLimitLayer;
 use tower_http::trace::TraceLayer;
 
-pub fn build_router(storage: RelayStorage, config: &RelayConfig) -> Router {
+pub fn build_router(app_state: RelayAppState) -> Router {
     // Authenticated routes
     let authenticated = Router::new()
+        .route("/api/v1/pairing/bootstrap", post(pairing::upload_bootstrap))
         .route("/api/v1/devices", get(devices::list_devices))
         .route("/api/v1/devices/{id}/revoke", post(devices::revoke_device))
         .route("/api/v1/sync/push", post(sync::push))
@@ -22,29 +22,61 @@ pub fn build_router(storage: RelayStorage, config: &RelayConfig) -> Router {
         .route("/api/v1/sync/full-pull", post(sync::full_pull))
         .route("/api/v1/sync/status", get(sync::status))
         .layer(middleware::from_fn_with_state(
-            storage.clone(),
+            app_state.clone(),
             auth_middleware,
         ));
 
     // Unauthenticated routes
     let public = Router::new()
         .route("/api/v1/devices/register", post(devices::register_device))
-        .route("/api/v1/pairing/bootstrap", post(pairing::upload_bootstrap))
         .route(
             "/api/v1/pairing/bootstrap/{token}",
             get(pairing::fetch_bootstrap),
         )
-        .route("/health", get(health));
+        .route("/health", get(health))
+        .layer(middleware::from_fn_with_state(
+            app_state.clone(),
+            public_rate_limit_middleware,
+        ));
 
     Router::new()
         .merge(authenticated)
         .merge(public)
-        .layer(CorsLayer::permissive())
         .layer(TraceLayer::new_for_http())
-        .layer(RequestBodyLimitLayer::new(config.max_payload_size))
-        .with_state(storage)
+        .layer(RequestBodyLimitLayer::new(
+            app_state.config.max_payload_size,
+        ))
+        .with_state(app_state)
 }
 
 async fn health() -> &'static str {
     "ok"
+}
+
+async fn public_rate_limit_middleware(
+    State(state): State<RelayAppState>,
+    request: Request<Body>,
+    next: Next,
+) -> Result<Response, crate::error::RelayError> {
+    let path = request.uri().path().to_string();
+    if path == "/health" {
+        return Ok(next.run(request).await);
+    }
+
+    // Prefer proxy-provided client IP if present; fall back to path-only key.
+    let client_hint = request
+        .headers()
+        .get("x-forwarded-for")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.split(',').next())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("unknown");
+
+    let key = format!("public:{}:{}", path, client_hint);
+    if !state.rate_limiter.check(&key) {
+        return Err(crate::error::RelayError::RateLimited);
+    }
+
+    Ok(next.run(request).await)
 }

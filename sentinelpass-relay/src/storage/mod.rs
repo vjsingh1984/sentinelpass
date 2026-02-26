@@ -94,6 +94,22 @@ impl RelayStorage {
                 consumed INTEGER NOT NULL DEFAULT 0
             );
 
+            CREATE TABLE IF NOT EXISTS pairing_registration_proofs (
+                proof_hash TEXT PRIMARY KEY,
+                pairing_token_hash TEXT NOT NULL,
+                vault_id TEXT NOT NULL,
+                expires_at INTEGER NOT NULL,
+                consumed INTEGER NOT NULL DEFAULT 0
+            );
+
+            CREATE TABLE IF NOT EXISTS pairing_fetch_attempts (
+                token_hash TEXT PRIMARY KEY,
+                attempts INTEGER NOT NULL DEFAULT 0,
+                first_attempt_at INTEGER NOT NULL,
+                last_attempt_at INTEGER NOT NULL,
+                blocked_until INTEGER NOT NULL DEFAULT 0
+            );
+
             CREATE TABLE IF NOT EXISTS seen_nonces (
                 nonce TEXT PRIMARY KEY,
                 device_id TEXT NOT NULL,
@@ -107,7 +123,15 @@ impl RelayStorage {
             CREATE INDEX IF NOT EXISTS idx_seen_nonces_seen_at
                 ON seen_nonces(seen_at);
             CREATE INDEX IF NOT EXISTS idx_pairing_expires
-                ON pairing_bootstraps(expires_at);",
+                ON pairing_bootstraps(expires_at);
+            CREATE INDEX IF NOT EXISTS idx_pairing_registration_proofs_expires
+                ON pairing_registration_proofs(expires_at);
+            CREATE INDEX IF NOT EXISTS idx_pairing_registration_proofs_vault
+                ON pairing_registration_proofs(vault_id);
+            CREATE INDEX IF NOT EXISTS idx_pairing_fetch_attempts_last_attempt
+                ON pairing_fetch_attempts(last_attempt_at);
+            CREATE INDEX IF NOT EXISTS idx_pairing_fetch_attempts_blocked_until
+                ON pairing_fetch_attempts(blocked_until);",
         )?;
         Ok(())
     }

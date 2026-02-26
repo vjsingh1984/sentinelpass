@@ -29,7 +29,10 @@ impl RateLimiter {
     }
 
     pub fn check(&self, device_id: &str) -> bool {
-        let mut buckets = self.buckets.lock().unwrap();
+        let mut buckets = match self.buckets.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
         let now = Instant::now();
 
         let bucket = buckets.entry(device_id.to_string()).or_insert(TokenBucket {
@@ -48,5 +51,26 @@ impl RateLimiter {
         } else {
             false
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::RateLimiter;
+
+    #[test]
+    fn rate_limiter_exhausts_tokens() {
+        let limiter = RateLimiter::new(2);
+        assert!(limiter.check("device-a"));
+        assert!(limiter.check("device-a"));
+        assert!(!limiter.check("device-a"));
+    }
+
+    #[test]
+    fn rate_limiter_is_key_scoped() {
+        let limiter = RateLimiter::new(1);
+        assert!(limiter.check("device-a"));
+        assert!(!limiter.check("device-a"));
+        assert!(limiter.check("device-b"));
     }
 }

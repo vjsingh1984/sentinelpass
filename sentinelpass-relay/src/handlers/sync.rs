@@ -1,7 +1,7 @@
 //! Sync push/pull handlers.
 
+use crate::app_state::RelayAppState;
 use crate::error::RelayError;
-use crate::storage::RelayStorage;
 use axum::extract::State;
 use axum::http::Extensions;
 use axum::Json;
@@ -60,13 +60,14 @@ pub struct PullEntry {
 #[derive(Serialize)]
 pub struct PullResponse {
     pub entries: Vec<PullEntry>,
+    /// Pagination cursor: the last returned server sequence in this page.
     pub server_sequence: u64,
     pub has_more: bool,
 }
 
 /// POST /api/v1/sync/push -- Accept incremental entry pushes, validating versions and sequences.
 pub async fn push(
-    State(storage): State<RelayStorage>,
+    State(state): State<RelayAppState>,
     extensions: Extensions,
     Json(req): Json<PushRequest>,
 ) -> Result<Json<PushResponse>, RelayError> {
@@ -74,7 +75,7 @@ pub async fn push(
         .get::<Uuid>()
         .ok_or_else(|| RelayError::Auth("No device ID".to_string()))?;
 
-    let conn = storage.conn()?;
+    let conn = state.storage.conn()?;
 
     // Get vault_id for this device
     let vault_id: String = conn
@@ -214,7 +215,7 @@ pub async fn push(
 
 /// POST /api/v1/sync/pull -- Return entries newer than the requested sequence.
 pub async fn pull(
-    State(storage): State<RelayStorage>,
+    State(state): State<RelayAppState>,
     extensions: Extensions,
     Json(req): Json<PullRequest>,
 ) -> Result<Json<PullResponse>, RelayError> {
@@ -222,7 +223,7 @@ pub async fn pull(
         .get::<Uuid>()
         .ok_or_else(|| RelayError::Auth("No device ID".to_string()))?;
 
-    let conn = storage.conn()?;
+    let conn = state.storage.conn()?;
 
     let vault_id: String = conn
         .query_row(
@@ -245,47 +246,55 @@ pub async fn pull(
         )
         .map_err(|e| RelayError::Database(e.to_string()))?;
 
-    let entries: Vec<PullEntry> = stmt
+    let entries_with_seq: Vec<(PullEntry, i64)> = stmt
         .query_map(
             rusqlite::params![vault_id, req.since_sequence as i64, limit + 1],
             |row| {
                 let payload: Vec<u8> = row.get(4)?;
-                Ok(PullEntry {
-                    sync_id: row.get(0)?,
-                    entry_type: row.get(1)?,
-                    sync_version: row.get::<_, i64>(2)? as u64,
-                    modified_at: row.get(3)?,
-                    encrypted_payload: base64::engine::general_purpose::STANDARD.encode(&payload),
-                    is_tombstone: row.get(5)?,
-                    origin_device_id: row.get(6)?,
-                })
+                let server_sequence: i64 = row.get(7)?;
+                Ok((
+                    PullEntry {
+                        sync_id: row.get(0)?,
+                        entry_type: row.get(1)?,
+                        sync_version: row.get::<_, i64>(2)? as u64,
+                        modified_at: row.get(3)?,
+                        encrypted_payload: base64::engine::general_purpose::STANDARD
+                            .encode(&payload),
+                        is_tombstone: row.get(5)?,
+                        origin_device_id: row.get(6)?,
+                    },
+                    server_sequence,
+                ))
             },
         )
         .map_err(|e| RelayError::Database(e.to_string()))?
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| RelayError::Database(e.to_string()))?;
 
-    let has_more = entries.len() > limit as usize;
-    let entries: Vec<PullEntry> = entries.into_iter().take(limit as usize).collect();
-
-    let server_seq: i64 = conn
-        .query_row(
-            "SELECT current_sequence FROM sequence_counters WHERE vault_id = ?1",
-            [&vault_id],
-            |row| row.get(0),
-        )
-        .map_err(|e| RelayError::Database(e.to_string()))?;
+    let has_more = entries_with_seq.len() > limit as usize;
+    let entries_with_seq: Vec<(PullEntry, i64)> =
+        entries_with_seq.into_iter().take(limit as usize).collect();
+    let page_cursor = entries_with_seq
+        .last()
+        .map(|(_, seq)| *seq as u64)
+        .unwrap_or(req.since_sequence);
+    let entries: Vec<PullEntry> = entries_with_seq
+        .into_iter()
+        .map(|(entry, _)| entry)
+        .collect();
 
     Ok(Json(PullResponse {
         entries,
-        server_sequence: server_seq as u64,
+        // `server_sequence` acts as a pagination cursor (last returned sequence) so clients can
+        // safely page without skipping unseen entries when `has_more = true`.
+        server_sequence: page_cursor,
         has_more,
     }))
 }
 
 /// POST /api/v1/sync/full-push -- Accept a full vault upload (initial sync).
 pub async fn full_push(
-    State(storage): State<RelayStorage>,
+    State(state): State<RelayAppState>,
     extensions: Extensions,
     Json(entries): Json<Vec<SyncEntryBlob>>,
 ) -> Result<Json<PushResponse>, RelayError> {
@@ -294,32 +303,32 @@ pub async fn full_push(
         device_sequence: 1,
         entries,
     };
-    push(State(storage), extensions, Json(req)).await
+    push(State(state), extensions, Json(req)).await
 }
 
 /// POST /api/v1/sync/full-pull -- Return all entries in the vault.
 pub async fn full_pull(
-    State(storage): State<RelayStorage>,
+    State(state): State<RelayAppState>,
     extensions: Extensions,
 ) -> Result<Json<Vec<PullEntry>>, RelayError> {
     let req = PullRequest {
         since_sequence: 0,
         limit: Some(100_000),
     };
-    let response = pull(State(storage), extensions, Json(req)).await?;
+    let response = pull(State(state), extensions, Json(req)).await?;
     Ok(Json(response.0.entries))
 }
 
 /// GET /api/v1/sync/status -- Return sync status for the authenticated device.
 pub async fn status(
-    State(storage): State<RelayStorage>,
+    State(state): State<RelayAppState>,
     extensions: Extensions,
 ) -> Result<Json<serde_json::Value>, RelayError> {
     let device_id = extensions
         .get::<Uuid>()
         .ok_or_else(|| RelayError::Auth("No device ID".to_string()))?;
 
-    let conn = storage.conn()?;
+    let conn = state.storage.conn()?;
 
     let vault_id: String = conn
         .query_row(

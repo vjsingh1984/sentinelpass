@@ -1,7 +1,7 @@
 //! Ed25519 auth middleware for the relay server.
 
+use crate::app_state::RelayAppState;
 use crate::error::RelayError;
-use crate::storage::RelayStorage;
 use axum::body::Body;
 use axum::extract::State;
 use axum::http::Request;
@@ -14,7 +14,7 @@ use uuid::Uuid;
 
 /// Auth middleware: verifies Ed25519 signature on every authenticated request.
 pub async fn auth_middleware(
-    State(storage): State<RelayStorage>,
+    State(state): State<RelayAppState>,
     request: Request<Body>,
     next: Next,
 ) -> Result<Response, RelayError> {
@@ -30,16 +30,22 @@ pub async fn auth_middleware(
 
     // Read body for signature verification
     let (parts, body) = request.into_parts();
-    let body_bytes = axum::body::to_bytes(body, 1024 * 1024)
+    let body_bytes = axum::body::to_bytes(body, state.config.max_payload_size)
         .await
         .map_err(|e| RelayError::BadRequest(format!("Failed to read body: {}", e)))?;
 
-    let (device_id, _timestamp, nonce) =
-        verify_auth(&auth_header, &method, &path, &body_bytes, &storage)?;
+    let (device_id, _timestamp, nonce) = verify_auth(
+        &auth_header,
+        &method,
+        &path,
+        &body_bytes,
+        &state.storage,
+        state.config.nonce_window_secs,
+    )?;
 
     // Check nonce dedup
     {
-        let conn = storage.conn()?;
+        let conn = state.storage.conn()?;
         let now = Utc::now().timestamp();
 
         let seen: bool = conn
@@ -61,6 +67,12 @@ pub async fn auth_middleware(
         .map_err(|e| RelayError::Database(e.to_string()))?;
     }
 
+    // Per-device rate limiting after auth verification and nonce consumption.
+    let device_key = format!("auth:{}", device_id);
+    if !state.rate_limiter.check(&device_key) {
+        return Err(RelayError::RateLimited);
+    }
+
     // Reconstruct request with device_id in extensions and original body
     let mut request = Request::from_parts(parts, Body::from(body_bytes));
     request.extensions_mut().insert(device_id);
@@ -73,7 +85,8 @@ fn verify_auth(
     method: &str,
     path: &str,
     body: &[u8],
-    storage: &RelayStorage,
+    storage: &crate::storage::RelayStorage,
+    nonce_window_secs: i64,
 ) -> Result<(Uuid, i64, String), RelayError> {
     let stripped = header
         .strip_prefix("SentinelPass-Ed25519 ")
@@ -96,7 +109,7 @@ fn verify_auth(
 
     // Check timestamp freshness (5 min window)
     let now = Utc::now().timestamp();
-    if (now - timestamp).abs() > 300 {
+    if (now - timestamp).abs() > nonce_window_secs.max(1) {
         return Err(RelayError::Auth("Request expired".to_string()));
     }
 

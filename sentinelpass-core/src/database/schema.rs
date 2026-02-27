@@ -5,7 +5,7 @@ use rusqlite::Connection;
 use std::path::Path;
 
 /// Current schema version. Incremented when the schema changes.
-pub const CURRENT_SCHEMA_VERSION: i32 = 2;
+pub const CURRENT_SCHEMA_VERSION: i32 = 3;
 
 /// Main database connection and schema manager
 pub struct Database {

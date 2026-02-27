@@ -420,6 +420,96 @@ impl VaultManager {
         Ok(entries)
     }
 
+    /// List entries with pagination to prevent performance issues with large vaults.
+    /// Returns entries for the specified page, along with total count and whether more results exist.
+    pub fn list_entries_paginated(
+        &self,
+        pagination: PaginationParams,
+    ) -> Result<PaginatedResult<EntrySummary>> {
+        if !self.is_unlocked() {
+            return Err(PasswordManagerError::VaultLocked);
+        }
+
+        let dek = self.key_hierarchy.dek()?;
+        let db = self
+            .db
+            .lock()
+            .map_err(|_| DatabaseError::LockPoisoned("Failed to lock database".to_string()))?;
+
+        // First, get the total count of non-deleted entries
+        let total_count: i64 = db
+            .conn()
+            .query_row(
+                "SELECT COUNT(*) FROM entries WHERE is_deleted = 0",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(DatabaseError::Sqlite)?;
+
+        // Get paginated entries with ORDER BY and LIMIT/OFFSET
+        let offset = pagination.offset() as i64;
+        let limit = pagination.limit() as i64;
+
+        let mut stmt = db.conn().prepare(
+            "SELECT entry_id, title, username, favorite
+             FROM entries
+             WHERE is_deleted = 0
+             ORDER BY title COLLATE NOCASE ASC
+             LIMIT ?1 OFFSET ?2"
+        ).map_err(DatabaseError::Sqlite)?;
+
+        let mut entries = stmt
+            .query_map([limit, offset], |row| {
+                let entry_id: i64 = row.get(0)?;
+                let title_blob: Vec<u8> = row.get(1)?;
+                let username_blob: Vec<u8> = row.get(2)?;
+                let favorite: i32 = row.get(3)?;
+
+                Ok((entry_id, title_blob, username_blob, favorite))
+            })
+            .map_err(DatabaseError::Sqlite)?
+            .map(|row| -> Result<EntrySummary> {
+                let (entry_id, title_blob, username_blob, favorite) =
+                    row.map_err(|e| PasswordManagerError::from(DatabaseError::Sqlite(e)))?;
+
+                let title_encrypted: EncryptedEntry = bincode::deserialize(&title_blob)
+                    .map_err(|e| DatabaseError::Serialization(e.to_string()))?;
+                let username_encrypted: EncryptedEntry = bincode::deserialize(&username_blob)
+                    .map_err(|e| DatabaseError::Serialization(e.to_string()))?;
+
+                let title = decrypt_to_string(dek, &title_encrypted)?;
+                let username = decrypt_to_string(dek, &username_encrypted)?;
+
+                Ok(EntrySummary {
+                    entry_id,
+                    title,
+                    username,
+                    favorite: favorite != 0,
+                })
+            })
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+
+        // Calculate if there are more results
+        let has_more = (offset + entries.len() as i64) < total_count;
+
+        // Log credentials list operation
+        if let Some(ref logger) = self.audit_logger {
+            let _ = logger.log(
+                AuditEventType::CredentialsListed {
+                    count: entries.len(),
+                },
+                &format!("Listed {} credentials (page {}, total {})",
+                    entries.len(), pagination.page, total_count),
+            );
+        }
+
+        Ok(PaginatedResult {
+            items: entries,
+            total_count,
+            has_more,
+        })
+    }
+
     /// Delete an entry (soft-delete with tombstone for sync).
     pub fn delete_entry(&self, entry_id: i64) -> Result<()> {
         if !self.is_unlocked() {
@@ -1043,4 +1133,42 @@ pub struct EntrySummary {
     pub title: String,
     pub username: String,
     pub favorite: bool,
+}
+
+/// Result of a paginated query
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PaginatedResult<T> {
+    pub items: Vec<T>,
+    pub total_count: i64,
+    pub has_more: bool,
+}
+
+/// Pagination parameters
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct PaginationParams {
+    pub page: u32,
+    pub page_size: u32,
+}
+
+impl Default for PaginationParams {
+    fn default() -> Self {
+        Self {
+            page: 0,
+            page_size: 50,
+        }
+    }
+}
+
+impl PaginationParams {
+    pub fn new(page: u32, page_size: u32) -> Self {
+        Self { page, page_size }
+    }
+
+    pub fn offset(&self) -> u32 {
+        self.page.saturating_mul(self.page_size)
+    }
+
+    pub fn limit(&self) -> u32 {
+        self.page_size.min(1000) // Cap at 1000 items per page
+    }
 }

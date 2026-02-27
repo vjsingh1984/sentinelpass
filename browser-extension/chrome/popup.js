@@ -1,32 +1,18 @@
 // Popup script for Password Manager extension
 let currentDomain = '';
-const UNAVAILABLE_FEATURE_MESSAGE = 'This feature is not available in the current preview build.';
+
 document.addEventListener('DOMContentLoaded', async () => {
     // Get current tab
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     currentDomain = new URL(tab.url).hostname;
     // Initialize popup
     setupEventListeners();
-    applyUnavailableFeatureState();
     checkVaultStatus();
 });
 function setupEventListeners() {
     document.getElementById('lockBtn').addEventListener('click', lockVault);
     document.getElementById('settingsBtn').addEventListener('click', openSettings);
-}
-function applyUnavailableFeatureState() {
-    const searchInput = document.getElementById('searchInput');
-    if (searchInput) {
-        searchInput.disabled = true;
-        searchInput.title = UNAVAILABLE_FEATURE_MESSAGE;
-        searchInput.classList.add('feature-disabled');
-    }
-    const addButton = document.getElementById('addCredentialBtn');
-    if (addButton) {
-        addButton.disabled = true;
-        addButton.title = UNAVAILABLE_FEATURE_MESSAGE;
-        addButton.classList.add('feature-disabled');
-    }
+    document.getElementById('searchInput').addEventListener('input', handleSearch);
 }
 async function checkVaultStatus() {
     showLoading();
@@ -78,7 +64,7 @@ async function loadCredentials() {
             credentialsList.innerHTML = `
         <div class="empty-state">
           <p>No credentials found for <strong>${escapeHtml(currentDomain)}</strong></p>
-          <button id="addCredentialBtn" class="btn btn-primary feature-disabled" disabled title="${escapeHtml(UNAVAILABLE_FEATURE_MESSAGE)}">Add Credential (Coming Soon)</button>
+          <p class="hint">Use the search above to find credentials for other sites</p>
         </div>
       `;
         }
@@ -92,6 +78,28 @@ async function loadCredentials() {
     `;
     }
 }
+
+function handleSearch() {
+    const searchInput = document.getElementById('searchInput');
+    const searchTerm = searchInput.value.trim().toLowerCase();
+    const credentialsList = document.getElementById('credentialsList');
+
+    if (!searchTerm) {
+        // Clear search and show current domain credentials
+        loadCredentials();
+        return;
+    }
+
+    // For now, show a helpful message about search functionality
+    credentialsList.innerHTML = `
+        <div class="empty-state">
+            <p><strong>Full vault search coming soon</strong></p>
+            <p class="hint">For now, passwords are only available for the current site</p>
+            <p class="hint">Current site: <strong>${escapeHtml(currentDomain)}</strong></p>
+        </div>
+    `;
+}
+
 function showLockedView() {
     hideAllViews();
     document.getElementById('lockedView').classList.remove('hidden');
@@ -145,7 +153,12 @@ async function lockVault() {
     }
 }
 function openSettings() {
-    showNotification(UNAVAILABLE_FEATURE_MESSAGE, 'info');
+    // Open extension options page
+    if (chrome.runtime.openOptionsPage) {
+        chrome.runtime.openOptionsPage();
+    } else {
+        showNotification('Settings page coming soon', 'info');
+    }
 }
 async function copyToClipboard(username, password) {
     try {

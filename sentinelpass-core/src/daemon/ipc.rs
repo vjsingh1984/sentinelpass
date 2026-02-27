@@ -1145,3 +1145,427 @@ pub fn load_or_create_ipc_token() -> Result<String> {
 
     Ok(token)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_ipc_envelope_serialization() {
+        let envelope = IpcEnvelope {
+            token: "test_token_12345".to_string(),
+            message: IpcMessage::GetCredential {
+                domain: "example.com".to_string(),
+            },
+        };
+
+        let serialized = serde_json::to_string(&envelope).unwrap();
+        let deserialized: IpcEnvelope = serde_json::from_str(&serialized).unwrap();
+
+        assert_eq!(deserialized.token, envelope.token);
+        match deserialized.message {
+            IpcMessage::GetCredential { domain } => {
+                assert_eq!(domain, "example.com");
+            }
+            _ => panic!("Wrong message type"),
+        }
+    }
+
+    #[test]
+    fn test_credential_summary_serialization() {
+        let summary = CredentialSummary {
+            username: "user@example.com".to_string(),
+            title: Some("Example Account".to_string()),
+            domain: "example.com".to_string(),
+        };
+
+        let serialized = serde_json::to_string(&summary).unwrap();
+        let deserialized: CredentialSummary = serde_json::from_str(&serialized).unwrap();
+
+        assert_eq!(deserialized.username, summary.username);
+        assert_eq!(deserialized.title, summary.title);
+        assert_eq!(deserialized.domain, summary.domain);
+    }
+
+    #[test]
+    fn test_message_types_serialize_correctly() {
+        let messages = vec![
+            IpcMessage::GetCredential {
+                domain: "example.com".to_string(),
+            },
+            IpcMessage::CheckVault,
+            IpcMessage::LockVault,
+            IpcMessage::Shutdown,
+            IpcMessage::ListDomainCredentials {
+                base_domain: "example.com".to_string(),
+            },
+        ];
+
+        for msg in messages {
+            let serialized = serde_json::to_string(&msg).unwrap();
+            let deserialized: IpcMessage = serde_json::from_str(&serialized).unwrap();
+
+            // Verify round-trip
+            match (&msg, &deserialized) {
+                (IpcMessage::GetCredential { domain: d1 }, IpcMessage::GetCredential { domain: d2 }) => {
+                    assert_eq!(d1, d2);
+                }
+                (IpcMessage::ListDomainCredentials { base_domain: b1 }, IpcMessage::ListDomainCredentials { base_domain: b2 }) => {
+                    assert_eq!(b1, b2);
+                }
+                (IpcMessage::CheckVault, IpcMessage::CheckVault) => {}
+                (IpcMessage::LockVault, IpcMessage::LockVault) => {}
+                (IpcMessage::Shutdown, IpcMessage::Shutdown) => {}
+                _ => panic!("Message type mismatch during round-trip"),
+            }
+        }
+    }
+
+    #[test]
+    fn test_get_credential_response_serialization() {
+        let response = IpcMessage::GetCredentialResponse {
+            username: Some("user@example.com".to_string()),
+            password: Some("password123".to_string()),
+            title: Some("Example".to_string()),
+        };
+
+        let serialized = serde_json::to_string(&response).unwrap();
+        let deserialized: IpcMessage = serde_json::from_str(&serialized).unwrap();
+
+        match deserialized {
+            IpcMessage::GetCredentialResponse {
+                username,
+                password,
+                title,
+            } => {
+                assert_eq!(username, Some("user@example.com".to_string()));
+                assert_eq!(password, Some("password123".to_string()));
+                assert_eq!(title, Some("Example".to_string()));
+            }
+            _ => panic!("Wrong response type"),
+        }
+    }
+
+    #[test]
+    fn test_list_domain_credentials_response_serialization() {
+        let credentials = vec![
+            CredentialSummary {
+                username: "user1@example.com".to_string(),
+                title: Some("Account 1".to_string()),
+                domain: "example.com".to_string(),
+            },
+            CredentialSummary {
+                username: "user2@example.com".to_string(),
+                title: Some("Account 2".to_string()),
+                domain: "example.com".to_string(),
+            },
+        ];
+
+        let response = IpcMessage::ListDomainCredentialsResponse {
+            credentials: credentials.clone(),
+        };
+
+        let serialized = serde_json::to_string(&response).unwrap();
+        let deserialized: IpcMessage = serde_json::from_str(&serialized).unwrap();
+
+        match deserialized {
+            IpcMessage::ListDomainCredentialsResponse { credentials: decoded } => {
+                assert_eq!(decoded.len(), 2);
+                assert_eq!(decoded[0].username, "user1@example.com");
+                assert_eq!(decoded[1].username, "user2@example.com");
+            }
+            _ => panic!("Wrong response type"),
+        }
+    }
+
+    #[test]
+    fn test_save_credential_response_serialization() {
+        let response = IpcMessage::SaveCredentialResponse {
+            success: true,
+            error: None,
+        };
+
+        let serialized = serde_json::to_string(&response).unwrap();
+        let deserialized: IpcMessage = serde_json::from_str(&serialized).unwrap();
+
+        match deserialized {
+            IpcMessage::SaveCredentialResponse { success, error } => {
+                assert!(success);
+                assert!(error.is_none());
+            }
+            _ => panic!("Wrong response type"),
+        }
+    }
+
+    #[test]
+    fn test_save_credential_error_response_serialization() {
+        let response = IpcMessage::SaveCredentialResponse {
+            success: false,
+            error: Some("Vault is locked".to_string()),
+        };
+
+        let serialized = serde_json::to_string(&response).unwrap();
+        let deserialized: IpcMessage = serde_json::from_str(&serialized).unwrap();
+
+        match deserialized {
+            IpcMessage::SaveCredentialResponse { success, error } => {
+                assert!(!success);
+                assert_eq!(error, Some("Vault is locked".to_string()));
+            }
+            _ => panic!("Wrong response type"),
+        }
+    }
+
+    #[test]
+    fn test_unlock_vault_response_serialization() {
+        let response = IpcMessage::UnlockVaultResponse {
+            success: true,
+            error: None,
+        };
+
+        let serialized = serde_json::to_string(&response).unwrap();
+        let deserialized: IpcMessage = serde_json::from_str(&serialized).unwrap();
+
+        match deserialized {
+            IpcMessage::UnlockVaultResponse { success, error } => {
+                assert!(success);
+                assert!(error.is_none());
+            }
+            _ => panic!("Wrong response type"),
+        }
+    }
+
+    #[test]
+    fn test_vault_status_response_serialization() {
+        let response = IpcMessage::VaultStatusResponse { unlocked: true };
+
+        let serialized = serde_json::to_string(&response).unwrap();
+        let deserialized: IpcMessage = serde_json::from_str(&serialized).unwrap();
+
+        match deserialized {
+            IpcMessage::VaultStatusResponse { unlocked } => {
+                assert!(unlocked);
+            }
+            _ => panic!("Wrong response type"),
+        }
+    }
+
+    #[test]
+    fn test_totp_response_serialization() {
+        let response = IpcMessage::GetTotpCodeResponse {
+            code: Some("123456".to_string()),
+            seconds_remaining: Some(30),
+        };
+
+        let serialized = serde_json::to_string(&response).unwrap();
+        let deserialized: IpcMessage = serde_json::from_str(&serialized).unwrap();
+
+        match deserialized {
+            IpcMessage::GetTotpCodeResponse {
+                code,
+                seconds_remaining,
+            } => {
+                assert_eq!(code, Some("123456".to_string()));
+                assert_eq!(seconds_remaining, Some(30));
+            }
+            _ => panic!("Wrong response type"),
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_default_socket_path_unix() {
+        let path = default_ipc_socket_path();
+        assert!(path.to_string_lossy().ends_with("sentinelpass.sock"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn test_default_socket_path_windows() {
+        let path = default_ipc_socket_path();
+        assert!(path.to_string_lossy().contains("\\\\.\\pipe\\"));
+    }
+
+    #[test]
+    fn test_socket_path_with_xdg_runtime_dir() {
+        let custom_runtime = "/tmp/custom_runtime";
+        std::env::set_var("XDG_RUNTIME_DIR", custom_runtime);
+
+        let path = default_ipc_socket_path();
+        let path_str = path.to_string_lossy();
+
+        #[cfg(unix)]
+        assert!(path_str.contains(custom_runtime));
+
+        std::env::remove_var("XDG_RUNTIME_DIR");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn test_windows_named_pipe_path_format() {
+        let pipe_path = windows_named_pipe_path();
+        let pipe_str = pipe_path.to_string_lossy();
+
+        assert!(pipe_str.contains("\\\\.\\pipe\\"));
+        assert!(pipe_str.contains("SentinelPass"));
+    }
+
+    #[test]
+    fn test_save_credential_message_serialization() {
+        let msg = IpcMessage::SaveCredential {
+            domain: "example.com".to_string(),
+            username: "user@example.com".to_string(),
+            password: "secure_password".to_string(),
+            url: Some("https://example.com".to_string()),
+        };
+
+        let serialized = serde_json::to_string(&msg).unwrap();
+        let deserialized: IpcMessage = serde_json::from_str(&serialized).unwrap();
+
+        match deserialized {
+            IpcMessage::SaveCredential {
+                domain,
+                username,
+                password,
+                url,
+            } => {
+                assert_eq!(domain, "example.com");
+                assert_eq!(username, "user@example.com");
+                assert_eq!(password, "secure_password");
+                assert_eq!(url, Some("https://example.com".to_string()));
+            }
+            _ => panic!("Wrong message type"),
+        }
+    }
+
+    #[test]
+    fn test_unlock_vault_message_serialization() {
+        let msg = IpcMessage::UnlockVault {
+            master_password: "test_password".to_string(),
+        };
+
+        let serialized = serde_json::to_string(&msg).unwrap();
+        let deserialized: IpcMessage = serde_json::from_str(&serialized).unwrap();
+
+        match deserialized {
+            IpcMessage::UnlockVault { master_password } => {
+                assert_eq!(master_password, "test_password");
+            }
+            _ => panic!("Wrong message type"),
+        }
+    }
+
+    #[test]
+    fn test_unlock_vault_biometric_message_serialization() {
+        let msg = IpcMessage::UnlockVaultBiometric {
+            prompt_reason: Some("Authenticate to unlock".to_string()),
+        };
+
+        let serialized = serde_json::to_string(&msg).unwrap();
+        let deserialized: IpcMessage = serde_json::from_str(&serialized).unwrap();
+
+        match deserialized {
+            IpcMessage::UnlockVaultBiometric { prompt_reason } => {
+                assert_eq!(prompt_reason, Some("Authenticate to unlock".to_string()));
+            }
+            _ => panic!("Wrong response type"),
+        }
+    }
+
+    #[test]
+    fn test_empty_credential_list_serialization() {
+        let response = IpcMessage::ListDomainCredentialsResponse {
+            credentials: vec![],
+        };
+
+        let serialized = serde_json::to_string(&response).unwrap();
+        let deserialized: IpcMessage = serde_json::from_str(&serialized).unwrap();
+
+        match deserialized {
+            IpcMessage::ListDomainCredentialsResponse { credentials } => {
+                assert!(credentials.is_empty());
+            }
+            _ => panic!("Wrong response type"),
+        }
+    }
+
+    #[test]
+    fn test_credential_summary_without_title() {
+        let summary = CredentialSummary {
+            username: "user@example.com".to_string(),
+            title: None,
+            domain: "example.com".to_string(),
+        };
+
+        let serialized = serde_json::to_string(&summary).unwrap();
+        let deserialized: CredentialSummary = serde_json::from_str(&serialized).unwrap();
+
+        assert_eq!(deserialized.username, summary.username);
+        assert_eq!(deserialized.title, None);
+        assert_eq!(deserialized.domain, summary.domain);
+    }
+
+    #[test]
+    fn test_get_totp_code_message_serialization() {
+        let msg = IpcMessage::GetTotpCode {
+            domain: "example.com".to_string(),
+        };
+
+        let serialized = serde_json::to_string(&msg).unwrap();
+        let deserialized: IpcMessage = serde_json::from_str(&serialized).unwrap();
+
+        match deserialized {
+            IpcMessage::GetTotpCode { domain } => {
+                assert_eq!(domain, "example.com");
+            }
+            _ => panic!("Wrong message type"),
+        }
+    }
+
+    #[test]
+    fn test_sync_status_message_serialization() {
+        let msg = IpcMessage::SyncStatus;
+
+        let serialized = serde_json::to_string(&msg).unwrap();
+        let deserialized: IpcMessage = serde_json::from_str(&serialized).unwrap();
+
+        match deserialized {
+            IpcMessage::SyncStatus => {}
+            _ => panic!("Wrong message type"),
+        }
+    }
+
+    #[test]
+    fn test_sync_status_response_serialization() {
+        let response = IpcMessage::SyncStatusResponse {
+            enabled: true,
+            device_id: Some("device-123".to_string()),
+            device_name: Some("Test Device".to_string()),
+            relay_url: Some("https://relay.example.com".to_string()),
+            last_sync_at: Some(1700000000),
+            pending_changes: 5,
+        };
+
+        let serialized = serde_json::to_string(&response).unwrap();
+        let deserialized: IpcMessage = serde_json::from_str(&serialized).unwrap();
+
+        match deserialized {
+            IpcMessage::SyncStatusResponse {
+                enabled,
+                device_id,
+                device_name,
+                relay_url,
+                last_sync_at,
+                pending_changes,
+            } => {
+                assert!(enabled);
+                assert_eq!(device_id, Some("device-123".to_string()));
+                assert_eq!(device_name, Some("Test Device".to_string()));
+                assert_eq!(relay_url, Some("https://relay.example.com".to_string()));
+                assert_eq!(last_sync_at, Some(1700000000));
+                assert_eq!(pending_changes, 5);
+            }
+            _ => panic!("Wrong response type"),
+        }
+    }
+}

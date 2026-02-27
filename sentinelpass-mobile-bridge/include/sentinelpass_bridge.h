@@ -30,6 +30,11 @@ typedef enum SPErrorCode {
 typedef uint64_t SPVaultHandle;
 
 /**
+ * Handle to Drive sync manager (C FFI)
+ */
+typedef uintptr_t DriveSyncCHandle;
+
+/**
  * FFI-safe entry representation
  */
 typedef struct SPEntry {
@@ -85,6 +90,58 @@ typedef struct SPTotpCode {
 extern "C" {
 #endif // __cplusplus
 
+/**
+ * Initialize Drive sync (JNI)
+ *
+ * # Safety
+ * - `env` must be a valid JNI environment pointer
+ * - `_ctx` is the Android context (unused in Rust)
+ * - `device_id` is a JNI string reference
+ *
+ * Returns a handle to the sync manager
+ */
+sp jlong Java_com_sentinelpass_DriveSync_nativeInit(JNIEnv Env, jobject Ctx, jstring DeviceId);
+
+/**
+ * Prepare sync files for upload (JNI)
+ *
+ * # Safety
+ * - `env` must be a valid JNI environment pointer
+ * - `json_blobs` is a JNI string reference (JSON array of SyncEntryBlob)
+ *
+ * Returns a JSON string of DriveFile objects
+ */
+sp
+jstring Java_com_sentinelpass_DriveSync_nativePrepareUpload(JNIEnv Env,
+                                                            jobject Obj,
+                                                            jlong Handle,
+                                                            jstring JsonBlobs);
+
+/**
+ * Process downloaded sync files (JNI)
+ *
+ * # Safety
+ * - `env` must be a valid JNI environment pointer
+ * - `json_files` is a JNI string reference (JSON array of DriveFile)
+ *
+ * Returns a JSON string of SyncEntryBlob objects
+ */
+sp
+jstring Java_com_sentinelpass_DriveSync_nativeProcessDownload(JNIEnv Env,
+                                                              jobject Obj,
+                                                              jlong Handle,
+                                                              jstring JsonFiles);
+
+/**
+ * Update sync state after successful sync (JNI)
+ */
+sp
+jint Java_com_sentinelpass_DriveSync_nativeUpdateState(JNIEnv Env,
+                                                       jobject Obj,
+                                                       jlong Handle,
+                                                       jlong LastSync,
+                                                       jstring PageToken);
+
 sp enum SPErrorCode sp_biometric_has_key(SPVaultHandle Handle, bool *OutHasKey);
 
 sp enum SPErrorCode sp_biometric_remove_key(SPVaultHandle Handle);
@@ -97,6 +154,41 @@ enum SPErrorCode sp_biometric_set_key(SPVaultHandle Handle,
 sp enum SPErrorCode sp_biometric_unlock(SPVaultHandle Handle);
 
 sp void sp_bytes_free(const uint8_t *Ptr, uintptr_t Len);
+
+/**
+ * Initialize Drive sync (C FFI)
+ *
+ * # Safety
+ * - `device_id` must be a valid null-terminated UTF-8 string
+ * - `out_handle` must point to valid memory
+ */
+sp int sp_drive_sync_init(const char *DeviceId, DriveSyncCHandle *OutHandle);
+
+/**
+ * Prepare sync files for upload (C FFI)
+ *
+ * # Safety
+ * - `json_blobs` must be a valid null-terminated UTF-8 string (JSON array of SyncEntryBlob)
+ * - `out_json` must be either null or point to valid memory for output
+ */
+sp int sp_drive_sync_prepare_upload(DriveSyncCHandle Handle, const char *JsonBlobs, char **OutJson);
+
+/**
+ * Process downloaded sync files (C FFI)
+ *
+ * # Safety
+ * - `json_files` must be a valid null-terminated UTF-8 string (JSON array of DriveFile)
+ * - `out_json` must be either null or point to valid memory for output
+ */
+sp
+int sp_drive_sync_process_download(DriveSyncCHandle Handle,
+                                   const char *JsonFiles,
+                                   char **OutJson);
+
+/**
+ * Update sync state after successful sync (C FFI)
+ */
+sp int sp_drive_sync_update_state(DriveSyncCHandle Handle, int64_t LastSync, const char *PageToken);
 
 /**
  * Add a new entry
@@ -236,5 +328,5 @@ sp enum SPErrorCode sp_vault_is_unlocked(SPVaultHandle Handle, bool *OutUnlocked
 sp enum SPErrorCode sp_vault_lock(SPVaultHandle Handle);
 
 #ifdef __cplusplus
-}  // extern "C"
-#endif  // __cplusplus
+} // extern "C"
+#endif // __cplusplus

@@ -5,7 +5,12 @@
 
 pub mod migrations;
 pub mod models;
+pub mod repository;
 pub mod schema;
 
 pub use models::{DomainMapping, Entry, TotpSecret};
+pub use repository::{
+    EntryFilter, EntryRepository, NewEntryParams, RawEntryRow, SqliteEntryRepository,
+    UpdateEntryParams,
+};
 pub use schema::Database;

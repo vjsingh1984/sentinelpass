@@ -495,10 +495,6 @@ impl VaultManager {
         }
 
         let dek = self.key_hierarchy.dek()?;
-        let db = self
-            .db
-            .lock()
-            .map_err(|_| DatabaseError::LockPoisoned("Failed to lock database".to_string()))?;
 
         // Encrypt the entry data
         let title_encrypted = encrypt_string(dek, &entry.title)?;
@@ -540,35 +536,24 @@ impl VaultManager {
 
         let now = Utc::now().timestamp();
 
-        // Update the entry
-        let rows_affected = db
-            .conn()
-            .execute(
-                "UPDATE entries
-             SET title = ?1, username = ?2, password = ?3, url = ?4, notes = ?5,
-                 entry_nonce = ?6, auth_tag = ?7, modified_at = ?8, favorite = ?9
-             WHERE entry_id = ?10",
-                (
-                    &title_blob,
-                    &username_blob,
-                    &password_blob,
-                    url_blob.as_deref(),
-                    notes_blob.as_deref(),
-                    &nonce_blob,
-                    &auth_tag_blob,
-                    now,
-                    entry.favorite as i32,
-                    entry_id,
-                ),
-            )
-            .map_err(DatabaseError::Sqlite)?;
+        // Use repository pattern to update
+        let db = self.db.lock()
+            .map_err(|_| DatabaseError::LockPoisoned("Failed to lock database".to_string()))?;
+        let repo = SqliteEntryRepository::new(&*db);
 
-        if rows_affected == 0 {
-            return Err(PasswordManagerError::NotFound(format!(
-                "Entry {}",
-                entry_id
-            )));
-        }
+        let params = UpdateEntryParams {
+            title: Some(title_blob),
+            username: Some(username_blob),
+            password: Some(password_blob),
+            url: url_blob,
+            notes: notes_blob,
+            entry_nonce: Some(nonce_blob),
+            auth_tag: Some(auth_tag_blob),
+            modified_at: now,
+            favorite: Some(entry.favorite),
+        };
+
+        repo.update(entry_id, params).map_err(PasswordManagerError::from)?;
 
         // Log credential modification
         if let Some(ref logger) = self.audit_logger {

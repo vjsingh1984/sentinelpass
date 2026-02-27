@@ -45,7 +45,7 @@ impl WindowsNamedPipeTransport {
             let client = tokio::net::windows::named_pipe::ClientOptions::new().open(&self.pipe_name).await;
             match client {
                 Ok(c) => {
-                    return Ok(WindowsNamedPipeConnection { pipe: c });
+                    return Ok(WindowsNamedPipeConnection::from_client(c));
                 }
                 Err(e) => {
                     // Check for NotFound specifically by trying to connect and checking the error
@@ -59,17 +59,31 @@ impl WindowsNamedPipeTransport {
     }
 }
 
-/// Windows named pipe connection (server-side)
-pub struct WindowsNamedPipeConnection {
-    pipe: tokio::net::windows::named_pipe::NamedPipeServer,
+/// Windows named pipe connection (can be either server or client side)
+pub enum WindowsNamedPipeConnection {
+    Server(tokio::net::windows::named_pipe::NamedPipeServer),
+    Client(tokio::net::windows::named_pipe::NamedPipeClient),
 }
 
 impl WindowsNamedPipeConnection {
+    /// Create a connection from a server-side pipe
+    pub fn from_server(pipe: tokio::net::windows::named_pipe::NamedPipeServer) -> Self {
+        Self::Server(pipe)
+    }
+
+    /// Create a connection from a client-side pipe
+    pub fn from_client(pipe: tokio::net::windows::named_pipe::NamedPipeClient) -> Self {
+        Self::Client(pipe)
+    }
+
     /// Read a message from the connection
     pub async fn read_message(&mut self) -> TransportResult<Vec<u8>> {
         // Read message length (4 bytes, big-endian)
         let mut length_buf = [0u8; 4];
-        self.pipe.read_exact(&mut length_buf).await?;
+        match self {
+            WindowsNamedPipeConnection::Server(p) => p.read_exact(&mut length_buf).await?,
+            WindowsNamedPipeConnection::Client(p) => p.read_exact(&mut length_buf).await?,
+        };
 
         let length = u32::from_be_bytes(length_buf) as usize;
 
@@ -82,7 +96,10 @@ impl WindowsNamedPipeConnection {
 
         // Read message payload
         let mut buffer = vec![0u8; length];
-        self.pipe.read_exact(&mut buffer).await?;
+        match self {
+            WindowsNamedPipeConnection::Server(p) => p.read_exact(&mut buffer).await?,
+            WindowsNamedPipeConnection::Client(p) => p.read_exact(&mut buffer).await?,
+        };
 
         Ok(buffer)
     }
@@ -100,19 +117,34 @@ impl WindowsNamedPipeConnection {
         }
 
         // Write length prefix
-        self.pipe.write_all(&length.to_be_bytes()).await?;
+        match self {
+            WindowsNamedPipeConnection::Server(p) => p.write_all(&length.to_be_bytes()).await?,
+            WindowsNamedPipeConnection::Client(p) => p.write_all(&length.to_be_bytes()).await?,
+        };
 
         // Write payload
-        self.pipe.write_all(data).await?;
+        match self {
+            WindowsNamedPipeConnection::Server(p) => p.write_all(data).await?,
+            WindowsNamedPipeConnection::Client(p) => p.write_all(data).await?,
+        };
 
-        self.pipe.flush().await?;
+        // Flush
+        match self {
+            WindowsNamedPipeConnection::Server(p) => p.flush().await?,
+            WindowsNamedPipeConnection::Client(p) => p.flush().await?,
+        };
 
         Ok(())
     }
 
     /// Close the connection
     pub async fn close(&mut self) -> TransportResult<()> {
-        self.pipe.disconnect().await?;
+        match self {
+            WindowsNamedPipeConnection::Server(p) => p.disconnect().await?,
+            WindowsNamedPipeConnection::Client(p) => {
+                // Client doesn't have a disconnect method - just drop it
+            }
+        };
         Ok(())
     }
 

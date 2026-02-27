@@ -6,7 +6,18 @@
 //! Loopback TCP is retained as a legacy fallback for custom `tcp://...` paths.
 
 use crate::daemon::DaemonVault;
+use crate::daemon::transport::{TransportConfig, TransportError};
 use crate::{get_config_dir, DatabaseError, PasswordManagerError, Result};
+
+#[cfg(unix)]
+use crate::daemon::transport::unix::UnixSocketTransport;
+#[cfg(unix)]
+use crate::daemon::transport::unix::UnixSocketConnection;
+#[cfg(windows)]
+use crate::daemon::transport::windows::WindowsNamedPipeTransport;
+#[cfg(windows)]
+use crate::daemon::transport::windows::WindowsNamedPipeConnection;
+
 #[cfg(windows)]
 use aes_gcm::aead::{Aead, KeyInit};
 #[cfg(windows)]
@@ -233,11 +244,20 @@ impl IpcServer {
 
         #[cfg(unix)]
         {
-            use tokio::net::UnixListener;
-
-            let listener = UnixListener::bind(&self.socket_path).map_err(|e| {
+            // Use Unix domain socket transport
+            let mut transport = UnixSocketTransport::new(TransportConfig {
+                unix_socket_path: Some(self.socket_path.to_string_lossy().to_string()),
+                ..Default::default()
+            }).map_err(|e| {
                 PasswordManagerError::from(DatabaseError::Ipc(format!(
-                    "Failed to bind socket: {}",
+                    "Failed to create transport: {}",
+                    e
+                )))
+            })?;
+
+            transport.bind().map_err(|e| {
+                PasswordManagerError::from(DatabaseError::Ipc(format!(
+                    "Failed to bind transport: {}",
                     e
                 )))
             })?;
@@ -245,71 +265,46 @@ impl IpcServer {
             info!("IPC server listening on {:?}", self.socket_path);
 
             loop {
-                match listener.accept().await {
-                    Ok((mut stream, addr)) => {
-                        debug!("IPC client connected: {:?}", addr);
+                match transport.accept().await {
+                    Ok(mut conn) => {
+                        debug!("IPC client connected");
 
-                        let mut length_buf = [0u8; 4];
-                        match stream.read_exact(&mut length_buf).await {
-                            Ok(_) => {
-                                let length = u32::from_be_bytes(length_buf) as usize;
-                                if length > 0 && length <= 65536 {
-                                    let mut buffer = vec![0u8; length];
-                                    match stream.read_exact(&mut buffer).await {
-                                        Ok(_) => {
-                                            match serde_json::from_slice::<IpcEnvelope>(&buffer) {
-                                                Ok(envelope) => {
-                                                    if !bool::from(
-                                                        envelope
-                                                            .token
-                                                            .as_bytes()
-                                                            .ct_eq(self.auth_token.as_bytes()),
-                                                    ) {
-                                                        warn!("Rejected IPC request with invalid token");
-                                                        continue;
-                                                    }
-                                                    let response =
-                                                        self.handle_message(envelope.message).await;
-                                                    match serde_json::to_vec(&response) {
-                                                        Ok(response_bytes) => {
-                                                            let response_len =
-                                                                response_bytes.len() as u32;
-                                                            if stream
-                                                                .write_all(
-                                                                    &response_len.to_be_bytes(),
-                                                                )
-                                                                .await
-                                                                .is_ok()
-                                                                && stream
-                                                                    .write_all(&response_bytes)
-                                                                    .await
-                                                                    .is_ok()
-                                                            {
-                                                                // Flush to ensure message is sent
-                                                                let _ = stream.flush().await;
-                                                            }
-                                                        }
-                                                        Err(e) => {
-                                                            error!(
-                                                                "Failed to serialize response: {}",
-                                                                e
-                                                            );
-                                                        }
-                                                    }
-                                                }
-                                                Err(e) => {
-                                                    error!("Failed to parse IPC envelope: {}", e);
+                        match conn.read_message().await {
+                            Ok(buffer) => {
+                                match serde_json::from_slice::<IpcEnvelope>(&buffer) {
+                                    Ok(envelope) => {
+                                        if !bool::from(
+                                            envelope
+                                                .token
+                                                .as_bytes()
+                                                .ct_eq(self.auth_token.as_bytes()),
+                                        ) {
+                                            warn!("Rejected IPC request with invalid token");
+                                            continue;
+                                        }
+                                        let response =
+                                            self.handle_message(envelope.message).await;
+                                        match serde_json::to_vec(&response) {
+                                            Ok(response_bytes) => {
+                                                if let Err(e) = conn.write_message(&response_bytes).await {
+                                                    error!("Failed to send response: {}", e);
                                                 }
                                             }
+                                            Err(e) => {
+                                                error!("Failed to serialize response: {}", e);
+                                            }
                                         }
-                                        Err(e) => {
-                                            error!("Failed to read message: {}", e);
-                                        }
+                                    }
+                                    Err(e) => {
+                                        error!("Failed to parse IPC envelope: {}", e);
                                     }
                                 }
                             }
+                            Err(TransportError::MessageTooLarge { size, .. }) => {
+                                error!("Rejected oversized message: {} bytes", size);
+                            }
                             Err(e) => {
-                                error!("Failed to read length: {}", e);
+                                error!("Failed to read message: {}", e);
                             }
                         }
                     }
@@ -450,130 +445,91 @@ impl IpcServer {
                 }
             } else {
                 // Default: Use named pipes with per-user ACLs
-                let pipe_name = windows_named_pipe_path();
+                let transport = WindowsNamedPipeTransport::new(TransportConfig {
+                    windows_pipe_path: Some(windows_named_pipe_path()),
+                    ..Default::default()
+                }).map_err(|e| {
+                    PasswordManagerError::from(DatabaseError::Ipc(format!(
+                        "Failed to create transport: {}",
+                        e
+                    )))
+                })?;
+
+                let pipe_name = transport.pipe_name();
                 info!("IPC server listening on named pipe: {}", pipe_name);
 
-                // Convert pipe name to UTF-16 for Windows API
-                let pipe_name_wide: Vec<u16> =
-                    pipe_name.encode_utf16().chain(std::iter::once(0)).collect();
-
                 loop {
-                    // Create the named pipe
-                    let server = ServerOptions::new()
-                        .first_pipe_instance(false)
-                        .create(&pipe_name)
-                        .map_err(|e| {
-                            PasswordManagerError::from(DatabaseError::Ipc(format!(
-                                "Failed to create named pipe: {}",
-                                e
-                            )))
-                        })?;
+                    // Create the named pipe server
+                    let pipe_server = transport.create_server().map_err(|e| {
+                        PasswordManagerError::from(DatabaseError::Ipc(format!(
+                            "Failed to create named pipe: {}",
+                            e
+                        )))
+                    })?;
 
                     debug!("Named pipe created, waiting for connection");
 
                     // Wait for a client to connect
-                    match server.connect().await {
+                    match pipe_server.connect().await {
                         Ok(_) => {
                             debug!("IPC client connected (named pipe)");
 
-                            // Verify the client is the same user
-                            // Note: tokio's named pipe doesn't expose the raw handle easily,
-                            // so we rely on the per-user ACL and AES-GCM encryption for security
+                            let mut conn = WindowsNamedPipeConnection::from_server(pipe_server);
 
-                            let mut length_buf = [0u8; 4];
-                            match server.read_exact(&mut length_buf).await {
-                                Ok(_) => {
-                                    let length = u32::from_be_bytes(length_buf) as usize;
-                                    if length > 0 && length <= 65536 {
-                                        let mut buffer = vec![0u8; length];
-                                        match server.read_exact(&mut buffer).await {
-                                            Ok(_) => {
-                                                match decrypt_windows_ipc_frame(
-                                                    &self.auth_token,
-                                                    &buffer,
-                                                ) {
-                                                    Ok(decrypted) => {
-                                                        match serde_json::from_slice::<IpcEnvelope>(
-                                                            &decrypted,
-                                                        ) {
-                                                            Ok(envelope) => {
-                                                                if !bool::from(
-                                                                    envelope.token.as_bytes().ct_eq(
-                                                                        self.auth_token.as_bytes(),
-                                                                    ),
-                                                                ) {
-                                                                    warn!("Rejected IPC request with invalid token");
-                                                                    let _ = server.disconnect().await;
-                                                                    continue;
-                                                                }
-                                                                let response = self
-                                                                    .handle_message(envelope.message)
-                                                                    .await;
-                                                                match serde_json::to_vec(&response) {
-                                                                    Ok(response_bytes) => {
-                                                                        match encrypt_windows_ipc_frame(
-                                                                            &self.auth_token,
-                                                                            &response_bytes,
-                                                                        ) {
-                                                                            Ok(response_frame) => {
-                                                                                let response_len =
-                                                                                    response_frame.len()
-                                                                                        as u32;
-                                                                                let _ = server
-                                                                                    .write_all(
-                                                                                        &response_len
-                                                                                            .to_be_bytes(),
-                                                                                    )
-                                                                                    .await;
-                                                                                let _ = server
-                                                                                    .write_all(
-                                                                                        &response_frame,
-                                                                                    )
-                                                                                    .await;
-                                                                                let _ = server.flush().await;
-                                                                            }
-                                                                            Err(e) => {
-                                                                                error!(
-                                                                                    "Failed to encrypt IPC response frame: {}",
-                                                                                    e
-                                                                                );
-                                                                            }
-                                                                        }
-                                                                    }
-                                                                    Err(e) => {
-                                                                        error!(
-                                                                            "Failed to serialize response: {}",
-                                                                            e
-                                                                        );
+                            // Read encrypted message
+                            match conn.read_message().await {
+                                Ok(buffer) => {
+                                    // Decrypt the frame
+                                    match decrypt_windows_ipc_frame(&self.auth_token, &buffer) {
+                                        Ok(decrypted) => {
+                                            match serde_json::from_slice::<IpcEnvelope>(&decrypted) {
+                                                Ok(envelope) => {
+                                                    if !bool::from(
+                                                        envelope.token.as_bytes().ct_eq(
+                                                            self.auth_token.as_bytes(),
+                                                        ),
+                                                    ) {
+                                                        warn!("Rejected IPC request with invalid token");
+                                                        let _ = conn.close().await;
+                                                        continue;
+                                                    }
+                                                    let response = self.handle_message(envelope.message).await;
+                                                    match serde_json::to_vec(&response) {
+                                                        Ok(response_bytes) => {
+                                                            match encrypt_windows_ipc_frame(
+                                                                &self.auth_token,
+                                                                &response_bytes,
+                                                            ) {
+                                                                Ok(response_frame) => {
+                                                                    if let Err(e) = conn.write_message(&response_frame).await {
+                                                                        error!("Failed to send response: {}", e);
                                                                     }
                                                                 }
-                                                            }
-                                                            Err(e) => {
-                                                                error!(
-                                                                    "Failed to parse IPC envelope: {}",
-                                                                    e
-                                                                );
+                                                                Err(e) => {
+                                                                    error!("Failed to encrypt IPC response frame: {}", e);
+                                                                }
                                                             }
                                                         }
-                                                    }
-                                                    Err(e) => {
-                                                        error!(
-                                                            "Failed to decrypt Windows IPC frame: {}",
-                                                            e
-                                                        );
+                                                        Err(e) => {
+                                                            error!("Failed to serialize response: {}", e);
+                                                        }
                                                     }
                                                 }
-                                            }
-                                            Err(e) => {
-                                                error!("Failed to read message: {}", e);
+                                                Err(e) => {
+                                                    error!("Failed to parse IPC envelope: {}", e);
+                                                }
                                             }
                                         }
-                                    } else {
-                                        error!("Invalid message length: {}", length);
+                                        Err(e) => {
+                                            error!("Failed to decrypt Windows IPC frame: {}", e);
+                                        }
                                     }
                                 }
+                                Err(TransportError::MessageTooLarge { size, .. }) => {
+                                    error!("Rejected oversized message: {} bytes", size);
+                                }
                                 Err(e) => {
-                                    error!("Failed to read length: {}", e);
+                                    error!("Failed to read message: {}", e);
                                 }
                             }
                         }
@@ -582,8 +538,7 @@ impl IpcServer {
                         }
                     }
 
-                    // Disconnect to allow new connections
-                    let _ = server.disconnect().await;
+                    // Connection is closed when dropped
                 }
             }
         }
@@ -810,14 +765,14 @@ impl IpcClient {
     pub async fn send(&self, msg: IpcMessage) -> Result<IpcMessage> {
         #[cfg(unix)]
         {
-            use tokio::net::UnixStream;
-
-            let mut stream = UnixStream::connect(&self.socket_path).await.map_err(|e| {
-                PasswordManagerError::from(DatabaseError::Ipc(format!(
-                    "Failed to connect to daemon: {}",
-                    e
-                )))
-            })?;
+            // Use Unix socket transport
+            let mut conn = UnixSocketConnection::connect(self.socket_path.clone()).await
+                .map_err(|e| {
+                    PasswordManagerError::from(DatabaseError::Ipc(format!(
+                        "Failed to connect to daemon: {}",
+                        e
+                    )))
+                })?;
 
             let envelope = IpcEnvelope {
                 token: self.auth_token.clone(),
@@ -829,45 +784,16 @@ impl IpcClient {
                     e
                 )))
             })?;
-            let length = msg_bytes.len() as u32;
 
-            stream.write_all(&length.to_be_bytes()).await.map_err(|e| {
-                PasswordManagerError::from(DatabaseError::Ipc(format!(
-                    "Failed to write length: {}",
-                    e
-                )))
-            })?;
-
-            stream.write_all(&msg_bytes).await.map_err(|e| {
+            conn.write_message(&msg_bytes).await.map_err(|e| {
                 PasswordManagerError::from(DatabaseError::Ipc(format!(
                     "Failed to write message: {}",
                     e
                 )))
             })?;
 
-            stream.flush().await.map_err(|e| {
-                PasswordManagerError::from(DatabaseError::Ipc(format!("Failed to flush: {}", e)))
-            })?;
-
             // Read response
-            let mut length_buf = [0u8; 4];
-            stream.read_exact(&mut length_buf).await.map_err(|e| {
-                PasswordManagerError::from(DatabaseError::Ipc(format!(
-                    "Failed to read length: {}",
-                    e
-                )))
-            })?;
-
-            let response_length = u32::from_be_bytes(length_buf) as usize;
-
-            if response_length > 65536 {
-                return Err(PasswordManagerError::from(DatabaseError::Ipc(
-                    "Response too large".to_string(),
-                )));
-            }
-
-            let mut buffer = vec![0u8; response_length];
-            stream.read_exact(&mut buffer).await.map_err(|e| {
+            let buffer = conn.read_message().await.map_err(|e| {
                 PasswordManagerError::from(DatabaseError::Ipc(format!(
                     "Failed to read response: {}",
                     e
@@ -991,27 +917,23 @@ impl IpcClient {
                 let pipe_name = windows_named_pipe_path();
                 debug!("Connecting to named pipe: {}", pipe_name);
 
-                // Connect with bounded retries
-                let connect_deadline =
-                    tokio::time::Instant::now() + tokio::time::Duration::from_secs(3);
+                // Use Windows named pipe transport
+                let transport = WindowsNamedPipeTransport::new(TransportConfig {
+                    windows_pipe_path: Some(pipe_name),
+                    ..Default::default()
+                }).map_err(|e| {
+                    PasswordManagerError::from(DatabaseError::Ipc(format!(
+                        "Failed to create transport: {}",
+                        e
+                    )))
+                })?;
 
-                let mut client = loop {
-                    match ClientOptions::new().open(&pipe_name) {
-                        Ok(c) => break c,
-                        Err(e) => {
-                            if tokio::time::Instant::now() >= connect_deadline {
-                                return Err(PasswordManagerError::from(DatabaseError::Ipc(
-                                    format!(
-                                        "Failed to connect to named pipe {}: timed out after 3s",
-                                        pipe_name
-                                    ),
-                                )));
-                            }
-                            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-                            continue;
-                        }
-                    }
-                };
+                let mut conn = transport.connect(3000).await.map_err(|e| {
+                    PasswordManagerError::from(DatabaseError::Ipc(format!(
+                        "Failed to connect to named pipe: {}",
+                        e
+                    )))
+                })?;
 
                 let envelope = IpcEnvelope {
                     token: self.auth_token.clone(),
@@ -1025,45 +947,15 @@ impl IpcClient {
                 })?;
                 let msg_bytes = encrypt_windows_ipc_frame(&self.auth_token, &msg_bytes)?;
 
-                let length = msg_bytes.len() as u32;
-
-                client.write_all(&length.to_be_bytes()).await.map_err(|e| {
-                    PasswordManagerError::from(DatabaseError::Ipc(format!(
-                        "Failed to write length: {}",
-                        e
-                    )))
-                })?;
-
-                client.write_all(&msg_bytes).await.map_err(|e| {
+                conn.write_message(&msg_bytes).await.map_err(|e| {
                     PasswordManagerError::from(DatabaseError::Ipc(format!(
                         "Failed to write message: {}",
                         e
                     )))
                 })?;
 
-                client.flush().await.map_err(|e| {
-                    PasswordManagerError::from(DatabaseError::Ipc(format!("Failed to flush: {}", e)))
-                })?;
-
                 // Read response
-                let mut length_buf = [0u8; 4];
-                client.read_exact(&mut length_buf).await.map_err(|e| {
-                    PasswordManagerError::from(DatabaseError::Ipc(format!(
-                        "Failed to read length: {}",
-                        e
-                    )))
-                })?;
-
-                let response_length = u32::from_be_bytes(length_buf) as usize;
-
-                if response_length > 65536 {
-                    return Err(PasswordManagerError::from(DatabaseError::Ipc(
-                        "Response too large".to_string(),
-                    )));
-                }
-
-                let mut buffer = vec![0u8; response_length];
-                client.read_exact(&mut buffer).await.map_err(|e| {
+                let buffer = conn.read_message().await.map_err(|e| {
                     PasswordManagerError::from(DatabaseError::Ipc(format!(
                         "Failed to read response: {}",
                         e

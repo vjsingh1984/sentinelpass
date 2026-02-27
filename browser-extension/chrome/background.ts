@@ -6,15 +6,15 @@ import {
   normalizeUsername,
   isUsernameMatchOrUnknown,
 } from './save-heuristics.js';
+import { debugLog, infoLog, warnLog, errorLog } from './logger.js';
 
 // Native messaging host configuration
 const HOST_NAME = 'com.passwordmanager.host';
 const NOTIFICATION_ICON_URL = chrome.runtime.getURL('icon128.png');
 
-console.log('[SentinelPass Background] ========== VERSION 0.1.0 - URL + CHANGE HEURISTIC HARDENING ==========');
-console.log('[SentinelPass Background] Service worker loaded');
-console.log('[SentinelPass Background] Host name:', HOST_NAME);
-console.log('[SentinelPass Background] Extension ID:', chrome.runtime.id);
+infoLog('Background service worker loaded');
+debugLog('Host name:', HOST_NAME);
+debugLog('Extension ID:', chrome.runtime.id);
 
 // ========================================
 // Helper Functions
@@ -429,7 +429,7 @@ async function addNeverSaveDomain(domainOrUrl) {
 
 // Handle get_credential request
 async function handleGetCredential(domain, requestId) {
-  console.log('[SentinelPass Background] handleGetCredential called for domain:', domain);
+  debugLog('[SentinelPass Background] handleGetCredential called for domain:', domain);
 
   try {
     const response = await chrome.runtime.sendNativeMessage(HOST_NAME, {
@@ -438,7 +438,7 @@ async function handleGetCredential(domain, requestId) {
       request_id: requestId
     });
 
-    console.log('[SentinelPass Background] Got credential response from native host:', redactForLog(response));
+    debugLog('[SentinelPass Background] Got credential response from native host:', redactForLog(response));
     return response;
   } catch (error) {
     console.error('[SentinelPass Background] Error getting credential:', error);
@@ -451,7 +451,7 @@ async function handleGetCredential(domain, requestId) {
 
 // Handle get_totp_code request
 async function handleGetTotpCode(domain, requestId) {
-  console.log('[SentinelPass Background] handleGetTotpCode called for domain:', domain);
+  debugLog('[SentinelPass Background] handleGetTotpCode called for domain:', domain);
 
   try {
     const response = await chrome.runtime.sendNativeMessage(HOST_NAME, {
@@ -460,7 +460,7 @@ async function handleGetTotpCode(domain, requestId) {
       request_id: requestId
     });
 
-    console.log('[SentinelPass Background] Got TOTP response from native host:', redactForLog(response));
+    debugLog('[SentinelPass Background] Got TOTP response from native host:', redactForLog(response));
     return response;
   } catch (error) {
     console.error('[SentinelPass Background] Error getting TOTP code:', error);
@@ -473,20 +473,20 @@ async function handleGetTotpCode(domain, requestId) {
 
 // Handle save_credential request
 async function handleSaveCredential(data) {
-  console.log('[SentinelPass Background] handleSaveCredential called');
-  console.log('[SentinelPass Background] Save request payload:', redactForLog(data));
+  debugLog('[SentinelPass Background] handleSaveCredential called');
+  debugLog('[SentinelPass Background] Save request payload:', redactForLog(data));
 
   try {
     if (await isCredentialUnchanged(data)) {
-      console.log('[SentinelPass Background] Credential unchanged; skipping save write');
+      debugLog('[SentinelPass Background] Credential unchanged; skipping save write');
       await sessionRemove([PENDING_UNLOCK_RETRY_KEY]);
       return { success: true, unchanged: true };
     }
 
     // Send to native host for saving
-    console.log('[SentinelPass Background] Sending save request to native host...');
+    debugLog('[SentinelPass Background] Sending save request to native host...');
     const canonicalUrl = normalizeCredentialUrl(data?.submitted_url || data?.url, data?.domain);
-    console.log('[SentinelPass Background] Canonical URL selected for save:', canonicalUrl);
+    debugLog('[SentinelPass Background] Canonical URL selected for save:', canonicalUrl);
 
     const response = await chrome.runtime.sendNativeMessage(HOST_NAME, {
       type: 'save_credential',
@@ -499,10 +499,10 @@ async function handleSaveCredential(data) {
       }
     });
 
-    console.log('[SentinelPass Background] Native host response:', redactForLog(response));
+    debugLog('[SentinelPass Background] Native host response:', redactForLog(response));
 
     if (response && response.success) {
-      console.log('[SentinelPass Background] Credential saved successfully');
+      debugLog('[SentinelPass Background] Credential saved successfully');
       await sessionRemove([PENDING_UNLOCK_RETRY_KEY]);
       return { success: true };
     } else {
@@ -550,7 +550,7 @@ async function handleSaveCredential(data) {
 
 // Handle check_credential_exists request
 async function handleCheckCredentialExists(domain) {
-  console.log('[SentinelPass Background] handleCheckCredentialExists called for domain:', domain);
+  debugLog('[SentinelPass Background] handleCheckCredentialExists called for domain:', domain);
 
   try {
     const response = await chrome.runtime.sendNativeMessage(HOST_NAME, {
@@ -558,7 +558,7 @@ async function handleCheckCredentialExists(domain) {
       domain: domain
     });
 
-    console.log('[SentinelPass Background] Credential exists check result:', redactForLog(response));
+    debugLog('[SentinelPass Background] Credential exists check result:', redactForLog(response));
     return response.exists || false;
   } catch (error) {
     console.error('[SentinelPass Background] Error checking credential exists:', error);
@@ -568,14 +568,14 @@ async function handleCheckCredentialExists(domain) {
 
 // Handle check_vault_status request
 async function handleCheckVaultStatus() {
-  console.log('[SentinelPass Background] handleCheckVaultStatus called');
+  debugLog('[SentinelPass Background] handleCheckVaultStatus called');
 
   try {
     const response = await chrome.runtime.sendNativeMessage(HOST_NAME, {
       type: 'check_vault_status'
     });
 
-    console.log('[SentinelPass Background] Vault status:', redactForLog(response));
+    debugLog('[SentinelPass Background] Vault status:', redactForLog(response));
     return {
       success: response?.success === true,
       unlocked: response?.unlocked === true
@@ -592,7 +592,7 @@ async function handleCheckVaultStatus() {
 
 // Handle lock_vault request
 async function handleLockVault() {
-  console.log('[SentinelPass Background] handleLockVault called');
+  debugLog('[SentinelPass Background] handleLockVault called');
 
   try {
     const response = await chrome.runtime.sendNativeMessage(HOST_NAME, {
@@ -615,8 +615,8 @@ async function handleLockVault() {
 
 // Handle save notification request from content script
 async function handleSaveNotification(data, sender) {
-  console.log('[SentinelPass Background] ========== HANDLE SAVE NOTIFICATION ==========');
-  console.log('[SentinelPass Background] Notification payload:', redactForLog(data));
+  debugLog('[SentinelPass Background] ========== HANDLE SAVE NOTIFICATION ==========');
+  debugLog('[SentinelPass Background] Notification payload:', redactForLog(data));
 
   try {
     const validation = validateSenderDomainContext(
@@ -629,21 +629,21 @@ async function handleSaveNotification(data, sender) {
     }
 
     const requestSource = typeof data?.request_source === 'string' ? data.request_source : 'unknown';
-    console.log('[SentinelPass Background] Save request source:', requestSource);
+    debugLog('[SentinelPass Background] Save request source:', requestSource);
 
     const suppressPrompt = await shouldSuppressSavePrompt(data?.domain || data?.url || '');
     if (suppressPrompt) {
-      console.log('[SentinelPass Background] Skipping save notification due to never-save policy');
+      debugLog('[SentinelPass Background] Skipping save notification due to never-save policy');
       return true;
     }
 
     if (await isCredentialUnchanged(data)) {
-      console.log('[SentinelPass Background] Skipping save notification because credential is unchanged');
+      debugLog('[SentinelPass Background] Skipping save notification because credential is unchanged');
       return true;
     }
 
     if (isDuplicateSaveNotification(data)) {
-      console.log('[SentinelPass Background] Skipping duplicate save notification request');
+      debugLog('[SentinelPass Background] Skipping duplicate save notification request');
       return true;
     }
 
@@ -652,12 +652,12 @@ async function handleSaveNotification(data, sender) {
       // Inline-first is safe on post-navigation pages where the tab is stable.
       const inlinePromptShown = await requestInlineSavePrompt(sender?.tab?.id, data);
       if (inlinePromptShown) {
-        console.log('[SentinelPass Background] Inline save prompt shown');
-        console.log('[SentinelPass Background] Awaiting explicit user action before any save');
+        debugLog('[SentinelPass Background] Inline save prompt shown');
+        debugLog('[SentinelPass Background] Awaiting explicit user action before any save');
         return true;
       }
     } else {
-      console.log('[SentinelPass Background] Using persistent notification path for source:', requestSource);
+      debugLog('[SentinelPass Background] Using persistent notification path for source:', requestSource);
     }
 
     // Create notification to ask user to save
@@ -674,7 +674,7 @@ async function handleSaveNotification(data, sender) {
       if (chrome.runtime.lastError) {
         console.error('[SentinelPass Background] Failed to store pending save credential:', chrome.runtime.lastError.message);
       } else {
-        console.log('[SentinelPass Background] Stored pending save credential for notification:', notificationId);
+        debugLog('[SentinelPass Background] Stored pending save credential for notification:', notificationId);
       }
     });
 
@@ -695,15 +695,15 @@ async function handleSaveNotification(data, sender) {
       const inlinePromptShown = await requestInlineSavePrompt(sender?.tab?.id, data);
       if (inlinePromptShown) {
         chrome.storage.session.remove(storageKey);
-        console.log('[SentinelPass Background] Inline save prompt shown as fallback');
+        debugLog('[SentinelPass Background] Inline save prompt shown as fallback');
         return true;
       }
       chrome.storage.session.remove(storageKey);
       throw notificationError;
     }
 
-    console.log('[SentinelPass Background] ========== SAVE NOTIFICATION CREATED ==========');
-    console.log('[SentinelPass Background] Notification ID:', createdId || notificationId);
+    debugLog('[SentinelPass Background] ========== SAVE NOTIFICATION CREATED ==========');
+    debugLog('[SentinelPass Background] Notification ID:', createdId || notificationId);
     return true;
   } catch (error) {
     console.error('[SentinelPass Background] ========== ERROR IN HANDLE SAVE NOTIFICATION ==========');
@@ -718,11 +718,11 @@ async function handleSaveNotification(data, sender) {
 
 // Listen for messages from content scripts
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-  console.log('[SentinelPass Background] Received message:', request.type);
-  console.log('[SentinelPass Background] Request details:', redactForLog(request));
+  debugLog('[SentinelPass Background] Received message:', request.type);
+  debugLog('[SentinelPass Background] Request details:', redactForLog(request));
 
   if (request.type === 'get_credential') {
-    console.log('[SentinelPass Background] Handling get_credential for domain:', request.domain);
+    debugLog('[SentinelPass Background] Handling get_credential for domain:', request.domain);
     const validation = validateSenderDomainContext(sender, request.domain, 'get_credential');
     if (!validation.ok) {
       console.warn('[SentinelPass Background] Blocked get_credential:', validation.error);
@@ -731,7 +731,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     }
     handleGetCredential(request.domain, request.request_id)
           .then(response => {
-            console.log('[SentinelPass Background] Get credential response:', redactForLog(response));
+            debugLog('[SentinelPass Background] Get credential response:', redactForLog(response));
             sendResponse(response);
           })
           .catch(error => {
@@ -745,7 +745,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       }
 
   if (request.type === 'get_totp_code') {
-    console.log('[SentinelPass Background] Handling get_totp_code for domain:', request.domain);
+    debugLog('[SentinelPass Background] Handling get_totp_code for domain:', request.domain);
     const validation = validateSenderDomainContext(sender, request.domain, 'get_totp_code');
     if (!validation.ok) {
       console.warn('[SentinelPass Background] Blocked get_totp_code:', validation.error);
@@ -754,7 +754,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     }
     handleGetTotpCode(request.domain, request.request_id)
           .then(response => {
-            console.log('[SentinelPass Background] Get TOTP response:', redactForLog(response));
+            debugLog('[SentinelPass Background] Get TOTP response:', redactForLog(response));
             sendResponse(response);
           })
           .catch(error => {
@@ -768,10 +768,10 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       }
 
   if (request.type === 'save_credential') {
-    console.log('[SentinelPass Background] Handling save_credential');
-    console.log('[SentinelPass Background] Domain:', request.data?.domain);
-    console.log('[SentinelPass Background] URL:', request.data?.url);
-    console.log('[SentinelPass Background] Save trigger:', request.data?.save_trigger || 'unknown');
+    debugLog('[SentinelPass Background] Handling save_credential');
+    debugLog('[SentinelPass Background] Domain:', request.data?.domain);
+    debugLog('[SentinelPass Background] URL:', request.data?.url);
+    debugLog('[SentinelPass Background] Save trigger:', request.data?.save_trigger || 'unknown');
     const validation = validateSenderDomainContext(
       sender,
       request.data?.domain || request.data?.url || '',
@@ -784,7 +784,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     }
     handleSaveCredential(request.data)
           .then(response => {
-            console.log('[SentinelPass Background] Save credential response:', redactForLog(response));
+            debugLog('[SentinelPass Background] Save credential response:', redactForLog(response));
             sendResponse(response);
           })
           .catch(error => {
@@ -798,7 +798,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       }
 
   if (request.type === 'check_credential_exists') {
-    console.log('[SentinelPass Background] Handling check_credential_exists for domain:', request.domain);
+    debugLog('[SentinelPass Background] Handling check_credential_exists for domain:', request.domain);
     const validation = validateSenderDomainContext(sender, request.domain, 'check_credential_exists');
     if (!validation.ok) {
       console.warn('[SentinelPass Background] Blocked check_credential_exists:', validation.error);
@@ -807,7 +807,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     }
     handleCheckCredentialExists(request.domain)
           .then(exists => {
-              console.log('[SentinelPass Background] Credential exists:', exists);
+              debugLog('[SentinelPass Background] Credential exists:', exists);
               sendResponse({ exists: exists });
           })
           .catch(error => {
@@ -821,10 +821,10 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       }
 
   if (request.type === 'check_vault_status') {
-    console.log('[SentinelPass Background] Handling check_vault_status');
+    debugLog('[SentinelPass Background] Handling check_vault_status');
     handleCheckVaultStatus()
           .then(statusResponse => {
-              console.log('[SentinelPass Background] Vault status:', redactForLog(statusResponse));
+              debugLog('[SentinelPass Background] Vault status:', redactForLog(statusResponse));
               sendResponse(statusResponse);
           })
           .catch(error => {
@@ -839,10 +839,10 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       }
 
   if (request.type === 'lock_vault') {
-    console.log('[SentinelPass Background] Handling lock_vault');
+    debugLog('[SentinelPass Background] Handling lock_vault');
     handleLockVault()
           .then(response => {
-            console.log('[SentinelPass Background] Lock vault response:', redactForLog(response));
+            debugLog('[SentinelPass Background] Lock vault response:', redactForLog(response));
             sendResponse(response);
           })
           .catch(error => {
@@ -861,26 +861,26 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     const domain = request.data?.domain || 'unknown';
     const source = request.data?.source || 'unknown';
     const promptId = request.data?.promptId || 'n/a';
-    console.log('[SentinelPass Background] SAVE_PROMPT_OUTCOME', {
+    debugLog('[SentinelPass Background] SAVE_PROMPT_OUTCOME', {
       outcome: outcome,
       source: source,
       domain: domain,
       promptId: promptId
     });
     if (outcome.startsWith('no_save_')) {
-      console.log(`[SentinelPass Background] NO_SAVE: ${outcome} (${domain})`);
+      debugLog(` NO_SAVE: ${outcome} (${domain})`);
     } else if (outcome === 'save_clicked') {
-      console.log(`[SentinelPass Background] SAVE_INTENT_CONFIRMED: ${domain}`);
+      debugLog(` SAVE_INTENT_CONFIRMED: ${domain}`);
     }
     sendResponse({ success: true });
     return true;
   }
 
   if (request.type === 'request_save_notification') {
-    console.log('[SentinelPass Background] Handling request_save_notification');
+    debugLog('[SentinelPass Background] Handling request_save_notification');
     handleSaveNotification(request.data, sender)
           .then(result => {
-              console.log('[SentinelPass Background] Save notification result:', result);
+              debugLog('[SentinelPass Background] Save notification result:', result);
               sendResponse({ success: result });
           })
           .catch(error => {
@@ -909,9 +909,9 @@ chrome.commands.onCommand.addListener((command) => {
 
 // Handle notification button clicks
 chrome.notifications.onButtonClicked.addListener((notificationId, buttonIndex) => {
-  console.log('[SentinelPass Background] ========== NOTIFICATION BUTTON CLICKED ==========');
-  console.log('[SentinelPass Background] Notification ID:', notificationId);
-  console.log('[SentinelPass Background] Button Index:', buttonIndex);
+  debugLog('[SentinelPass Background] ========== NOTIFICATION BUTTON CLICKED ==========');
+  debugLog('[SentinelPass Background] Notification ID:', notificationId);
+  debugLog('[SentinelPass Background] Button Index:', buttonIndex);
 
   if (notificationId.startsWith(VAULT_LOCKED_NOTIFICATION_PREFIX)) {
     chrome.notifications.clear(notificationId);
@@ -935,9 +935,9 @@ chrome.notifications.onButtonClicked.addListener((notificationId, buttonIndex) =
 
       if (buttonIndex === 0) {
         // Save button clicked
-        console.log(`[SentinelPass Background] SAVE_INTENT_CONFIRMED: ${data.domain || 'unknown'} (notification_button)`);
-        console.log('[SentinelPass Background] Save button clicked, saving credential...');
-        console.log('[SentinelPass Background] Domain:', data.domain);
+        debugLog(` SAVE_INTENT_CONFIRMED: ${data.domain || 'unknown'} (notification_button)`);
+        debugLog('[SentinelPass Background] Save button clicked, saving credential...');
+        debugLog('[SentinelPass Background] Domain:', data.domain);
 
         const saveResult = await handleSaveCredential({
           username: data.username,
@@ -950,9 +950,9 @@ chrome.notifications.onButtonClicked.addListener((notificationId, buttonIndex) =
 
         if (saveResult.success) {
           if (saveResult.unchanged) {
-            console.log('[SentinelPass Background] Credential already up to date');
+            debugLog('[SentinelPass Background] Credential already up to date');
           } else {
-            console.log('[SentinelPass Background] Credential saved successfully!');
+            debugLog('[SentinelPass Background] Credential saved successfully!');
           }
           await createNotification('save-success-' + Date.now(), {
             title: 'SentinelPass',
@@ -971,12 +971,12 @@ chrome.notifications.onButtonClicked.addListener((notificationId, buttonIndex) =
         }
       } else {
         // Never button clicked
-        console.log(`[SentinelPass Background] NO_SAVE: no_save_never_for_site (${data.domain || 'unknown'})`);
-        console.log('[SentinelPass Background] Never for this site clicked');
+        debugLog(` NO_SAVE: no_save_never_for_site (${data.domain || 'unknown'})`);
+        debugLog('[SentinelPass Background] Never for this site clicked');
         try {
           const stored = await addNeverSaveDomain(data.domain || data.url || '');
           if (stored) {
-            console.log('[SentinelPass Background] Added never-save policy for domain:', data.domain);
+            debugLog('[SentinelPass Background] Added never-save policy for domain:', data.domain);
             await createNotification('never-save-' + Date.now(), {
               title: 'SentinelPass',
               message: `Will no longer prompt to save for ${data.domain || 'this site'}`,
@@ -998,7 +998,7 @@ chrome.notifications.onButtonClicked.addListener((notificationId, buttonIndex) =
 
 // Handle notification closed (clicked X or dismissed)
 chrome.notifications.onClosed.addListener((notificationId) => {
-  console.log('[SentinelPass Background] Notification closed:', notificationId);
+  debugLog('[SentinelPass Background] Notification closed:', notificationId);
 
   // Clean up any pending data for this specific save prompt
   if (notificationId.startsWith('save-password-')) {
@@ -1017,16 +1017,16 @@ chrome.notifications.onClosed.addListener((notificationId) => {
       if (tabId !== null) {
         void requestInlineSavePrompt(tabId, pending).then((inlineShown) => {
           if (inlineShown) {
-            console.log(`[SentinelPass Background] Reopened inline save prompt after notification close (${domain})`);
+            debugLog(` Reopened inline save prompt after notification close (${domain})`);
           } else {
-            console.log(`[SentinelPass Background] NO_SAVE: no_save_notification_closed (${domain})`);
+            debugLog(` NO_SAVE: no_save_notification_closed (${domain})`);
           }
           chrome.storage.session.remove(storageKey);
         });
         return;
       }
 
-      console.log(`[SentinelPass Background] NO_SAVE: no_save_notification_closed (${domain})`);
+      debugLog(` NO_SAVE: no_save_notification_closed (${domain})`);
       chrome.storage.session.remove(storageKey);
     });
   }

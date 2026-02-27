@@ -245,6 +245,56 @@ impl DaemonVault {
         }
     }
 
+    /// List all credentials matching a base domain (e.g., "google.com" matches "gmail.google.com", "accounts.google.com")
+    pub async fn list_domain_credentials(&self, base_domain: &str) -> Result<Vec<DomainCredentialResponse>> {
+        if !self.is_unlocked().await {
+            return Ok(Vec::new());
+        }
+
+        self.record_activity().await;
+
+        let vault_guard = self.vault.lock().await;
+
+        if let Some(ref vault) = *vault_guard {
+            let entries = vault.list_entries()?;
+            let mut matching_credentials = Vec::new();
+
+            for summary in entries {
+                if let Ok(entry) = vault.get_entry(summary.entry_id) {
+                    // Check if this entry's domain matches the base domain
+                    let matches = if let Some(ref url) = entry.url {
+                        domains_match(base_domain, url)
+                    } else {
+                        // Entries without URL are excluded from domain-scoped search
+                        false
+                    };
+
+                    if matches {
+                        // Extract the domain for this credential
+                        let domain = entry.url.as_ref()
+                            .and_then(|url| normalize_host(url))
+                            .unwrap_or_else(|| base_domain.to_string());
+
+                        matching_credentials.push(DomainCredentialResponse {
+                            username: entry.username,
+                            title: entry.title,
+                            domain,
+                        });
+                    }
+                }
+            }
+
+            // Sort by title then username for consistent ordering
+            matching_credentials.sort_by(|a, b| {
+                (&a.title, &a.username).cmp(&(&b.title, &b.username))
+            });
+
+            Ok(matching_credentials)
+        } else {
+            Ok(Vec::new())
+        }
+    }
+
     /// Save credential to vault
     pub async fn save_credential(
         &self,
@@ -385,6 +435,14 @@ pub struct CredentialResponse {
 pub struct TotpCodeResponse {
     pub code: String,
     pub seconds_remaining: u32,
+}
+
+/// Response with domain credential data (excludes password for security)
+#[derive(Debug, Clone)]
+pub struct DomainCredentialResponse {
+    pub username: String,
+    pub title: String,
+    pub domain: String,
 }
 
 #[cfg(test)]

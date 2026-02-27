@@ -42,6 +42,12 @@ pub enum IpcMessage {
         password: Option<String>,
         title: Option<String>,
     },
+    ListDomainCredentials {
+        base_domain: String,
+    },
+    ListDomainCredentialsResponse {
+        credentials: Vec<CredentialSummary>,
+    },
     GetTotpCode {
         domain: String,
     },
@@ -97,6 +103,14 @@ pub enum IpcMessage {
         last_sync_at: Option<i64>,
         pending_changes: u64,
     },
+}
+
+/// Summary of a credential for listing (excludes password for bulk operations)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CredentialSummary {
+    pub username: String,
+    pub title: Option<String>,
+    pub domain: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -602,6 +616,31 @@ impl IpcServer {
                             username: None,
                             password: None,
                             title: None,
+                        }
+                    }
+                }
+            }
+            IpcMessage::ListDomainCredentials { base_domain } => {
+                debug!("IPC: ListDomainCredentials for base domain '{}'", base_domain);
+
+                match self.vault.list_domain_credentials(&base_domain).await {
+                    Ok(credentials) => {
+                        let summaries: Vec<CredentialSummary> = credentials
+                            .into_iter()
+                            .map(|cred| CredentialSummary {
+                                username: cred.username,
+                                title: Some(cred.title),
+                                domain: cred.domain,
+                            })
+                            .collect();
+                        IpcMessage::ListDomainCredentialsResponse {
+                            credentials: summaries,
+                        }
+                    }
+                    Err(e) => {
+                        error!("Failed to list domain credentials: {}", e);
+                        IpcMessage::ListDomainCredentialsResponse {
+                            credentials: Vec::new(),
                         }
                     }
                 }

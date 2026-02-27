@@ -449,6 +449,29 @@ async function handleGetCredential(domain, requestId) {
   }
 }
 
+// Handle list_domain_credentials request
+async function handleListDomainCredentials(domain, requestId) {
+  debugLog('[SentinelPass Background] handleListDomainCredentials called for base domain:', domain);
+
+  try {
+    const response = await chrome.runtime.sendNativeMessage(HOST_NAME, {
+      type: 'list_domain_credentials',
+      domain: domain,
+      request_id: requestId
+    });
+
+    debugLog('[SentinelPass Background] Got domain credentials response from native host:', response?.credentials?.length || 0, 'credentials');
+    return response;
+  } catch (error) {
+    console.error('[SentinelPass Background] Error listing domain credentials:', error);
+    return {
+      success: false,
+      error: error.message,
+      credentials: []
+    };
+  }
+}
+
 // Handle get_totp_code request
 async function handleGetTotpCode(domain, requestId) {
   debugLog('[SentinelPass Background] handleGetTotpCode called for domain:', domain);
@@ -743,6 +766,30 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
           });
         return true; // Keep message channel open for async response
       }
+
+  if (request.type === 'list_domain_credentials') {
+    debugLog('[SentinelPass Background] Handling list_domain_credentials for base domain:', request.domain);
+    const validation = validateSenderDomainContext(sender, request.domain, 'list_domain_credentials');
+    if (!validation.ok) {
+      console.warn('[SentinelPass Background] Blocked list_domain_credentials:', validation.error);
+      sendResponse({ success: false, error: validation.error, data: [] });
+      return true;
+    }
+    handleListDomainCredentials(request.domain, request.request_id)
+          .then(response => {
+            debugLog('[SentinelPass Background] List domain credentials response:', response?.data?.length || 0, 'credentials');
+            sendResponse(response);
+          })
+          .catch(error => {
+            console.error('[SentinelPass Background] List domain credentials error:', error);
+            sendResponse({
+              success: false,
+              error: error.message,
+              data: []
+            });
+          });
+        return true;
+  }
 
   if (request.type === 'get_totp_code') {
     debugLog('[SentinelPass Background] Handling get_totp_code for domain:', request.domain);

@@ -90,14 +90,102 @@ function handleSearch() {
         return;
     }
 
-    // For now, show a helpful message about search functionality
-    credentialsList.innerHTML = `
-        <div class="empty-state">
-            <p><strong>Full vault search coming soon</strong></p>
-            <p class="hint">For now, passwords are only available for the current site</p>
-            <p class="hint">Current site: <strong>${escapeHtml(currentDomain)}</strong></p>
+    // Calculate base domain (e.g., mail.google.com → google.com)
+    const baseDomain = extractBaseDomain(currentDomain);
+
+    // Show searching state
+    credentialsList.innerHTML = '<div class="searching-state"><p>Searching...</p></div>';
+
+    // Request domain-scoped credentials from background script
+    chrome.runtime.sendMessage({
+        type: 'list_domain_credentials',
+        domain: baseDomain,
+        request_id: generateUUID()
+    }, (response) => {
+        if (response && response.success && response.credentials && response.credentials.length > 0) {
+            // Filter results by search term
+            const filtered = response.credentials.filter(cred =>
+                cred.title.toLowerCase().includes(searchTerm) ||
+                cred.username.toLowerCase().includes(searchTerm)
+            );
+            displaySearchResults(filtered, baseDomain);
+        } else {
+            credentialsList.innerHTML = `
+                <div class="empty-state">
+                    <p>No credentials found for <strong>${escapeHtml(baseDomain)}</strong> domains</p>
+                    <p class="hint">Search matches: ${escapeHtml(searchTerm)}</p>
+                </div>
+            `;
+        }
+    });
+}
+
+// Extract base domain from hostname (e.g., mail.google.com → google.com)
+function extractBaseDomain(hostname) {
+    const parts = hostname.split('.');
+    if (parts.length <= 2) {
+        return hostname;
+    }
+    // For domains like co.uk, com.au, etc., keep the last 3 parts
+    // For simple domains like mail.google.com, keep the last 2 parts
+    const commonTlds = ['co.uk', 'com.au', 'co.nz', 'co.jp', 'co.in', 'com.sg', 'co.za'];
+    const lastTwo = parts.slice(-2).join('.');
+    const lastThree = parts.slice(-3).join('.');
+
+    if (commonTlds.includes(lastTwo)) {
+        return parts.slice(-3).join('.');
+    }
+    if (commonTlds.includes(lastThree)) {
+        return parts.slice(-4).join('.');
+    }
+    return parts.slice(-2).join('.');
+}
+
+function displaySearchResults(credentials, baseDomain) {
+    const credentialsList = document.getElementById('credentialsList');
+
+    if (credentials.length === 0) {
+        credentialsList.innerHTML = `
+            <div class="empty-state">
+                <p>No credentials found</p>
+            </div>
+        `;
+        return;
+    }
+
+    credentialsList.innerHTML = credentials.map(cred => `
+        <div class="credential-item">
+            <div class="credential-info">
+                <div class="credential-username">${escapeHtml(cred.username)}</div>
+                <div class="credential-domain">${escapeHtml(cred.title || cred.url || baseDomain)}</div>
+            </div>
+            <button class="btn-copy" data-username="${escapeHtml(cred.username)}" data-domain="${escapeHtml(cred.url || baseDomain)}" data-request-id="${generateUUID()}">
+                Get Password
+            </button>
         </div>
-    `;
+    `).join('');
+
+    // Add button listeners for "Get Password" buttons
+    credentialsList.querySelectorAll('.btn-copy').forEach(button => {
+        button.addEventListener('click', (e) => {
+            const username = e.target.dataset.username;
+            const domain = e.target.dataset.domain;
+            const requestId = e.target.dataset.requestId;
+
+            // Request full credential including password
+            chrome.runtime.sendMessage({
+                type: 'get_credential',
+                domain: domain,
+                request_id: requestId
+            }, (response) => {
+                if (response && response.success && response.data) {
+                    copyToClipboard(response.data.username, response.data.password);
+                } else {
+                    showNotification('Failed to get password', 'error');
+                }
+            });
+        });
+    });
 }
 
 function showLockedView() {

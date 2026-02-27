@@ -19,6 +19,7 @@ pub const MSG_CHECK_VAULT: &str = "check_vault_status";
 pub const MSG_LOCK_VAULT: &str = "lock_vault";
 pub const MSG_VAULT_STATUS: &str = "vault_status";
 pub const MSG_VAULT_STATUS_RESPONSE: &str = "vault_status_response";
+pub const MSG_LIST_DOMAIN_CREDENTIALS: &str = "list_domain_credentials";
 
 const fn default_protocol_version() -> u32 {
     PROTOCOL_VERSION
@@ -53,6 +54,7 @@ pub struct NativeResponse {
     pub exists: Option<bool>,
     pub totp_code: Option<String>,
     pub seconds_remaining: Option<u32>,
+    pub credentials: Option<Vec<CredentialData>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -143,6 +145,14 @@ impl NativeMessagingHost {
             }
             MSG_CHECK_VAULT => IpcMessage::CheckVault,
             MSG_LOCK_VAULT => IpcMessage::LockVault,
+            MSG_LIST_DOMAIN_CREDENTIALS => {
+                if let Some(domain) = message.domain.clone() {
+                    IpcMessage::ListDomainCredentials { base_domain: domain }
+                } else {
+                    Self::send_error(request_id, "Missing domain parameter")?;
+                    return Ok(());
+                }
+            }
             _ => {
                 Self::send_error(request_id, &format!("Unknown message type: {}", msg_type))?;
                 return Ok(());
@@ -205,6 +215,16 @@ impl NativeMessagingHost {
                     )?;
                 } else {
                     Self::send_vault_status(request_id, unlocked)?;
+                }
+            }
+            Ok(IpcMessage::ListDomainCredentialsResponse { credentials }) => {
+                if msg_type == MSG_LIST_DOMAIN_CREDENTIALS {
+                    Self::send_credential_list(request_id, credentials)?;
+                } else {
+                    Self::send_error(
+                        request_id,
+                        "Unexpected ListDomainCredentialsResponse for non-list request",
+                    )?;
                 }
             }
             Ok(_) => {
@@ -278,6 +298,7 @@ impl NativeMessagingHost {
             exists: None,
             totp_code: None,
             seconds_remaining: None,
+            credentials: None,
         };
         Self::write_response(&response)
     }
@@ -305,6 +326,7 @@ impl NativeMessagingHost {
             exists: None,
             totp_code: None,
             seconds_remaining: None,
+            credentials: None,
         };
         Self::write_response(&response)
     }
@@ -322,6 +344,38 @@ impl NativeMessagingHost {
             exists: None,
             totp_code: None,
             seconds_remaining: None,
+            credentials: None,
+        };
+        Self::write_response(&response)
+    }
+
+    /// Send credential list response for list_domain_credentials
+    pub fn send_credential_list(
+        request_id: String,
+        credentials: Vec<crate::daemon::ipc::CredentialSummary>,
+    ) -> Result<(), String> {
+        let credential_data: Vec<CredentialData> = credentials
+            .into_iter()
+            .map(|cred| CredentialData {
+                username: cred.username,
+                password: String::new(), // Passwords not included in domain list for security
+                title: cred.title,
+                url: Some(cred.domain),
+            })
+            .collect();
+
+        let response = NativeResponse {
+            version: PROTOCOL_VERSION,
+            msg_type: MSG_CREDENTIAL_RESPONSE.to_string(),
+            request_id,
+            success: true,
+            data: None,
+            error: None,
+            unlocked: None,
+            exists: None,
+            totp_code: None,
+            seconds_remaining: None,
+            credentials: Some(credential_data),
         };
         Self::write_response(&response)
     }
@@ -339,6 +393,7 @@ impl NativeMessagingHost {
             exists: Some(exists),
             totp_code: None,
             seconds_remaining: None,
+            credentials: None,
         };
         Self::write_response(&response)
     }
@@ -360,6 +415,7 @@ impl NativeMessagingHost {
             exists: None,
             totp_code: Some(totp_code),
             seconds_remaining: Some(seconds_remaining),
+            credentials: None,
         };
         Self::write_response(&response)
     }
@@ -383,6 +439,7 @@ impl NativeMessagingHost {
             exists: None,
             totp_code: None,
             seconds_remaining: None,
+            credentials: None,
         };
         Self::write_response(&response)
     }
@@ -457,6 +514,7 @@ mod tests {
             exists: None,
             totp_code: None,
             seconds_remaining: None,
+            credentials: None,
         };
 
         let json = serde_json::to_string(&response).unwrap();
@@ -482,6 +540,7 @@ mod tests {
             exists: None,
             totp_code: None,
             seconds_remaining: None,
+            credentials: None,
         };
 
         let json = serde_json::to_string(&response).unwrap();
@@ -503,6 +562,7 @@ mod tests {
             exists: None,
             totp_code: None,
             seconds_remaining: None,
+            credentials: None,
         };
 
         let json = serde_json::to_string(&response).unwrap();
@@ -523,6 +583,7 @@ mod tests {
             exists: Some(true),
             totp_code: None,
             seconds_remaining: None,
+            credentials: None,
         };
 
         let json = serde_json::to_string(&response).unwrap();
@@ -543,6 +604,7 @@ mod tests {
             exists: None,
             totp_code: Some("123456".to_string()),
             seconds_remaining: Some(15),
+            credentials: None,
         };
 
         let json = serde_json::to_string(&response).unwrap();

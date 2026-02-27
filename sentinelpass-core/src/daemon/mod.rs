@@ -3,6 +3,7 @@
 pub mod autolock;
 pub mod ipc;
 pub mod native_messaging;
+pub mod transport;
 pub mod vault_state;
 
 pub use ipc::{
@@ -10,4 +11,5 @@ pub use ipc::{
     IpcClient, IpcMessage, IpcServer,
 };
 pub use native_messaging::{NativeMessage, NativeMessagingHost};
+pub use transport::TransportConfig;
 pub use vault_state::{CredentialResponse, DaemonVault, TotpCodeResponse, VaultState};

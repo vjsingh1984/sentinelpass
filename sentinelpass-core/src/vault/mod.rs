@@ -10,7 +10,10 @@ use crate::{
     audit::{get_audit_log_dir, AuditEventType, AuditLogger},
     crypto::cipher::{decrypt_to_string, encrypt_string},
     crypto::{EncryptedEntry, KdfParams, KeyHierarchy, WrappedKey},
-    database::{schema::CURRENT_SCHEMA_VERSION, Database},
+    database::{
+        schema::CURRENT_SCHEMA_VERSION, EntryFilter, EntryRepository, NewEntryParams,
+        RawEntryRow, SqliteEntryRepository, UpdateEntryParams, Database,
+    },
     lockout::DEFAULT_MAX_ATTEMPTS,
     platform::{ensure_data_dir, get_default_vault_path},
     DatabaseError, PasswordManagerError, Result,
@@ -143,6 +146,67 @@ impl VaultManager {
         self.key_hierarchy.is_unlocked()
     }
 
+    /// Convert raw entry row to summary (decrypt only title and username)
+    fn row_to_summary(&self, row: &RawEntryRow) -> Result<EntrySummary> {
+        let dek = self.key_hierarchy.dek()?;
+
+        let title_encrypted: EncryptedEntry = bincode::deserialize(&row.title)
+            .map_err(|e| PasswordManagerError::from(DatabaseError::Serialization(e.to_string())))?;
+        let username_encrypted: EncryptedEntry = bincode::deserialize(&row.username)
+            .map_err(|e| PasswordManagerError::from(DatabaseError::Serialization(e.to_string())))?;
+
+        let title = decrypt_to_string(dek, &title_encrypted).map_err(PasswordManagerError::from)?;
+        let username = decrypt_to_string(dek, &username_encrypted).map_err(PasswordManagerError::from)?;
+
+        Ok(EntrySummary {
+            entry_id: row.entry_id,
+            title,
+            username,
+            favorite: row.favorite,
+        })
+    }
+
+    /// Decrypt a raw entry row from the database
+    fn decrypt_entry_row(&self, row: &RawEntryRow) -> Result<Entry> {
+        let dek = self.key_hierarchy.dek()?;
+
+        // Deserialize encrypted entries
+        let title_encrypted: EncryptedEntry = bincode::deserialize(&row.title)
+            .map_err(|e| PasswordManagerError::from(DatabaseError::Serialization(e.to_string())))?;
+        let username_encrypted: EncryptedEntry = bincode::deserialize(&row.username)
+            .map_err(|e| PasswordManagerError::from(DatabaseError::Serialization(e.to_string())))?;
+        let password_encrypted: EncryptedEntry = bincode::deserialize(&row.password)
+            .map_err(|e| PasswordManagerError::from(DatabaseError::Serialization(e.to_string())))?;
+
+        let url = row.url.as_ref().map(|blob| {
+            let encrypted: EncryptedEntry = bincode::deserialize(blob)
+                .map_err(|e| PasswordManagerError::from(DatabaseError::Serialization(e.to_string())))?;
+            decrypt_to_string(dek, &encrypted)
+                .map_err(PasswordManagerError::from)
+        }).transpose()?;
+
+        let notes = row.notes.as_ref().map(|blob| {
+            let encrypted: EncryptedEntry = bincode::deserialize(blob)
+                .map_err(|e| PasswordManagerError::from(DatabaseError::Serialization(e.to_string())))?;
+            decrypt_to_string(dek, &encrypted)
+                .map_err(PasswordManagerError::from)
+        }).transpose()?;
+
+        Ok(Entry {
+            entry_id: Some(row.entry_id),
+            title: decrypt_to_string(dek, &title_encrypted).map_err(PasswordManagerError::from)?,
+            username: decrypt_to_string(dek, &username_encrypted).map_err(PasswordManagerError::from)?,
+            password: decrypt_to_string(dek, &password_encrypted).map_err(PasswordManagerError::from)?,
+            url,
+            notes,
+            created_at: DateTime::from_timestamp(row.created_at, 0)
+                .unwrap_or_else(|| Utc::now()),
+            modified_at: DateTime::from_timestamp(row.modified_at, 0)
+                .unwrap_or_else(|| Utc::now()),
+            favorite: row.favorite,
+        })
+    }
+
     /// Add a new entry to the vault
     pub fn add_entry(&self, entry: &Entry) -> Result<i64> {
         if !self.is_unlocked() {
@@ -189,44 +253,30 @@ impl VaultManager {
         let auth_tag_blob = bincode::serialize(&title_encrypted.auth_tag)
             .map_err(|e| DatabaseError::Serialization(e.to_string()))?;
 
-        // For now, use a simple vault_id of 1
-        let vault_id: i64 = 1;
         let now = Utc::now().timestamp();
-        let favorite: i64 = if entry.favorite { 1 } else { 0 };
+        let sync_id = uuid::Uuid::new_v4().to_string();
 
-        // Open database and insert entry
+        // Use repository to insert the entry
         let db = self
             .db
             .lock()
             .map_err(|_| DatabaseError::LockPoisoned("Failed to lock database".to_string()))?;
+        let repo = SqliteEntryRepository::new(&*db);
+        let params = NewEntryParams {
+            title: title_blob,
+            username: username_blob,
+            password: password_blob,
+            url: url_blob,
+            notes: notes_blob,
+            entry_nonce: nonce_blob,
+            auth_tag: auth_tag_blob,
+            created_at: now,
+            modified_at: now,
+            favorite: entry.favorite,
+            sync_id: Some(sync_id),
+        };
 
-        let sync_id = uuid::Uuid::new_v4().to_string();
-
-        db.conn()
-            .execute(
-                "INSERT INTO entries (
-                vault_id, title, username, password, url, notes,
-                entry_nonce, auth_tag, created_at, modified_at, favorite,
-                sync_id, sync_version, sync_state
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, 1, 'pending')",
-                rusqlite::params![
-                    vault_id,
-                    title_blob,
-                    username_blob,
-                    password_blob,
-                    url_blob.as_deref().unwrap_or(&[]),
-                    notes_blob.as_deref().unwrap_or(&[]),
-                    nonce_blob,
-                    auth_tag_blob,
-                    now,
-                    now,
-                    favorite,
-                    sync_id,
-                ],
-            )
-            .map_err(DatabaseError::Sqlite)?;
-
-        let entry_id = db.conn().last_insert_rowid();
+        let entry_id = repo.create(params)?;
 
         // Log credential creation
         if let Some(ref logger) = self.audit_logger {
@@ -245,115 +295,27 @@ impl VaultManager {
             return Err(PasswordManagerError::VaultLocked);
         }
 
-        let dek = self.key_hierarchy.dek()?;
         let db = self
             .db
             .lock()
             .map_err(|_| DatabaseError::LockPoisoned("Failed to lock database".to_string()))?;
+        let repo = SqliteEntryRepository::new(&*db);
+        let raw_row = repo.get_raw(entry_id)?
+            .ok_or_else(|| PasswordManagerError::NotFound(format!("Entry {}", entry_id)))?;
 
-        // Query the database
-        let mut stmt = db
-            .conn()
-            .prepare(
-                "SELECT title, username, password, url, notes, created_at, modified_at, favorite
-             FROM entries WHERE entry_id = ?1",
-            )
-            .map_err(DatabaseError::Sqlite)?;
+        // Drop the database lock before decrypting (decrypt doesn't need the DB)
+        drop(db);
 
-        let result = stmt.query_row([entry_id], |row| {
-            let title_blob: Vec<u8> = row.get(0)?;
-            let username_blob: Vec<u8> = row.get(1)?;
-            let password_blob: Vec<u8> = row.get(2)?;
-            let url_blob: Option<Vec<u8>> = row.get(3)?;
-            let notes_blob: Option<Vec<u8>> = row.get(4)?;
-            let created_at_i64: i64 = row.get(5)?;
-            let modified_at_i64: i64 = row.get(6)?;
-            let favorite_i32: i32 = row.get(7)?;
-
-            Ok((
-                title_blob,
-                username_blob,
-                password_blob,
-                url_blob,
-                notes_blob,
-                created_at_i64,
-                modified_at_i64,
-                favorite_i32,
-            ))
-        });
-
-        match result {
-            Ok((
-                title_blob,
-                username_blob,
-                password_blob,
-                url_blob,
-                notes_blob,
-                created_at,
-                modified_at,
-                favorite,
-            )) => {
-                // Deserialize and decrypt fields
-                let title_encrypted: EncryptedEntry = bincode::deserialize(&title_blob)
-                    .map_err(|e| DatabaseError::Serialization(e.to_string()))?;
-                let username_encrypted: EncryptedEntry = bincode::deserialize(&username_blob)
-                    .map_err(|e| DatabaseError::Serialization(e.to_string()))?;
-                let password_encrypted: EncryptedEntry = bincode::deserialize(&password_blob)
-                    .map_err(|e| DatabaseError::Serialization(e.to_string()))?;
-
-                let title = decrypt_to_string(dek, &title_encrypted)?;
-                let username = decrypt_to_string(dek, &username_encrypted)?;
-                let password = decrypt_to_string(dek, &password_encrypted)?;
-
-                let url = if let Some(ub) = url_blob {
-                    if ub.is_empty() {
-                        None
-                    } else {
-                        let url_encrypted: EncryptedEntry = bincode::deserialize(&ub)
-                            .map_err(|e| DatabaseError::Serialization(e.to_string()))?;
-                        Some(decrypt_to_string(dek, &url_encrypted)?)
-                    }
-                } else {
-                    None
-                };
-
-                let notes = if let Some(nb) = notes_blob {
-                    if nb.is_empty() {
-                        None
-                    } else {
-                        let notes_encrypted: EncryptedEntry = bincode::deserialize(&nb)
-                            .map_err(|e| DatabaseError::Serialization(e.to_string()))?;
-                        Some(decrypt_to_string(dek, &notes_encrypted)?)
-                    }
-                } else {
-                    None
-                };
-
-                // Log credential viewing
-                if let Some(ref logger) = self.audit_logger {
-                    let _ = logger.log(
-                        AuditEventType::CredentialViewed { entry_id },
-                        &format!("Viewed credential: {}", title),
-                    );
-                }
-
-                Ok(Entry {
-                    entry_id: Some(entry_id),
-                    title,
-                    username,
-                    password,
-                    url,
-                    notes,
-                    created_at: DateTime::from_timestamp(created_at, 0).unwrap_or_default(),
-                    modified_at: DateTime::from_timestamp(modified_at, 0).unwrap_or_default(),
-                    favorite: favorite != 0,
-                })
-            }
-            Err(_) => Err(PasswordManagerError::NotFound(format!(
-                "Entry {}",
-                entry_id
-            ))),
+        // Log credential viewing
+        let title_hint = String::from_utf8_lossy(&raw_row.title).to_string();
+        if let Some(ref logger) = self.audit_logger {
+            let _ = logger.log(
+                AuditEventType::CredentialViewed { entry_id },
+                &format!("Viewed credential: {}", title_hint),
+            );
         }
+
+        self.decrypt_entry_row(&raw_row)
     }
 
     /// List all entries
@@ -362,47 +324,21 @@ impl VaultManager {
             return Err(PasswordManagerError::VaultLocked);
         }
 
-        let dek = self.key_hierarchy.dek()?;
         let db = self
             .db
             .lock()
             .map_err(|_| DatabaseError::LockPoisoned("Failed to lock database".to_string()))?;
+        let repo = SqliteEntryRepository::new(&*db);
+        let raw_rows = repo.list_raw(EntryFilter::default())?;
 
-        let mut stmt = db
-            .conn()
-            .prepare("SELECT entry_id, title, username, favorite FROM entries WHERE is_deleted = 0")
-            .map_err(DatabaseError::Sqlite)?;
+        // Drop the database lock before decrypting
+        drop(db);
 
-        let mut entries = stmt
-            .query_map([], |row| {
-                let entry_id: i64 = row.get(0)?;
-                let title_blob: Vec<u8> = row.get(1)?;
-                let username_blob: Vec<u8> = row.get(2)?;
-                let favorite: i32 = row.get(3)?;
-
-                Ok((entry_id, title_blob, username_blob, favorite))
-            })
-            .map_err(DatabaseError::Sqlite)?
-            .map(|row| -> Result<EntrySummary> {
-                let (entry_id, title_blob, username_blob, favorite) =
-                    row.map_err(|e| PasswordManagerError::from(DatabaseError::Sqlite(e)))?;
-
-                let title_encrypted: EncryptedEntry = bincode::deserialize(&title_blob)
-                    .map_err(|e| DatabaseError::Serialization(e.to_string()))?;
-                let username_encrypted: EncryptedEntry = bincode::deserialize(&username_blob)
-                    .map_err(|e| DatabaseError::Serialization(e.to_string()))?;
-
-                let title = decrypt_to_string(dek, &title_encrypted)?;
-                let username = decrypt_to_string(dek, &username_encrypted)?;
-
-                Ok(EntrySummary {
-                    entry_id,
-                    title,
-                    username,
-                    favorite: favorite != 0,
-                })
-            })
-            .collect::<std::result::Result<Vec<_>, _>>()?;
+        // Convert raw rows to summaries
+        let mut entries = raw_rows
+            .iter()
+            .map(|row| self.row_to_summary(row))
+            .collect::<Result<Vec<_>>>()?;
 
         // Sort entries alphabetically by title
         entries.sort_by(|a, b| a.title.cmp(&b.title));
@@ -430,81 +366,52 @@ impl VaultManager {
             return Err(PasswordManagerError::VaultLocked);
         }
 
-        let dek = self.key_hierarchy.dek()?;
         let db = self
             .db
             .lock()
             .map_err(|_| DatabaseError::LockPoisoned("Failed to lock database".to_string()))?;
+        let repo = SqliteEntryRepository::new(&*db);
 
-        // First, get the total count of non-deleted entries
-        let total_count: i64 = db
-            .conn()
-            .query_row(
-                "SELECT COUNT(*) FROM entries WHERE is_deleted = 0",
-                [],
-                |row| row.get(0),
-            )
-            .map_err(DatabaseError::Sqlite)?;
+        // Get total count
+        let total_count = repo.count()?;
 
-        // Get paginated entries with ORDER BY and LIMIT/OFFSET
-        let offset = pagination.offset() as i64;
-        let limit = pagination.limit() as i64;
+        // Get paginated entries
+        let filter = EntryFilter {
+            limit: Some(pagination.limit()),
+            offset: Some(pagination.offset()),
+            favorite_only: false,
+        };
+        let raw_rows = repo.list_raw(filter)?;
 
-        let mut stmt = db.conn().prepare(
-            "SELECT entry_id, title, username, favorite
-             FROM entries
-             WHERE is_deleted = 0
-             ORDER BY title COLLATE NOCASE ASC
-             LIMIT ?1 OFFSET ?2"
-        ).map_err(DatabaseError::Sqlite)?;
+        // Drop the database lock before decrypting
+        drop(db);
 
-        let mut entries = stmt
-            .query_map([limit, offset], |row| {
-                let entry_id: i64 = row.get(0)?;
-                let title_blob: Vec<u8> = row.get(1)?;
-                let username_blob: Vec<u8> = row.get(2)?;
-                let favorite: i32 = row.get(3)?;
-
-                Ok((entry_id, title_blob, username_blob, favorite))
-            })
-            .map_err(DatabaseError::Sqlite)?
-            .map(|row| -> Result<EntrySummary> {
-                let (entry_id, title_blob, username_blob, favorite) =
-                    row.map_err(|e| PasswordManagerError::from(DatabaseError::Sqlite(e)))?;
-
-                let title_encrypted: EncryptedEntry = bincode::deserialize(&title_blob)
-                    .map_err(|e| DatabaseError::Serialization(e.to_string()))?;
-                let username_encrypted: EncryptedEntry = bincode::deserialize(&username_blob)
-                    .map_err(|e| DatabaseError::Serialization(e.to_string()))?;
-
-                let title = decrypt_to_string(dek, &title_encrypted)?;
-                let username = decrypt_to_string(dek, &username_encrypted)?;
-
-                Ok(EntrySummary {
-                    entry_id,
-                    title,
-                    username,
-                    favorite: favorite != 0,
-                })
-            })
-            .collect::<std::result::Result<Vec<_>, _>>()?;
+        // Convert raw rows to summaries
+        let items = raw_rows
+            .iter()
+            .map(|row| self.row_to_summary(row))
+            .collect::<Result<Vec<_>>>()?;
 
         // Calculate if there are more results
-        let has_more = (offset + entries.len() as i64) < total_count;
+        let has_more = (pagination.offset() as i64 + items.len() as i64) < total_count;
 
         // Log credentials list operation
         if let Some(ref logger) = self.audit_logger {
             let _ = logger.log(
                 AuditEventType::CredentialsListed {
-                    count: entries.len(),
+                    count: items.len(),
                 },
-                &format!("Listed {} credentials (page {}, total {})",
-                    entries.len(), pagination.page, total_count),
+                &format!(
+                    "Listed {} credentials (page {}, total {})",
+                    items.len(),
+                    pagination.page,
+                    total_count
+                ),
             );
         }
 
         Ok(PaginatedResult {
-            items: entries,
+            items,
             total_count,
             has_more,
         })

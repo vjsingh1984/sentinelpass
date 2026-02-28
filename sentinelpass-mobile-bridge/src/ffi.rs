@@ -457,6 +457,150 @@ pub unsafe extern "C" fn sp_biometric_unlock(handle: VaultHandle) -> ErrorCode {
 }
 
 // ============================================================================
+// Sync Operations
+// ============================================================================
+
+/// FFI-safe sync status representation
+#[repr(C)]
+pub struct SyncStatus {
+    pub enabled: bool,
+    pub last_sync_at: i64,
+    pub pending_changes: u64,
+    pub device_id: *const c_char,
+}
+
+/// FFI-safe sync result representation
+#[repr(C)]
+pub struct SyncResult {
+    pub success: bool,
+    pub pushed: u64,
+    pub pulled: u64,
+    pub error_message: *const c_char,
+}
+
+/// Get sync status
+#[no_mangle]
+pub unsafe extern "C" fn sp_sync_get_status(
+    handle: VaultHandle,
+    out_status: *mut SyncStatus,
+) -> ErrorCode {
+    if out_status.is_null() {
+        return ErrorCode::InvalidParam;
+    }
+
+    match bridge::bridge_sync_get_status(handle) {
+        Ok(status) => {
+            let device_id_str = status.device_id.unwrap_or_default();
+            *out_status = SyncStatus {
+                enabled: status.enabled,
+                last_sync_at: status.last_sync_at.unwrap_or(0),
+                pending_changes: status.pending_changes,
+                device_id: string_to_c(&device_id_str),
+            };
+            ErrorCode::Success
+        }
+        Err(e) => e.to_error_code(),
+    }
+}
+
+/// Collect entries pending sync (returns JSON bytes)
+#[no_mangle]
+pub unsafe extern "C" fn sp_sync_collect_pending(
+    handle: VaultHandle,
+    out_bytes: *mut *const u8,
+    out_len: *mut usize,
+) -> ErrorCode {
+    if out_bytes.is_null() || out_len.is_null() {
+        return ErrorCode::InvalidParam;
+    }
+
+    match bridge::bridge_sync_collect_pending(handle) {
+        Ok(bytes) => {
+            *out_len = bytes.len();
+            *out_bytes = bytes.leak().as_ptr();
+            ErrorCode::Success
+        }
+        Err(e) => e.to_error_code(),
+    }
+}
+
+/// Apply downloaded entries (entries_json is JSON string)
+#[no_mangle]
+pub unsafe extern "C" fn sp_sync_apply_entries(
+    handle: VaultHandle,
+    entries_json: *const u8,
+    entries_len: usize,
+    out_applied: *mut u64,
+) -> ErrorCode {
+    if entries_json.is_null() || entries_len == 0 || out_applied.is_null() {
+        return ErrorCode::InvalidParam;
+    }
+
+    let slice = std::slice::from_raw_parts(entries_json, entries_len);
+    match bridge::bridge_sync_apply_entries(handle, slice) {
+        Ok(applied) => {
+            *out_applied = applied;
+            ErrorCode::Success
+        }
+        Err(e) => e.to_error_code(),
+    }
+}
+
+/// Prepare entries for CloudKit upload (returns JSON bytes of CloudKit records)
+#[no_mangle]
+pub unsafe extern "C" fn sp_sync_prepare_cloudkit(
+    handle: VaultHandle,
+    device_id: *const c_char,
+    out_bytes: *mut *const u8,
+    out_len: *mut usize,
+) -> ErrorCode {
+    if out_bytes.is_null() || out_len.is_null() {
+        return ErrorCode::InvalidParam;
+    }
+
+    let device_id_str = match c_to_string(device_id) {
+        Ok(s) => s,
+        Err(_) => return ErrorCode::InvalidParam,
+    };
+
+    match bridge::bridge_sync_prepare_cloudkit(handle, &device_id_str) {
+        Ok(bytes) => {
+            *out_len = bytes.len();
+            *out_bytes = bytes.leak().as_ptr();
+            ErrorCode::Success
+        }
+        Err(e) => e.to_error_code(),
+    }
+}
+
+/// Prepare entries for Google Drive upload (returns JSON bytes of Drive files)
+#[no_mangle]
+pub unsafe extern "C" fn sp_sync_prepare_drive(
+    handle: VaultHandle,
+    device_id: *const c_char,
+    out_bytes: *mut *const u8,
+    out_len: *mut usize,
+) -> ErrorCode {
+    if out_bytes.is_null() || out_len.is_null() {
+        return ErrorCode::InvalidParam;
+    }
+
+    let device_id_str = match c_to_string(device_id) {
+        Ok(s) => s,
+        Err(_) => return ErrorCode::InvalidParam,
+    };
+
+    match bridge::bridge_sync_prepare_drive(handle, &device_id_str) {
+        Ok(bytes) => {
+            *out_len = bytes.len();
+            *out_bytes = bytes.leak().as_ptr();
+            ErrorCode::Success
+        }
+        Err(e) => e.to_error_code(),
+    }
+}
+
+// ============================================================================
 // Memory Management
 // ============================================================================
 

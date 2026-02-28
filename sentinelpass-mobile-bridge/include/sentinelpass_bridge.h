@@ -79,6 +79,16 @@ typedef struct SPPasswordAnalysis {
 } SPPasswordAnalysis;
 
 /**
+ * FFI-safe sync status representation
+ */
+typedef struct SyncStatus {
+  bool enabled;
+  int64_t last_sync_at;
+  uint64_t pending_changes;
+  const char *device_id;
+} SyncStatus;
+
+/**
  * FFI-safe TOTP code representation
  */
 typedef struct SPTotpCode {
@@ -295,6 +305,46 @@ enum SPErrorCode sp_password_generate(uintptr_t Length,
                                       const char **OutPassword);
 
 sp void sp_string_free(const char *Ptr);
+
+/**
+ * Apply downloaded entries (entries_json is JSON string)
+ */
+sp
+enum SPErrorCode sp_sync_apply_entries(SPVaultHandle Handle,
+                                       const uint8_t *EntriesJson,
+                                       uintptr_t EntriesLen,
+                                       uint64_t *OutApplied);
+
+/**
+ * Collect entries pending sync (returns JSON bytes)
+ */
+sp
+enum SPErrorCode sp_sync_collect_pending(SPVaultHandle Handle,
+                                         const uint8_t **OutBytes,
+                                         uintptr_t *OutLen);
+
+/**
+ * Get sync status
+ */
+sp enum SPErrorCode sp_sync_get_status(SPVaultHandle Handle, struct SyncStatus *OutStatus);
+
+/**
+ * Prepare entries for CloudKit upload (returns JSON bytes of CloudKit records)
+ */
+sp
+enum SPErrorCode sp_sync_prepare_cloudkit(SPVaultHandle Handle,
+                                          const char *DeviceId,
+                                          const uint8_t **OutBytes,
+                                          uintptr_t *OutLen);
+
+/**
+ * Prepare entries for Google Drive upload (returns JSON bytes of Drive files)
+ */
+sp
+enum SPErrorCode sp_sync_prepare_drive(SPVaultHandle Handle,
+                                       const char *DeviceId,
+                                       const uint8_t **OutBytes,
+                                       uintptr_t *OutLen);
 
 /**
  * Generate TOTP code

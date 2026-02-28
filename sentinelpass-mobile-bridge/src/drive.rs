@@ -257,7 +257,7 @@ use std::ffi::{c_char, CStr, CString};
 use std::os::raw::c_int;
 
 #[cfg(feature = "jni")]
-use jni::sys::{jint, jobject, jstring};
+use jni::sys::{jint, jobject, jstring, jlong};
 #[cfg(feature = "jni")]
 use jni::JNIEnv;
 

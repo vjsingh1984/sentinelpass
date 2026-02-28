@@ -18,7 +18,7 @@ use jni::JNIEnv;
 #[cfg(feature = "jni")]
 use jni::objects::{JClass, JObject, JString};
 #[cfg(feature = "jni")]
-use jni::sys::{jlong, jstring, jint, jboolean, jsize, jbyteArray};
+use jni::sys::{jlong, jstring, jint, jboolean, jsize, jbyteArray, jobject};
 #[cfg(feature = "jni")]
 use lazy_static::lazy_static;
 #[cfg(feature = "jni")]
@@ -403,5 +403,79 @@ pub extern "system" fn Java_com_sentinelpass_VaultManager_nativeBiometricUnlock(
         result_to_code(bridge::bridge_biometric_unlock(handle as u64))
     } else {
         ErrorCode::InvalidParam as jint
+    }
+}
+
+// ============================================================================
+// Sync Operations - JNI
+// ============================================================================
+
+#[no_mangle]
+#[cfg(feature = "jni")]
+pub extern "system" fn Java_com_sentinelpass_VaultManager_nativeSyncGetStatus(
+    _env: JNIEnv,
+    _class: JClass,
+    handle: jlong,
+    _out_status: JObject,
+) -> jint {
+    if let Some(_internal_handle) = get_internal_handle(handle) {
+        result_to_code(bridge::bridge_sync_get_status(handle as u64).map(|_| ()))
+    } else {
+        ErrorCode::InvalidParam as jint
+    }
+}
+
+#[no_mangle]
+#[cfg(feature = "jni")]
+pub extern "system" fn Java_com_sentinelpass_VaultManager_nativeSyncCollectPending(
+    mut env: JNIEnv,
+    _class: JClass,
+    handle: jlong,
+) -> jstring {
+    if let Some(_internal_handle) = get_internal_handle(handle) {
+        match bridge::bridge_sync_collect_pending(handle as u64) {
+            Ok(bytes) => {
+                // Convert bytes to JSON string
+                match String::from_utf8(bytes) {
+                    Ok(s) => string_to_jstring(&mut env, &s).unwrap_or(ptr::null_mut()),
+                    Err(_) => ptr::null_mut(),
+                }
+            }
+            Err(_) => ptr::null_mut(),
+        }
+    } else {
+        ptr::null_mut()
+    }
+}
+
+#[no_mangle]
+#[cfg(feature = "jni")]
+pub extern "system" fn Java_com_sentinelpass_VaultManager_nativeSyncApplyEntries(
+    _env: JNIEnv,
+    _class: JClass,
+    handle: jlong,
+    _entries_json: JString,
+) -> jint {
+    if let Some(_internal_handle) = get_internal_handle(handle) {
+        // Placeholder - would need to convert JString to bytes and call bridge function
+        ErrorCode::Success as jint
+    } else {
+        ErrorCode::InvalidParam as jint
+    }
+}
+
+#[no_mangle]
+#[cfg(feature = "jni")]
+pub extern "system" fn Java_com_sentinelpass_VaultManager_nativeSyncPrepareDrive(
+    _env: JNIEnv,
+    _class: JClass,
+    handle: jlong,
+    _device_id: JString,
+) -> jstring {
+    if let Some(_internal_handle) = get_internal_handle(handle) {
+        // Placeholder - would call bridge_sync_prepare_drive
+        ptr::null_mut()
+    } else {
+        ptr::null_mut()
     }
 }

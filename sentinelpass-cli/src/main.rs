@@ -4,8 +4,9 @@ use clap::{Parser, Subcommand};
 use rpassword::prompt_password;
 use sentinelpass_core::{
     crypto::{analyze_password, generate_password, PasswordGeneratorConfig},
-    export_to_csv, export_to_json, import_from_csv, import_from_json, parse_otpauth_uri,
-    Entry as VaultEntry, EntrySummary, SshAgentClient, SshKeyImporter, TotpAlgorithm, VaultManager,
+    export_to_csv, export_to_json, export_to_keepass_xml, import_from_csv, import_from_json, import_from_keepass_xml,
+    parse_otpauth_uri, Entry as VaultEntry, EntrySummary, SshAgentClient, SshKeyImporter, TotpAlgorithm,
+    VaultManager,
 };
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
@@ -326,9 +327,21 @@ enum Commands {
         /// Input file path
         input: PathBuf,
 
-        /// Import format (json or csv)
+        /// Import format (json, csv, or keepass)
         #[arg(short, long, default_value = "json")]
         format: String,
+    },
+
+    /// Export entries to KeePass XML format
+    KeePassExport {
+        /// Output file path
+        output: PathBuf,
+    },
+
+    /// Import entries from KeePass XML format
+    KeePassImport {
+        /// Input file path
+        input: PathBuf,
     },
 
     /// Sync subcommands for encrypted cloud sync
@@ -1464,8 +1477,47 @@ fn main() -> Result<()> {
                     let count = import_from_csv(&mut vault, input)?;
                     println!("Imported {} entries from {}", count, input.display());
                 }
-                _ => anyhow::bail!("Unsupported format: {}. Use 'json' or 'csv'", format),
+                "keepass" => {
+                    let count = import_from_keepass_xml(&mut vault, input)?;
+                    println!("Imported {} entries from {}", count, input.display());
+                    println!("Note: Groups/tags have been preserved in the notes field.");
+                }
+                _ => anyhow::bail!("Unsupported format: {}. Use 'json', 'csv', or 'keepass'", format),
             }
+        }
+
+        Commands::KeePassImport { ref input } => {
+            let vault_path = get_vault_path(&cli, false);
+
+            if !vault_path.exists() {
+                anyhow::bail!("No vault found. Use 'sentinelpass init' to create a new vault");
+            }
+
+            let master_password = prompt_password("Enter master password: ")?;
+            let master_password_bytes = master_password.as_bytes();
+
+            let mut vault = open_vault_with_password(&vault_path, master_password_bytes)?;
+
+            let count = import_from_keepass_xml(&mut vault, input)?;
+            println!("Imported {} entries from {}", count, input.display());
+            println!("Note: Groups/tags have been preserved in the notes field.");
+        }
+
+        Commands::KeePassExport { ref output } => {
+            let vault_path = get_vault_path(&cli, false);
+
+            if !vault_path.exists() {
+                anyhow::bail!("No vault found. Use 'sentinelpass init' to create a new vault");
+            }
+
+            let master_password = prompt_password("Enter master password: ")?;
+            let master_password_bytes = master_password.as_bytes();
+
+            let vault = open_vault_with_password(&vault_path, master_password_bytes)?;
+
+            export_to_keepass_xml(&vault, output)?;
+            println!("Exported vault entries to {}", output.display());
+            println!("Note: This file contains unencrypted passwords. Handle with care!");
         }
 
         Commands::Sync(ref sync_cmd) => {

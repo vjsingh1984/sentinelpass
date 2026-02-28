@@ -10,6 +10,7 @@ pub mod crypto;
 pub mod daemon;
 pub mod database;
 pub mod import_export;
+pub mod keepass;
 pub mod lockout;
 pub mod platform;
 pub mod ssh;
@@ -28,6 +29,7 @@ pub use crypto::{
 pub use import_export::{
     export_to_csv, export_to_json, import_from_csv, import_from_json, ExportEntry,
 };
+pub use keepass::{export_to_keepass_xml, import_from_keepass_xml, KeePassEntry};
 pub use lockout::{LockoutConfig, LockoutManager, DEFAULT_MAX_ATTEMPTS};
 pub use platform::{
     ensure_config_dir, ensure_data_dir, get_arch, get_binary_name, get_config_dir, get_data_dir,

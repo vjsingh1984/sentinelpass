@@ -10,8 +10,8 @@ fn main() {
     let out_path = PathBuf::from(&crate_dir).join("include");
     fs::create_dir_all(&out_path).expect("Failed to create include directory");
 
-    let config = cbindgen::Config::from_file("cbindgen.toml")
-        .expect("Unable to find cbindgen.toml");
+    let config =
+        cbindgen::Config::from_file("cbindgen.toml").expect("Unable to find cbindgen.toml");
 
     cbindgen::Builder::new()
         .with_crate(crate_dir)

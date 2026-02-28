@@ -7,8 +7,8 @@
 //! - Conflict resolution (using existing sync module)
 
 use crate::error::{BridgeError, BridgeResult, ErrorCode};
-use sentinelpass_core::sync::models::{SyncEntryBlob, SyncEntryType};
 use base64::Engine;
+use sentinelpass_core::sync::models::{SyncEntryBlob, SyncEntryType};
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
 use uuid::Uuid;
@@ -53,8 +53,8 @@ impl CloudKitRecord {
     /// Create a CloudKit record from a sync entry blob
     pub fn from_sync_blob(blob: &SyncEntryBlob) -> Self {
         // Encode encrypted payload as base64 string for JSON transport
-        let encrypted_payload = base64::engine::general_purpose::STANDARD
-            .encode(&blob.encrypted_payload);
+        let encrypted_payload =
+            base64::engine::general_purpose::STANDARD.encode(&blob.encrypted_payload);
 
         Self {
             record_type: "SyncEntry".to_string(),
@@ -80,7 +80,12 @@ impl CloudKitRecord {
             "Credential" => SyncEntryType::Credential,
             "TotpSecret" => SyncEntryType::TotpSecret,
             "SshKey" => SyncEntryType::SshKey,
-            _ => return Err(BridgeError::InvalidParam(format!("Unknown entry type: {}", self.entry_type))),
+            _ => {
+                return Err(BridgeError::InvalidParam(format!(
+                    "Unknown entry type: {}",
+                    self.entry_type
+                )))
+            }
         };
 
         Ok(SyncEntryBlob {
@@ -136,7 +141,9 @@ impl ICloudSyncManager {
 
     /// Initialize sync with a device ID
     pub fn init(&self, device_id: Uuid, container_name: Option<String>) -> BridgeResult<()> {
-        let mut state = self.state.lock()
+        let mut state = self
+            .state
+            .lock()
             .map_err(|e| BridgeError::Sync(format!("Lock error: {}", e)))?;
 
         state.device_id = device_id;
@@ -149,7 +156,9 @@ impl ICloudSyncManager {
 
     /// Prepare records for upload to CloudKit
     pub fn prepare_upload(&self, blobs: &[SyncEntryBlob]) -> BridgeResult<Vec<CloudKitRecord>> {
-        let state = self.state.lock()
+        let state = self
+            .state
+            .lock()
             .map_err(|e| BridgeError::Sync(format!("Lock error: {}", e)))?;
 
         blobs
@@ -166,7 +175,10 @@ impl ICloudSyncManager {
     }
 
     /// Process records downloaded from CloudKit
-    pub fn process_download(&self, records: Vec<CloudKitRecord>) -> BridgeResult<Vec<SyncEntryBlob>> {
+    pub fn process_download(
+        &self,
+        records: Vec<CloudKitRecord>,
+    ) -> BridgeResult<Vec<SyncEntryBlob>> {
         records
             .into_iter()
             .map(|record| record.to_sync_blob())
@@ -175,7 +187,8 @@ impl ICloudSyncManager {
 
     /// Get current sync state
     pub fn get_state(&self) -> BridgeResult<CloudKitSyncState> {
-        let state_guard = self.state
+        let state_guard = self
+            .state
             .lock()
             .map_err(|e| BridgeError::Sync(format!("Lock error: {}", e)))?;
         Ok(state_guard.clone())
@@ -183,7 +196,9 @@ impl ICloudSyncManager {
 
     /// Update last sync timestamp
     pub fn update_last_sync(&self, timestamp: i64) -> BridgeResult<()> {
-        let mut state = self.state.lock()
+        let mut state = self
+            .state
+            .lock()
             .map_err(|e| BridgeError::Sync(format!("Lock error: {}", e)))?;
         state.last_sync_at = Some(timestamp);
         Ok(())
@@ -191,7 +206,9 @@ impl ICloudSyncManager {
 
     /// Update server sequence
     pub fn update_sequence(&self, sequence: u64) -> BridgeResult<()> {
-        let mut state = self.state.lock()
+        let mut state = self
+            .state
+            .lock()
             .map_err(|e| BridgeError::Sync(format!("Lock error: {}", e)))?;
         state.server_sequence = Some(sequence);
         Ok(())
@@ -259,11 +276,13 @@ pub unsafe extern "C" fn sp_icloud_sync_init(
         manager.init(device_uuid, container_opt)?;
 
         // Register and get handle
-        let mut registry = SYNC_MANAGER.lock()
+        let mut registry = SYNC_MANAGER
+            .lock()
             .map_err(|e| BridgeError::Sync(format!("Lock error: {}", e)))?;
         *registry = Some(manager);
 
-        let mut handle_guard = NEXT_HANDLE.lock()
+        let mut handle_guard = NEXT_HANDLE
+            .lock()
             .map_err(|e| BridgeError::Sync(format!("Lock error: {}", e)))?;
         let handle = *handle_guard;
         *handle_guard = handle + 1;
@@ -304,10 +323,10 @@ pub unsafe extern "C" fn sp_icloud_sync_prepare_upload(
             .map_err(|e| BridgeError::InvalidParam(format!("Invalid JSON: {}", e)))?;
 
         let records = {
-            let lock_guard = SYNC_MANAGER.lock()
+            let lock_guard = SYNC_MANAGER
+                .lock()
                 .map_err(|e| BridgeError::Sync(format!("Lock error: {}", e)))?;
-            let manager = lock_guard.as_ref()
-                .ok_or(BridgeError::NotInitialized)?;
+            let manager = lock_guard.as_ref().ok_or(BridgeError::NotInitialized)?;
             manager.prepare_upload(&blobs)?
         };
 
@@ -340,7 +359,9 @@ pub unsafe extern "C" fn sp_icloud_sync_process_download(
 
         let json_str = unsafe {
             if json_records.is_null() {
-                return Err(BridgeError::InvalidParam("json_records is null".to_string()));
+                return Err(BridgeError::InvalidParam(
+                    "json_records is null".to_string(),
+                ));
             }
             CStr::from_ptr(json_records)
                 .to_str()
@@ -351,10 +372,10 @@ pub unsafe extern "C" fn sp_icloud_sync_process_download(
             .map_err(|e| BridgeError::InvalidParam(format!("Invalid JSON: {}", e)))?;
 
         let blobs = {
-            let lock_guard = SYNC_MANAGER.lock()
+            let lock_guard = SYNC_MANAGER
+                .lock()
                 .map_err(|e| BridgeError::Sync(format!("Lock error: {}", e)))?;
-            let manager = lock_guard.as_ref()
-                .ok_or(BridgeError::NotInitialized)?;
+            let manager = lock_guard.as_ref().ok_or(BridgeError::NotInitialized)?;
             manager.process_download(records)?
         };
 
@@ -381,10 +402,10 @@ pub unsafe extern "C" fn sp_icloud_sync_update_state(
         let _handle = handle; // TODO: validate handle
 
         {
-            let lock_guard = SYNC_MANAGER.lock()
+            let lock_guard = SYNC_MANAGER
+                .lock()
                 .map_err(|e| BridgeError::Sync(format!("Lock error: {}", e)))?;
-            let manager = lock_guard.as_ref()
-                .ok_or(BridgeError::NotInitialized)?;
+            let manager = lock_guard.as_ref().ok_or(BridgeError::NotInitialized)?;
             manager.update_last_sync(last_sync)?;
             manager.update_sequence(server_sequence)?;
         }

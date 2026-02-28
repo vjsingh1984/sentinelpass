@@ -147,7 +147,9 @@ impl NativeMessagingHost {
             MSG_LOCK_VAULT => IpcMessage::LockVault,
             MSG_LIST_DOMAIN_CREDENTIALS => {
                 if let Some(domain) = message.domain.clone() {
-                    IpcMessage::ListDomainCredentials { base_domain: domain }
+                    IpcMessage::ListDomainCredentials {
+                        base_domain: domain,
+                    }
                 } else {
                     Self::send_error(request_id, "Missing domain parameter")?;
                     return Ok(());

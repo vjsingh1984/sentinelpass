@@ -101,7 +101,8 @@ impl TransportConfig {
     pub fn for_current_platform() -> Self {
         #[cfg(unix)]
         {
-            let runtime_dir = std::env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| "/tmp".to_string());
+            let runtime_dir =
+                std::env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| "/tmp".to_string());
             Self {
                 unix_socket_path: Some(format!("{}/sentinelpass.sock", runtime_dir)),
                 ..Default::default()
@@ -174,8 +175,14 @@ mod tests {
         let err = TransportError::ConnectionFailed("test".to_string());
         assert_eq!(err.to_string(), "Connection failed: test");
 
-        let err = TransportError::MessageTooLarge { size: 100000, max: 65536 };
-        assert_eq!(err.to_string(), "Message too large: 100000 bytes (max: 65536 bytes)");
+        let err = TransportError::MessageTooLarge {
+            size: 100000,
+            max: 65536,
+        };
+        assert_eq!(
+            err.to_string(),
+            "Message too large: 100000 bytes (max: 65536 bytes)"
+        );
     }
 
     #[test]

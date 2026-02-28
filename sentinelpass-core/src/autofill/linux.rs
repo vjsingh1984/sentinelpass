@@ -42,7 +42,8 @@ pub fn get_context() -> Result<AutoFillContext> {
     // Try X11 first
     if is_wayland() {
         return Err(PasswordManagerError::NotImplemented(
-            "Wayland auto-fill not yet implemented - requires virtual keyboard protocol".to_string(),
+            "Wayland auto-fill not yet implemented - requires virtual keyboard protocol"
+                .to_string(),
         ));
     }
 
@@ -51,8 +52,7 @@ pub fn get_context() -> Result<AutoFillContext> {
 
 /// Check if running under Wayland
 fn is_wayland() -> bool {
-    std::env::var("WAYLAND_DISPLAY").is_ok()
-        || std::env::var("SENTINELPASS_WAYLAND").is_ok()
+    std::env::var("WAYLAND_DISPLAY").is_ok() || std::env::var("SENTINELPASS_WAYLAND").is_ok()
 }
 
 /// Get context using X11
@@ -103,9 +103,10 @@ pub async fn autofill_via_clipboard(
     vault_manager: &crate::vault::VaultManager,
 ) -> Result<AutoFillResult> {
     // Parse entry ID
-    let entry_id: i64 = credential.id.parse().map_err(|_| {
-        PasswordManagerError::InvalidInput("Invalid entry ID".to_string())
-    })?;
+    let entry_id: i64 = credential
+        .id
+        .parse()
+        .map_err(|_| PasswordManagerError::InvalidInput("Invalid entry ID".to_string()))?;
 
     // Get the full entry (password is included in decrypted Entry)
     let entry = vault_manager.get_entry(entry_id)?;
@@ -158,9 +159,10 @@ pub async fn autofill_via_input(
     vault_manager: &crate::vault::VaultManager,
 ) -> Result<AutoFillResult> {
     // Parse entry ID
-    let entry_id: i64 = credential.id.parse().map_err(|_| {
-        PasswordManagerError::InvalidInput("Invalid entry ID".to_string())
-    })?;
+    let entry_id: i64 = credential
+        .id
+        .parse()
+        .map_err(|_| PasswordManagerError::InvalidInput("Invalid entry ID".to_string()))?;
 
     // Get the full entry (password is included in decrypted Entry)
     let entry = vault_manager.get_entry(entry_id)?;
@@ -247,9 +249,8 @@ unsafe fn open_display() -> Result<*mut x11::xlib::Display> {
         .or_else(|_| std::env::var("DISPLAY"))
         .unwrap_or_else(|_| ":0".to_string());
 
-    let display_name_c = CString::new(display_name).map_err(|_| {
-        PasswordManagerError::InvalidInput("Invalid DISPLAY name".to_string())
-    })?;
+    let display_name_c = CString::new(display_name)
+        .map_err(|_| PasswordManagerError::InvalidInput("Invalid DISPLAY name".to_string()))?;
 
     let display = x11::xlib::XOpenDisplay(display_name_c.as_ptr());
 
@@ -281,11 +282,11 @@ unsafe fn get_active_window(display: *mut x11::xlib::Display) -> Result<x11::xli
 
     // Get the active window property
     let mut window_return: xlib::Window = 0;
-    mut actual_type: xlib::Atom = 0;
-    mut actual_format: i32 = 0;
-    mut nitems: u64 = 0;
-    mut bytes_after: u64 = 0;
-    mut prop_return: *mut u8 = ptr::null_mut();
+    let mut actual_type: xlib::Atom = 0;
+    let mut actual_format: i32 = 0;
+    let mut nitems: u64 = 0;
+    let mut bytes_after: u64 = 0;
+    let mut prop_return: *mut u8 = ptr::null_mut();
 
     let result = xlib::XGetWindowProperty(
         display,
@@ -360,22 +361,16 @@ unsafe fn get_window_title(
     );
 
     if result == xlib::Success as i32 && !prop_return.is_null() && nitems > 0 {
-        let title = String::from_utf8_lossy(std::slice::from_raw_parts(
-            prop_return,
-            nitems as usize,
-        ))
-        .to_string();
+        let title =
+            String::from_utf8_lossy(std::slice::from_raw_parts(prop_return, nitems as usize))
+                .to_string();
         xlib::XFree(prop_return as *mut std::ffi::c_void);
         return Ok(title);
     }
 
     // Fallback to WM_NAME (legacy)
     let mut window_name_return: *mut i8 = ptr::null_mut();
-    xlib::XFetchName(
-        display,
-        window,
-        &mut window_name_return,
-    );
+    xlib::XFetchName(display, window, &mut window_name_return);
 
     if !window_name_return.is_null() {
         let title = CString::from_raw(window_name_return)
@@ -438,10 +433,7 @@ unsafe fn get_window_class(
 
 /// Set clipboard text using X11
 #[cfg(feature = "x11")]
-unsafe fn set_clipboard_text(
-    display: *mut x11::xlib::Display,
-    text: &str,
-) -> Result<()> {
+unsafe fn set_clipboard_text(display: *mut x11::xlib::Display, text: &str) -> Result<()> {
     use x11::xlib;
 
     let clipboard_atom = xlib::XInternAtom(

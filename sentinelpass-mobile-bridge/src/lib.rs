@@ -38,15 +38,15 @@
 #![allow(clippy::missing_safety_doc)]
 // We use unsafe for FFI boundaries, safety is documented per function
 
+mod bridge;
 mod error;
 mod ffi;
-mod bridge;
 
 #[cfg(feature = "jni")]
 mod jni;
 
-mod icloud;
 mod drive;
+mod icloud;
 
 // Re-export error types
 pub use error::{BridgeError, ErrorCode};

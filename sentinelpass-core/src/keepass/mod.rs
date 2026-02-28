@@ -159,12 +159,9 @@ pub fn export_to_keepass_xml(vault: &VaultManager, output: &Path) -> Result<()> 
                 ke_entries.push(KeePassEntry::from(entry));
             }
             Err(e) => {
-                return Err(PasswordManagerError::from(
-                    crate::DatabaseError::Other(format!(
-                        "Failed to export entry {}: {}",
-                        summary.entry_id, e
-                    ))
-                ));
+                return Err(PasswordManagerError::from(crate::DatabaseError::Other(
+                    format!("Failed to export entry {}: {}", summary.entry_id, e),
+                )));
             }
         }
     }

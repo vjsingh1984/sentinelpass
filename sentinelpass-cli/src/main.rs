@@ -4,9 +4,9 @@ use clap::{Parser, Subcommand};
 use rpassword::prompt_password;
 use sentinelpass_core::{
     crypto::{analyze_password, generate_password, PasswordGeneratorConfig},
-    export_to_csv, export_to_json, export_to_keepass_xml, import_from_csv, import_from_json, import_from_keepass_xml,
-    parse_otpauth_uri, Entry as VaultEntry, EntrySummary, SshAgentClient, SshKeyImporter, TotpAlgorithm,
-    VaultManager,
+    export_to_csv, export_to_json, export_to_keepass_xml, import_from_csv, import_from_json,
+    import_from_keepass_xml, parse_otpauth_uri, Entry as VaultEntry, EntrySummary, SshAgentClient,
+    SshKeyImporter, TotpAlgorithm, VaultManager,
 };
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
@@ -1297,7 +1297,10 @@ fn main() -> Result<()> {
             }
         }
 
-        Commands::Health { detailed, only_issues } => {
+        Commands::Health {
+            detailed,
+            only_issues,
+        } => {
             use sentinelpass_core::crypto::health::HealthScore;
 
             let vault_path = get_vault_path(&cli, false);
@@ -1330,7 +1333,10 @@ fn main() -> Result<()> {
                 "\x1b[35m" // magenta (critical)
             };
             let reset = "\x1b[0m";
-            println!("Overall Health Score: {}{}{}{}", score_color, summary.overall_score, reset, "/100");
+            println!(
+                "Overall Health Score: {}{}{}{}",
+                score_color, summary.overall_score, reset, "/100"
+            );
             println!();
 
             println!("Summary:");
@@ -1374,12 +1380,12 @@ fn main() -> Result<()> {
                     }
 
                     let score_color = match entry.score {
-                        HealthScore::Critical => "\x1b[35m",    // magenta
-                        HealthScore::Weak => "\x1b[31m",       // red
-                        HealthScore::Fair => "\x1b[33m",       // yellow
-                        HealthScore::Good => "\x1b[32m",       // green
-                        HealthScore::Strong => "\x1b[36m",     // cyan
-                        HealthScore::Excellent => "\x1b[34m",  // blue
+                        HealthScore::Critical => "\x1b[35m",  // magenta
+                        HealthScore::Weak => "\x1b[31m",      // red
+                        HealthScore::Fair => "\x1b[33m",      // yellow
+                        HealthScore::Good => "\x1b[32m",      // green
+                        HealthScore::Strong => "\x1b[36m",    // cyan
+                        HealthScore::Excellent => "\x1b[34m", // blue
                     };
                     let reset = "\x1b[0m";
 
@@ -1403,13 +1409,22 @@ fn main() -> Result<()> {
             // Print recommendations
             if summary.compromised_count > 0 {
                 println!("Recommendations:");
-                println!("  • {} compromised password(s) should be changed immediately", summary.compromised_count);
+                println!(
+                    "  • {} compromised password(s) should be changed immediately",
+                    summary.compromised_count
+                );
             }
             if summary.weak_count > 0 {
-                println!("  • {} weak password(s) should be strengthened", summary.weak_count);
+                println!(
+                    "  • {} weak password(s) should be strengthened",
+                    summary.weak_count
+                );
             }
             if summary.reused_count > 0 {
-                println!("  • {} reused password(s) - use unique passwords for each site", summary.reused_count);
+                println!(
+                    "  • {} reused password(s) - use unique passwords for each site",
+                    summary.reused_count
+                );
             }
             if summary.overall_score >= 80 {
                 println!("  ✓ Your vault is in good shape!");
@@ -1482,7 +1497,10 @@ fn main() -> Result<()> {
                     println!("Imported {} entries from {}", count, input.display());
                     println!("Note: Groups/tags have been preserved in the notes field.");
                 }
-                _ => anyhow::bail!("Unsupported format: {}. Use 'json', 'csv', or 'keepass'", format),
+                _ => anyhow::bail!(
+                    "Unsupported format: {}. Use 'json', 'csv', or 'keepass'",
+                    format
+                ),
             }
         }
 

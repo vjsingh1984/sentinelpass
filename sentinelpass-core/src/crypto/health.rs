@@ -14,12 +14,12 @@ use std::collections::{HashMap, HashSet};
 /// Health score for a password (0-5)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum HealthScore {
-    Critical = 0, // Compromised or very weak
-    Weak = 1,     // Low entropy
-    Fair = 2,     // Moderate strength
-    Good = 3,     // Strong but reused
-    Strong = 4,   // Strong, unique
-    Excellent = 5,// Very strong, unique, not compromised
+    Critical = 0,  // Compromised or very weak
+    Weak = 1,      // Low entropy
+    Fair = 2,      // Moderate strength
+    Good = 3,      // Strong but reused
+    Strong = 4,    // Strong, unique
+    Excellent = 5, // Very strong, unique, not compromised
 }
 
 impl HealthScore {
@@ -43,9 +43,9 @@ impl HealthScore {
     /// Get color hint for UI
     pub fn color(&self) -> &'static str {
         match self {
-            HealthScore::Critical => "#dc2626", // red
-            HealthScore::Weak => "#ea580c",     // orange
-            HealthScore::Fair => "#ca8a04",     // yellow
+            HealthScore::Critical => "#dc2626",  // red
+            HealthScore::Weak => "#ea580c",      // orange
+            HealthScore::Fair => "#ca8a04",      // yellow
             HealthScore::Good => "#16a34a",      // green
             HealthScore::Strong => "#15803d",    // dark green
             HealthScore::Excellent => "#14532d", // darker green
@@ -246,7 +246,10 @@ impl PasswordHealthAnalyzer {
         for entry in &entries {
             let is_reused = reused_passwords.contains(entry.password.as_bytes());
             let reuse_count = if is_reused {
-                password_usage.get(entry.password.as_bytes()).map(|v| v.len()).unwrap_or(1)
+                password_usage
+                    .get(entry.password.as_bytes())
+                    .map(|v| v.len())
+                    .unwrap_or(1)
             } else {
                 1
             };
@@ -364,7 +367,10 @@ impl PasswordHealthAnalyzer {
         for entry in &entries {
             let is_reused = reused_passwords.contains(entry.password.as_bytes());
             let reuse_count = if is_reused {
-                password_usage.get(entry.password.as_bytes()).map(|v| v.len()).unwrap_or(1)
+                password_usage
+                    .get(entry.password.as_bytes())
+                    .map(|v| v.len())
+                    .unwrap_or(1)
             } else {
                 1
             };

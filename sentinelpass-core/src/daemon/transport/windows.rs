@@ -1,6 +1,6 @@
 //! Windows named pipe transport for IPC.
 
-use super::{MAX_MESSAGE_SIZE, TransportConfig, TransportError, TransportResult};
+use super::{TransportConfig, TransportError, TransportResult, MAX_MESSAGE_SIZE};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 /// Windows named pipe transport
@@ -28,11 +28,18 @@ impl WindowsNamedPipeTransport {
     }
 
     /// Create a new named pipe server instance
-    pub fn create_server(&self) -> TransportResult<tokio::net::windows::named_pipe::NamedPipeServer> {
+    pub fn create_server(
+        &self,
+    ) -> TransportResult<tokio::net::windows::named_pipe::NamedPipeServer> {
         tokio::net::windows::named_pipe::ServerOptions::new()
             .first_pipe_instance(false)
             .create(&self.pipe_name)
-            .map_err(|e| TransportError::ConnectionFailed(format!("Failed to create named pipe {}: {}", self.pipe_name, e)))
+            .map_err(|e| {
+                TransportError::ConnectionFailed(format!(
+                    "Failed to create named pipe {}: {}",
+                    self.pipe_name, e
+                ))
+            })
     }
 
     /// Connect as a client (with timeout)
@@ -42,7 +49,9 @@ impl WindowsNamedPipeTransport {
         let deadline = Instant::now() + Duration::from_millis(timeout_ms);
 
         loop {
-            let client = tokio::net::windows::named_pipe::ClientOptions::new().open(&self.pipe_name).await;
+            let client = tokio::net::windows::named_pipe::ClientOptions::new()
+                .open(&self.pipe_name)
+                .await;
             match client {
                 Ok(c) => {
                     return Ok(WindowsNamedPipeConnection::from_client(c));

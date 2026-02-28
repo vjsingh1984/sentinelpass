@@ -246,7 +246,10 @@ impl DaemonVault {
     }
 
     /// List all credentials matching a base domain (e.g., "google.com" matches "gmail.google.com", "accounts.google.com")
-    pub async fn list_domain_credentials(&self, base_domain: &str) -> Result<Vec<DomainCredentialResponse>> {
+    pub async fn list_domain_credentials(
+        &self,
+        base_domain: &str,
+    ) -> Result<Vec<DomainCredentialResponse>> {
         if !self.is_unlocked().await {
             return Ok(Vec::new());
         }
@@ -271,7 +274,9 @@ impl DaemonVault {
 
                     if matches {
                         // Extract the domain for this credential
-                        let domain = entry.url.as_ref()
+                        let domain = entry
+                            .url
+                            .as_ref()
                             .and_then(|url| normalize_host(url))
                             .unwrap_or_else(|| base_domain.to_string());
 
@@ -285,9 +290,8 @@ impl DaemonVault {
             }
 
             // Sort by title then username for consistent ordering
-            matching_credentials.sort_by(|a, b| {
-                (&a.title, &a.username).cmp(&(&b.title, &b.username))
-            });
+            matching_credentials
+                .sort_by(|a, b| (&a.title, &a.username).cmp(&(&b.title, &b.username)));
 
             Ok(matching_credentials)
         } else {

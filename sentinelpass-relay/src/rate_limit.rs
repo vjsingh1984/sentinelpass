@@ -97,10 +97,12 @@ impl RateLimiter {
         };
         let now = Instant::now();
 
-        let bucket = buckets.entry(device_id.to_string()).or_insert(HourlyBucket {
-            count: 0,
-            window_start: now,
-        });
+        let bucket = buckets
+            .entry(device_id.to_string())
+            .or_insert(HourlyBucket {
+                count: 0,
+                window_start: now,
+            });
 
         // Reset if window has expired (1 hour)
         if now.duration_since(bucket.window_start) >= Duration::from_secs(3600) {
@@ -182,7 +184,10 @@ mod tests {
         // Check that hourly bucket has 6 requests (matching the per-minute limit)
         let hourly_buckets = limiter.hourly_buckets.lock().unwrap();
         let bucket = hourly_buckets.get(key).unwrap();
-        assert_eq!(bucket.count, 6, "Hourly count should match per-minute usage");
+        assert_eq!(
+            bucket.count, 6,
+            "Hourly count should match per-minute usage"
+        );
 
         // Verify the hourly limit is higher than per-minute
         assert_eq!(limiter.hourly_limit, 60, "Hourly limit should be 60");
@@ -217,14 +222,17 @@ mod tests {
         buckets.insert(
             key.to_string(),
             HourlyBucket {
-                count: 999, // Near limit
+                count: 999,                                               // Near limit
                 window_start: Instant::now() - Duration::from_secs(3601), // 1 hour + 1 second ago
             },
         );
         drop(buckets);
 
         // Should reset and allow new requests
-        assert!(limiter.check(key), "Should succeed after hourly window reset");
+        assert!(
+            limiter.check(key),
+            "Should succeed after hourly window reset"
+        );
 
         let buckets = limiter.hourly_buckets.lock().unwrap();
         let bucket = buckets.get(key).unwrap();
@@ -241,14 +249,17 @@ mod tests {
         buckets.insert(
             key.to_string(),
             DailyBucket {
-                count: 9999, // Near limit
+                count: 9999,                                               // Near limit
                 window_start: Instant::now() - Duration::from_secs(86401), // 24 hours + 1 second ago
             },
         );
         drop(buckets);
 
         // Should reset and allow new requests
-        assert!(limiter.check(key), "Should succeed after daily window reset");
+        assert!(
+            limiter.check(key),
+            "Should succeed after daily window reset"
+        );
 
         let buckets = limiter.daily_buckets.lock().unwrap();
         let bucket = buckets.get(key).unwrap();
@@ -257,14 +268,26 @@ mod tests {
 
     #[test]
     fn rate_limiter_scales_quotas_with_per_minute_rate() {
-        let limiter_low = RateLimiter::new(1);  // 1/min, 10/hour, 100/day
+        let limiter_low = RateLimiter::new(1); // 1/min, 10/hour, 100/day
         let limiter_high = RateLimiter::new(10); // 10/min, 100/hour, 1000/day
 
         // Verify internal limits scale correctly
-        assert_eq!(limiter_low.hourly_limit, 10, "Low rate limiter hourly limit should be 10");
-        assert_eq!(limiter_low.daily_limit, 100, "Low rate limiter daily limit should be 100");
-        assert_eq!(limiter_high.hourly_limit, 100, "High rate limiter hourly limit should be 100");
-        assert_eq!(limiter_high.daily_limit, 1000, "High rate limiter daily limit should be 1000");
+        assert_eq!(
+            limiter_low.hourly_limit, 10,
+            "Low rate limiter hourly limit should be 10"
+        );
+        assert_eq!(
+            limiter_low.daily_limit, 100,
+            "Low rate limiter daily limit should be 100"
+        );
+        assert_eq!(
+            limiter_high.hourly_limit, 100,
+            "High rate limiter hourly limit should be 100"
+        );
+        assert_eq!(
+            limiter_high.daily_limit, 1000,
+            "High rate limiter daily limit should be 1000"
+        );
     }
 
     #[test]
@@ -276,7 +299,10 @@ mod tests {
         for _ in 0..60 {
             assert!(limiter.check(key), "Should succeed within limit");
         }
-        assert!(!limiter.check(key), "Should be rate limited after exhaustion");
+        assert!(
+            !limiter.check(key),
+            "Should be rate limited after exhaustion"
+        );
 
         // Wait 1 second for one token refill
         thread::sleep(Duration::from_millis(1100));

@@ -424,7 +424,12 @@ mod tests {
         extensions
     }
 
-    fn sample_entry(sync_id: Uuid, version: u64, modified_at: i64, payload: &[u8]) -> SyncEntryBlob {
+    fn sample_entry(
+        sync_id: Uuid,
+        version: u64,
+        modified_at: i64,
+        payload: &[u8],
+    ) -> SyncEntryBlob {
         SyncEntryBlob {
             sync_id,
             entry_type: "credential".to_string(),
@@ -438,10 +443,7 @@ mod tests {
 
     #[tokio::test]
     async fn push_enforces_device_sequence_monotonicity() {
-        let state = RelayAppState::new(
-            RelayStorage::in_memory().unwrap(),
-            RelayConfig::default(),
-        );
+        let state = RelayAppState::new(RelayStorage::in_memory().unwrap(), RelayConfig::default());
         let (device_id, _, _) = setup_test_vault(&state);
 
         // First push with sequence 1
@@ -481,10 +483,7 @@ mod tests {
 
     #[tokio::test]
     async fn push_rejects_lower_version_entries() {
-        let state = RelayAppState::new(
-            RelayStorage::in_memory().unwrap(),
-            RelayConfig::default(),
-        );
+        let state = RelayAppState::new(RelayStorage::in_memory().unwrap(), RelayConfig::default());
         let (device_id, vault_id, sync_id) = setup_test_vault(&state);
         let conn = state.storage.conn().unwrap();
 
@@ -501,7 +500,7 @@ mod tests {
                 "credential",
                 5i64,
                 now - 100,
-                vec![1u8, 2, 3],  // Raw bytes, not base64
+                vec![1u8, 2, 3], // Raw bytes, not base64
                 false,
                 Uuid::new_v4().to_string(),
                 100i64,
@@ -527,10 +526,7 @@ mod tests {
 
     #[tokio::test]
     async fn push_uses_modified_at_for_version_tiebreaker() {
-        let state = RelayAppState::new(
-            RelayStorage::in_memory().unwrap(),
-            RelayConfig::default(),
-        );
+        let state = RelayAppState::new(RelayStorage::in_memory().unwrap(), RelayConfig::default());
         let (device_id, vault_id, sync_id) = setup_test_vault(&state);
         let conn = state.storage.conn().unwrap();
         let now = Utc::now().timestamp();
@@ -547,7 +543,7 @@ mod tests {
                 "credential",
                 5i64,
                 100i64,
-                vec![1u8, 2, 3],  // Raw bytes, not base64
+                vec![1u8, 2, 3], // Raw bytes, not base64
                 false,
                 Uuid::new_v4().to_string(),
                 100i64,
@@ -584,10 +580,7 @@ mod tests {
 
     #[tokio::test]
     async fn push_increments_server_sequence_per_entry() {
-        let state = RelayAppState::new(
-            RelayStorage::in_memory().unwrap(),
-            RelayConfig::default(),
-        );
+        let state = RelayAppState::new(RelayStorage::in_memory().unwrap(), RelayConfig::default());
         let (device_id, _, _) = setup_test_vault(&state);
 
         let req = PushRequest {
@@ -610,10 +603,7 @@ mod tests {
 
     #[tokio::test]
     async fn pull_returns_entries_after_since_sequence() {
-        let state = RelayAppState::new(
-            RelayStorage::in_memory().unwrap(),
-            RelayConfig::default(),
-        );
+        let state = RelayAppState::new(RelayStorage::in_memory().unwrap(), RelayConfig::default());
         let (device_id, vault_id, _sync_id) = setup_test_vault(&state);
         let conn = state.storage.conn().unwrap();
         let now = Utc::now().timestamp();
@@ -659,10 +649,7 @@ mod tests {
 
     #[tokio::test]
     async fn pull_paginates_with_limit() {
-        let state = RelayAppState::new(
-            RelayStorage::in_memory().unwrap(),
-            RelayConfig::default(),
-        );
+        let state = RelayAppState::new(RelayStorage::in_memory().unwrap(), RelayConfig::default());
         let (device_id, vault_id, _) = setup_test_vault(&state);
         let conn = state.storage.conn().unwrap();
         let now = Utc::now().timestamp();
@@ -708,10 +695,7 @@ mod tests {
 
     #[tokio::test]
     async fn pull_server_sequence_is_pagination_cursor() {
-        let state = RelayAppState::new(
-            RelayStorage::in_memory().unwrap(),
-            RelayConfig::default(),
-        );
+        let state = RelayAppState::new(RelayStorage::in_memory().unwrap(), RelayConfig::default());
         let (device_id, vault_id, _) = setup_test_vault(&state);
         let storage = state.storage.clone();
         let conn = storage.conn().unwrap();
@@ -770,10 +754,7 @@ mod tests {
 
     #[tokio::test]
     async fn status_returns_entry_count_excluding_tombstones() {
-        let state = RelayAppState::new(
-            RelayStorage::in_memory().unwrap(),
-            RelayConfig::default(),
-        );
+        let state = RelayAppState::new(RelayStorage::in_memory().unwrap(), RelayConfig::default());
         let (device_id, vault_id, _) = setup_test_vault(&state);
         let conn = state.storage.conn().unwrap();
         let now = Utc::now().timestamp();

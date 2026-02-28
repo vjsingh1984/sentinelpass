@@ -11,8 +11,8 @@ use crate::{
     crypto::cipher::{decrypt_to_string, encrypt_string},
     crypto::{EncryptedEntry, KdfParams, KeyHierarchy, WrappedKey},
     database::{
-        schema::CURRENT_SCHEMA_VERSION, EntryFilter, EntryRepository, NewEntryParams,
-        RawEntryRow, SqliteEntryRepository, UpdateEntryParams, Database,
+        schema::CURRENT_SCHEMA_VERSION, Database, EntryFilter, EntryRepository, NewEntryParams,
+        RawEntryRow, SqliteEntryRepository, UpdateEntryParams,
     },
     lockout::DEFAULT_MAX_ATTEMPTS,
     platform::{ensure_data_dir, get_default_vault_path},
@@ -156,7 +156,8 @@ impl VaultManager {
             .map_err(|e| PasswordManagerError::from(DatabaseError::Serialization(e.to_string())))?;
 
         let title = decrypt_to_string(dek, &title_encrypted).map_err(PasswordManagerError::from)?;
-        let username = decrypt_to_string(dek, &username_encrypted).map_err(PasswordManagerError::from)?;
+        let username =
+            decrypt_to_string(dek, &username_encrypted).map_err(PasswordManagerError::from)?;
 
         Ok(EntrySummary {
             entry_id: row.entry_id,
@@ -178,31 +179,39 @@ impl VaultManager {
         let password_encrypted: EncryptedEntry = bincode::deserialize(&row.password)
             .map_err(|e| PasswordManagerError::from(DatabaseError::Serialization(e.to_string())))?;
 
-        let url = row.url.as_ref().map(|blob| {
-            let encrypted: EncryptedEntry = bincode::deserialize(blob)
-                .map_err(|e| PasswordManagerError::from(DatabaseError::Serialization(e.to_string())))?;
-            decrypt_to_string(dek, &encrypted)
-                .map_err(PasswordManagerError::from)
-        }).transpose()?;
+        let url = row
+            .url
+            .as_ref()
+            .map(|blob| {
+                let encrypted: EncryptedEntry = bincode::deserialize(blob).map_err(|e| {
+                    PasswordManagerError::from(DatabaseError::Serialization(e.to_string()))
+                })?;
+                decrypt_to_string(dek, &encrypted).map_err(PasswordManagerError::from)
+            })
+            .transpose()?;
 
-        let notes = row.notes.as_ref().map(|blob| {
-            let encrypted: EncryptedEntry = bincode::deserialize(blob)
-                .map_err(|e| PasswordManagerError::from(DatabaseError::Serialization(e.to_string())))?;
-            decrypt_to_string(dek, &encrypted)
-                .map_err(PasswordManagerError::from)
-        }).transpose()?;
+        let notes = row
+            .notes
+            .as_ref()
+            .map(|blob| {
+                let encrypted: EncryptedEntry = bincode::deserialize(blob).map_err(|e| {
+                    PasswordManagerError::from(DatabaseError::Serialization(e.to_string()))
+                })?;
+                decrypt_to_string(dek, &encrypted).map_err(PasswordManagerError::from)
+            })
+            .transpose()?;
 
         Ok(Entry {
             entry_id: Some(row.entry_id),
             title: decrypt_to_string(dek, &title_encrypted).map_err(PasswordManagerError::from)?,
-            username: decrypt_to_string(dek, &username_encrypted).map_err(PasswordManagerError::from)?,
-            password: decrypt_to_string(dek, &password_encrypted).map_err(PasswordManagerError::from)?,
+            username: decrypt_to_string(dek, &username_encrypted)
+                .map_err(PasswordManagerError::from)?,
+            password: decrypt_to_string(dek, &password_encrypted)
+                .map_err(PasswordManagerError::from)?,
             url,
             notes,
-            created_at: DateTime::from_timestamp(row.created_at, 0)
-                .unwrap_or_else(|| Utc::now()),
-            modified_at: DateTime::from_timestamp(row.modified_at, 0)
-                .unwrap_or_else(|| Utc::now()),
+            created_at: DateTime::from_timestamp(row.created_at, 0).unwrap_or_else(|| Utc::now()),
+            modified_at: DateTime::from_timestamp(row.modified_at, 0).unwrap_or_else(|| Utc::now()),
             favorite: row.favorite,
         })
     }
@@ -300,7 +309,8 @@ impl VaultManager {
             .lock()
             .map_err(|_| DatabaseError::LockPoisoned("Failed to lock database".to_string()))?;
         let repo = SqliteEntryRepository::new(&*db);
-        let raw_row = repo.get_raw(entry_id)?
+        let raw_row = repo
+            .get_raw(entry_id)?
             .ok_or_else(|| PasswordManagerError::NotFound(format!("Entry {}", entry_id)))?;
 
         // Drop the database lock before decrypting (decrypt doesn't need the DB)
@@ -398,9 +408,7 @@ impl VaultManager {
         // Log credentials list operation
         if let Some(ref logger) = self.audit_logger {
             let _ = logger.log(
-                AuditEventType::CredentialsListed {
-                    count: items.len(),
-                },
+                AuditEventType::CredentialsListed { count: items.len() },
                 &format!(
                     "Listed {} credentials (page {}, total {})",
                     items.len(),
@@ -537,7 +545,9 @@ impl VaultManager {
         let now = Utc::now().timestamp();
 
         // Use repository pattern to update
-        let db = self.db.lock()
+        let db = self
+            .db
+            .lock()
             .map_err(|_| DatabaseError::LockPoisoned("Failed to lock database".to_string()))?;
         let repo = SqliteEntryRepository::new(&*db);
 
@@ -553,7 +563,8 @@ impl VaultManager {
             favorite: Some(entry.favorite),
         };
 
-        repo.update(entry_id, params).map_err(PasswordManagerError::from)?;
+        repo.update(entry_id, params)
+            .map_err(PasswordManagerError::from)?;
 
         // Log credential modification
         if let Some(ref logger) = self.audit_logger {
@@ -1014,9 +1025,7 @@ impl VaultManager {
     /// - Health score
     /// - Whether compromised/reused
     /// - Strength analysis
-    pub fn get_password_health_report(
-        &self,
-    ) -> Result<Vec<crate::crypto::health::PasswordHealth>> {
+    pub fn get_password_health_report(&self) -> Result<Vec<crate::crypto::health::PasswordHealth>> {
         if !self.is_unlocked() {
             return Err(PasswordManagerError::VaultLocked);
         }

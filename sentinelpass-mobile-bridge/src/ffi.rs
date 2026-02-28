@@ -3,12 +3,12 @@
 // These functions are exported with C linkage and can be called from
 // Swift or Objective-C using standard platform interop.
 
-use std::ffi::{CString, CStr};
-use std::os::raw::{c_char, c_int, c_uint};
-use std::ptr;
-use std::alloc;
 use crate::bridge;
 use crate::error::ErrorCode;
+use std::alloc;
+use std::ffi::{CStr, CString};
+use std::os::raw::{c_char, c_int, c_uint};
+use std::ptr;
 
 /// Vault handle type (opaque u64)
 pub type VaultHandle = u64;
@@ -46,7 +46,7 @@ pub struct TotpCode {
 /// FFI-safe password analysis result
 #[repr(C)]
 pub struct PasswordAnalysis {
-    pub score: c_int,              // 0-5 (0=very weak, 5=very strong)
+    pub score: c_int, // 0-5 (0=very weak, 5=very strong)
     pub entropy_bits: f64,
     pub crack_time_seconds: f64,
     pub length: c_uint,
@@ -171,23 +171,45 @@ pub unsafe extern "C" fn sp_entry_add(
         return ErrorCode::InvalidParam;
     }
 
-    let title_str = match c_to_string(title) { Ok(s) => s, Err(_) => return ErrorCode::InvalidParam };
-    let username_str = match c_to_string(username) { Ok(s) => s, Err(_) => return ErrorCode::InvalidParam };
-    let password_str = match c_to_string(password) { Ok(s) => s, Err(_) => return ErrorCode::InvalidParam };
+    let title_str = match c_to_string(title) {
+        Ok(s) => s,
+        Err(_) => return ErrorCode::InvalidParam,
+    };
+    let username_str = match c_to_string(username) {
+        Ok(s) => s,
+        Err(_) => return ErrorCode::InvalidParam,
+    };
+    let password_str = match c_to_string(password) {
+        Ok(s) => s,
+        Err(_) => return ErrorCode::InvalidParam,
+    };
 
     // Convert optional strings, handling null pointers
     let url_str = if url.is_null() {
         String::new()
     } else {
-        match c_to_string(url) { Ok(s) => s, Err(_) => return ErrorCode::InvalidParam }
+        match c_to_string(url) {
+            Ok(s) => s,
+            Err(_) => return ErrorCode::InvalidParam,
+        }
     };
     let notes_str = if notes.is_null() {
         String::new()
     } else {
-        match c_to_string(notes) { Ok(s) => s, Err(_) => return ErrorCode::InvalidParam }
+        match c_to_string(notes) {
+            Ok(s) => s,
+            Err(_) => return ErrorCode::InvalidParam,
+        }
     };
 
-    match bridge::bridge_entry_add(handle, &title_str, &username_str, &password_str, &url_str, &notes_str) {
+    match bridge::bridge_entry_add(
+        handle,
+        &title_str,
+        &username_str,
+        &password_str,
+        &url_str,
+        &notes_str,
+    ) {
         Ok(entry_id) => {
             *out_entry_id = string_to_c(&entry_id);
             ErrorCode::Success
@@ -207,7 +229,10 @@ pub unsafe extern "C" fn sp_entry_get_by_id(
         return ErrorCode::InvalidParam;
     }
 
-    let id_str = match c_to_string(entry_id) { Ok(s) => s, Err(_) => return ErrorCode::InvalidParam };
+    let id_str = match c_to_string(entry_id) {
+        Ok(s) => s,
+        Err(_) => return ErrorCode::InvalidParam,
+    };
 
     match bridge::bridge_entry_get(handle, &id_str) {
         Ok(entry) => {
@@ -275,7 +300,10 @@ pub unsafe extern "C" fn sp_entry_delete(
     handle: VaultHandle,
     entry_id: *const c_char,
 ) -> ErrorCode {
-    let id_str = match c_to_string(entry_id) { Ok(s) => s, Err(_) => return ErrorCode::InvalidParam };
+    let id_str = match c_to_string(entry_id) {
+        Ok(s) => s,
+        Err(_) => return ErrorCode::InvalidParam,
+    };
     result_to_code(bridge::bridge_entry_delete(handle, &id_str))
 }
 
@@ -291,7 +319,10 @@ pub unsafe extern "C" fn sp_entry_search(
         return ErrorCode::InvalidParam;
     }
 
-    let query_str = match c_to_string(query) { Ok(s) => s, Err(_) => return ErrorCode::InvalidParam };
+    let query_str = match c_to_string(query) {
+        Ok(s) => s,
+        Err(_) => return ErrorCode::InvalidParam,
+    };
 
     match bridge::bridge_entry_search(handle, &query_str) {
         Ok(summaries) => {
@@ -338,7 +369,10 @@ pub unsafe extern "C" fn sp_totp_generate_code(
         return ErrorCode::InvalidParam;
     }
 
-    let id_str = match c_to_string(entry_id) { Ok(s) => s, Err(_) => return ErrorCode::InvalidParam };
+    let id_str = match c_to_string(entry_id) {
+        Ok(s) => s,
+        Err(_) => return ErrorCode::InvalidParam,
+    };
 
     match bridge::bridge_totp_generate_code(handle, &id_str) {
         Ok(totp_info) => {
@@ -390,7 +424,10 @@ pub unsafe extern "C" fn sp_password_check_strength(
         return ErrorCode::InvalidParam;
     }
 
-    let password_str = match c_to_string(password) { Ok(s) => s, Err(_) => return ErrorCode::InvalidParam };
+    let password_str = match c_to_string(password) {
+        Ok(s) => s,
+        Err(_) => return ErrorCode::InvalidParam,
+    };
 
     match bridge::bridge_password_check_strength(&password_str) {
         Ok(analysis) => {

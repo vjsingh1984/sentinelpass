@@ -323,11 +323,7 @@ extern "system" {
     fn SetClipboardData(uFormat: u32, hMem: HGLOBAL) -> HGLOBAL;
     fn LocalAlloc(uFlags: u32, uBytes: usize) -> HGLOBAL;
     fn LocalFree(hMem: HGLOBAL) -> HGLOBAL;
-    fn SendInput(
-        cInputs: u32,
-        pInputs: *const INPUT,
-        cbSize: i32,
-    ) -> u32;
+    fn SendInput(cInputs: u32, pInputs: *const INPUT, cbSize: i32) -> u32;
     fn VkKeyScanW(ch: u16) -> i32;
     fn RegisterHotKey(hwnd: HWND, id: i32, fsModifiers: u32, vk: u32) -> i32;
 }

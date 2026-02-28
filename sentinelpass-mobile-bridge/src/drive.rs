@@ -68,8 +68,8 @@ impl DriveFile {
     /// Create a Drive file from a sync entry blob
     pub fn from_sync_blob(blob: &SyncEntryBlob) -> Self {
         // Encode encrypted payload as base64 string for JSON transport
-        let encrypted_payload = base64::engine::general_purpose::STANDARD
-            .encode(&blob.encrypted_payload);
+        let encrypted_payload =
+            base64::engine::general_purpose::STANDARD.encode(&blob.encrypted_payload);
 
         Self {
             id: blob.sync_id.to_string(),
@@ -108,7 +108,8 @@ impl DriveFile {
         };
 
         // Parse modified time
-        let modified_at = self.modified_time
+        let modified_at = self
+            .modified_time
             .parse::<i64>()
             .unwrap_or_else(|_| chrono::Utc::now().timestamp());
 
@@ -207,10 +208,7 @@ impl DriveSyncManager {
 
     /// Process files downloaded from Drive
     pub fn process_download(&self, files: Vec<DriveFile>) -> BridgeResult<Vec<SyncEntryBlob>> {
-        files
-            .into_iter()
-            .map(|file| file.to_sync_blob())
-            .collect()
+        files.into_iter().map(|file| file.to_sync_blob()).collect()
     }
 
     /// Get current sync state
@@ -257,7 +255,7 @@ use std::ffi::{c_char, CStr, CString};
 use std::os::raw::c_int;
 
 #[cfg(feature = "jni")]
-use jni::sys::{jint, jobject, jstring, jlong};
+use jni::sys::{jint, jlong, jobject, jstring};
 #[cfg(feature = "jni")]
 use jni::JNIEnv;
 
@@ -341,9 +339,7 @@ pub unsafe extern "C" fn Java_com_sentinelpass_DriveSync_nativePrepareUpload(
             let lock_guard = DRIVE_SYNC_MANAGER
                 .lock()
                 .map_err(|e| BridgeError::Sync(format!("Lock error: {}", e)))?;
-            lock_guard
-                .as_ref()
-                .ok_or(BridgeError::NotInitialized)?
+            lock_guard.as_ref().ok_or(BridgeError::NotInitialized)?
         };
 
         let files = manager.prepare_upload(&blobs)?;
@@ -387,9 +383,7 @@ pub unsafe extern "C" fn Java_com_sentinelpass_DriveSync_nativeProcessDownload(
             let lock_guard = DRIVE_SYNC_MANAGER
                 .lock()
                 .map_err(|e| BridgeError::Sync(format!("Lock error: {}", e)))?;
-            lock_guard
-                .as_ref()
-                .ok_or(BridgeError::NotInitialized)?
+            lock_guard.as_ref().ok_or(BridgeError::NotInitialized)?
         };
 
         let blobs = manager.process_download(files)?;
@@ -429,9 +423,7 @@ pub unsafe extern "C" fn Java_com_sentinelpass_DriveSync_nativeUpdateState(
             let lock_guard = DRIVE_SYNC_MANAGER
                 .lock()
                 .map_err(|e| BridgeError::Sync(format!("Lock error: {}", e)))?;
-            let manager = lock_guard
-                .as_ref()
-                .ok_or(BridgeError::NotInitialized)?;
+            let manager = lock_guard.as_ref().ok_or(BridgeError::NotInitialized)?;
 
             manager.update_last_sync(last_sync as i64)?;
 
@@ -529,9 +521,7 @@ pub unsafe extern "C" fn sp_drive_sync_prepare_upload(
             let lock_guard = DRIVE_SYNC_MANAGER
                 .lock()
                 .map_err(|e| BridgeError::Sync(format!("Lock error: {}", e)))?;
-            let manager = lock_guard
-                .as_ref()
-                .ok_or(BridgeError::NotInitialized)?;
+            let manager = lock_guard.as_ref().ok_or(BridgeError::NotInitialized)?;
             manager.prepare_upload(&blobs)?
         };
 
@@ -575,9 +565,7 @@ pub unsafe extern "C" fn sp_drive_sync_process_download(
             let lock_guard = DRIVE_SYNC_MANAGER
                 .lock()
                 .map_err(|e| BridgeError::Sync(format!("Lock error: {}", e)))?;
-            let manager = lock_guard
-                .as_ref()
-                .ok_or(BridgeError::NotInitialized)?;
+            let manager = lock_guard.as_ref().ok_or(BridgeError::NotInitialized)?;
             manager.process_download(files)?
         };
 
@@ -605,9 +593,7 @@ pub unsafe extern "C" fn sp_drive_sync_update_state(
             let lock_guard = DRIVE_SYNC_MANAGER
                 .lock()
                 .map_err(|e| BridgeError::Sync(format!("Lock error: {}", e)))?;
-            let manager = lock_guard
-                .as_ref()
-                .ok_or(BridgeError::NotInitialized)?;
+            let manager = lock_guard.as_ref().ok_or(BridgeError::NotInitialized)?;
 
             manager.update_last_sync(last_sync)?;
 

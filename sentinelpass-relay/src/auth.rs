@@ -9,9 +9,9 @@ use axum::middleware::Next;
 use axum::response::Response;
 use chrono::Utc;
 use ed25519_dalek::{Signature, Signer, Verifier, VerifyingKey};
+use rand::RngCore;
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
-use rand::RngCore;
 
 /// Auth middleware: verifies Ed25519 signature on every authenticated request.
 pub async fn auth_middleware(
@@ -86,12 +86,12 @@ mod tests {
     use super::*;
     use crate::app_state::RelayAppState;
     use crate::config::RelayConfig;
+    use crate::rate_limit::RateLimiter;
     use crate::storage::RelayStorage;
     use base64::engine::general_purpose::STANDARD;
     use chrono::Utc;
     use ed25519_dalek::SigningKey;
     use uuid::Uuid;
-    use crate::rate_limit::RateLimiter;
 
     fn generate_signing_key() -> SigningKey {
         let mut secret_bytes = [0u8; 32];
@@ -157,10 +157,7 @@ mod tests {
 
     #[tokio::test]
     async fn verify_auth_rejects_invalid_scheme() {
-        let state = RelayAppState::new(
-            RelayStorage::in_memory().unwrap(),
-            RelayConfig::default(),
-        );
+        let state = RelayAppState::new(RelayStorage::in_memory().unwrap(), RelayConfig::default());
 
         let result = verify_auth(
             "InvalidScheme",
@@ -180,10 +177,7 @@ mod tests {
 
     #[tokio::test]
     async fn verify_auth_rejects_malformed_header() {
-        let state = RelayAppState::new(
-            RelayStorage::in_memory().unwrap(),
-            RelayConfig::default(),
-        );
+        let state = RelayAppState::new(RelayStorage::in_memory().unwrap(), RelayConfig::default());
 
         let device_id = Uuid::new_v4();
         let header = format!("SentinelPass-Ed25519 {}:invalid", device_id);
@@ -240,10 +234,7 @@ mod tests {
 
     #[tokio::test]
     async fn verify_auth_rejects_unknown_device() {
-        let state = RelayAppState::new(
-            RelayStorage::in_memory().unwrap(),
-            RelayConfig::default(),
-        );
+        let state = RelayAppState::new(RelayStorage::in_memory().unwrap(), RelayConfig::default());
         let secret_key = generate_signing_key();
         let device_id = Uuid::new_v4();
 
@@ -275,10 +266,7 @@ mod tests {
 
     #[tokio::test]
     async fn verify_auth_rejects_revoked_device() {
-        let state = RelayAppState::new(
-            RelayStorage::in_memory().unwrap(),
-            RelayConfig::default(),
-        );
+        let state = RelayAppState::new(RelayStorage::in_memory().unwrap(), RelayConfig::default());
         let (device_id, secret_key) = setup_test_device(&state);
         let conn = state.storage.conn().unwrap();
 
@@ -317,10 +305,7 @@ mod tests {
 
     #[tokio::test]
     async fn verify_auth_rejects_invalid_signature() {
-        let state = RelayAppState::new(
-            RelayStorage::in_memory().unwrap(),
-            RelayConfig::default(),
-        );
+        let state = RelayAppState::new(RelayStorage::in_memory().unwrap(), RelayConfig::default());
         let (_, _secret_key) = setup_test_device(&state);
 
         // Use wrong key to sign
@@ -353,10 +338,7 @@ mod tests {
 
     #[tokio::test]
     async fn verify_auth_accepts_valid_signature() {
-        let state = RelayAppState::new(
-            RelayStorage::in_memory().unwrap(),
-            RelayConfig::default(),
-        );
+        let state = RelayAppState::new(RelayStorage::in_memory().unwrap(), RelayConfig::default());
         let (device_id, secret_key) = setup_test_device(&state);
 
         let auth_header = build_auth_header(
@@ -386,10 +368,7 @@ mod tests {
 
     #[tokio::test]
     async fn verify_auth_includes_body_hash_in_signature() {
-        let state = RelayAppState::new(
-            RelayStorage::in_memory().unwrap(),
-            RelayConfig::default(),
-        );
+        let state = RelayAppState::new(RelayStorage::in_memory().unwrap(), RelayConfig::default());
         let (device_id, secret_key) = setup_test_device(&state);
         let timestamp = Utc::now().timestamp();
         let nonce = "test-nonce-hash";

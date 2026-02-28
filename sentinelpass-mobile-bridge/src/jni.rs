@@ -8,23 +8,23 @@
 #![allow(unused_mut)]
 
 #[cfg(feature = "jni")]
+use crate::bridge;
+#[cfg(feature = "jni")]
+use crate::error::ErrorCode;
+#[cfg(feature = "jni")]
+use jni::objects::{JClass, JObject, JString};
+#[cfg(feature = "jni")]
+use jni::sys::{jboolean, jbyteArray, jint, jlong, jobject, jsize, jstring};
+#[cfg(feature = "jni")]
+use jni::JNIEnv;
+#[cfg(feature = "jni")]
+use lazy_static::lazy_static;
+#[cfg(feature = "jni")]
 use std::ffi::CStr;
 #[cfg(feature = "jni")]
 use std::os::raw::{c_int, c_uint};
 #[cfg(feature = "jni")]
 use std::ptr;
-#[cfg(feature = "jni")]
-use jni::JNIEnv;
-#[cfg(feature = "jni")]
-use jni::objects::{JClass, JObject, JString};
-#[cfg(feature = "jni")]
-use jni::sys::{jlong, jstring, jint, jboolean, jsize, jbyteArray, jobject};
-#[cfg(feature = "jni")]
-use lazy_static::lazy_static;
-#[cfg(feature = "jni")]
-use crate::bridge;
-#[cfg(feature = "jni")]
-use crate::error::ErrorCode;
 
 /// Store vault handles for JNI
 #[cfg(feature = "jni")]
@@ -128,7 +128,13 @@ pub extern "system" fn Java_com_sentinelpass_VaultManager_nativeIsUnlocked(
 ) -> jboolean {
     if let Some(_internal_handle) = get_internal_handle(handle) {
         match bridge::bridge_vault_is_unlocked(handle as u64) {
-            Ok(unlocked) => if unlocked { 1 } else { 0 },
+            Ok(unlocked) => {
+                if unlocked {
+                    1
+                } else {
+                    0
+                }
+            }
             Err(_) => 0,
         }
     } else {
@@ -167,11 +173,26 @@ pub extern "system" fn Java_com_sentinelpass_VaultManager_nativeAddEntry(
     notes: JString,
 ) -> jstring {
     if let Some(_internal_handle) = get_internal_handle(handle) {
-        let title_str = match jstring_to_string(&mut env, title) { Ok(s) => s, Err(_) => return ptr::null_mut() };
-        let username_str = match jstring_to_string(&mut env, username) { Ok(s) => s, Err(_) => return ptr::null_mut() };
-        let password_str = match jstring_to_string(&mut env, password) { Ok(s) => s, Err(_) => return ptr::null_mut() };
-        let url_str = match jstring_to_string(&mut env, url) { Ok(s) => s, Err(_) => return ptr::null_mut() };
-        let notes_str = match jstring_to_string(&mut env, notes) { Ok(s) => s, Err(_) => return ptr::null_mut() };
+        let title_str = match jstring_to_string(&mut env, title) {
+            Ok(s) => s,
+            Err(_) => return ptr::null_mut(),
+        };
+        let username_str = match jstring_to_string(&mut env, username) {
+            Ok(s) => s,
+            Err(_) => return ptr::null_mut(),
+        };
+        let password_str = match jstring_to_string(&mut env, password) {
+            Ok(s) => s,
+            Err(_) => return ptr::null_mut(),
+        };
+        let url_str = match jstring_to_string(&mut env, url) {
+            Ok(s) => s,
+            Err(_) => return ptr::null_mut(),
+        };
+        let notes_str = match jstring_to_string(&mut env, notes) {
+            Ok(s) => s,
+            Err(_) => return ptr::null_mut(),
+        };
 
         match bridge::bridge_entry_add(
             handle as u64,
@@ -198,15 +219,16 @@ pub extern "system" fn Java_com_sentinelpass_VaultManager_nativeGetEntry(
     entry_id: JString,
 ) -> jstring {
     if let Some(_internal_handle) = get_internal_handle(handle) {
-        let id_str = match jstring_to_string(&mut env, entry_id) { Ok(s) => s, Err(_) => return ptr::null_mut() };
+        let id_str = match jstring_to_string(&mut env, entry_id) {
+            Ok(s) => s,
+            Err(_) => return ptr::null_mut(),
+        };
 
         match bridge::bridge_entry_get(handle as u64, &id_str) {
-            Ok(entry) => {
-                match serde_json::to_string(&entry) {
-                    Ok(json) => string_to_jstring(&mut env, &json).unwrap_or(ptr::null_mut()),
-                    Err(_) => ptr::null_mut(),
-                }
-            }
+            Ok(entry) => match serde_json::to_string(&entry) {
+                Ok(json) => string_to_jstring(&mut env, &json).unwrap_or(ptr::null_mut()),
+                Err(_) => ptr::null_mut(),
+            },
             Err(_) => ptr::null_mut(),
         }
     } else {
@@ -223,12 +245,10 @@ pub extern "system" fn Java_com_sentinelpass_VaultManager_nativeListEntries(
 ) -> jstring {
     if let Some(_internal_handle) = get_internal_handle(handle) {
         match bridge::bridge_entry_list(handle as u64) {
-            Ok(summaries) => {
-                match serde_json::to_string(&summaries) {
-                    Ok(json) => string_to_jstring(&mut env, &json).unwrap_or(ptr::null_mut()),
-                    Err(_) => ptr::null_mut(),
-                }
-            }
+            Ok(summaries) => match serde_json::to_string(&summaries) {
+                Ok(json) => string_to_jstring(&mut env, &json).unwrap_or(ptr::null_mut()),
+                Err(_) => ptr::null_mut(),
+            },
             Err(_) => ptr::null_mut(),
         }
     } else {
@@ -245,15 +265,16 @@ pub extern "system" fn Java_com_sentinelpass_VaultManager_nativeSearchEntries(
     query: JString,
 ) -> jstring {
     if let Some(_internal_handle) = get_internal_handle(handle) {
-        let query_str = match jstring_to_string(&mut env, query) { Ok(s) => s, Err(_) => return ptr::null_mut() };
+        let query_str = match jstring_to_string(&mut env, query) {
+            Ok(s) => s,
+            Err(_) => return ptr::null_mut(),
+        };
 
         match bridge::bridge_entry_search(handle as u64, &query_str) {
-            Ok(summaries) => {
-                match serde_json::to_string(&summaries) {
-                    Ok(json) => string_to_jstring(&mut env, &json).unwrap_or(ptr::null_mut()),
-                    Err(_) => ptr::null_mut(),
-                }
-            }
+            Ok(summaries) => match serde_json::to_string(&summaries) {
+                Ok(json) => string_to_jstring(&mut env, &json).unwrap_or(ptr::null_mut()),
+                Err(_) => ptr::null_mut(),
+            },
             Err(_) => ptr::null_mut(),
         }
     } else {
@@ -270,7 +291,10 @@ pub extern "system" fn Java_com_sentinelpass_VaultManager_nativeDeleteEntry(
     entry_id: JString,
 ) -> jint {
     if let Some(_internal_handle) = get_internal_handle(handle) {
-        let id_str = match jstring_to_string(&mut env, entry_id) { Ok(s) => s, Err(_) => return ErrorCode::InvalidParam as jint };
+        let id_str = match jstring_to_string(&mut env, entry_id) {
+            Ok(s) => s,
+            Err(_) => return ErrorCode::InvalidParam as jint,
+        };
 
         result_to_code(bridge::bridge_entry_delete(handle as u64, &id_str))
     } else {
@@ -291,7 +315,10 @@ pub extern "system" fn Java_com_sentinelpass_VaultManager_nativeGenerateTotp(
     entry_id: JString,
 ) -> jstring {
     if let Some(_internal_handle) = get_internal_handle(handle) {
-        let id_str = match jstring_to_string(&mut env, entry_id) { Ok(s) => s, Err(_) => return ptr::null_mut() };
+        let id_str = match jstring_to_string(&mut env, entry_id) {
+            Ok(s) => s,
+            Err(_) => return ptr::null_mut(),
+        };
 
         match bridge::bridge_totp_generate_code(handle as u64, &id_str) {
             Ok(totp_info) => {
@@ -333,12 +360,19 @@ pub extern "system" fn Java_com_sentinelpass_VaultManager_nativeCheckStrength(
     _class: JClass,
     password: JString,
 ) -> jstring {
-    let password_str = match jstring_to_string(&mut env, password) { Ok(s) => s, Err(_) => return ptr::null_mut() };
+    let password_str = match jstring_to_string(&mut env, password) {
+        Ok(s) => s,
+        Err(_) => return ptr::null_mut(),
+    };
 
     match bridge::bridge_password_check_strength(&password_str) {
         Ok(analysis) => {
             // Return score as a simple string
-            let result = format!("{},{}", analysis.strength.score(), analysis.strength.as_str());
+            let result = format!(
+                "{},{}",
+                analysis.strength.score(),
+                analysis.strength.as_str()
+            );
             string_to_jstring(&mut env, &result).unwrap_or(ptr::null_mut())
         }
         Err(_) => ptr::null_mut(),
@@ -370,7 +404,13 @@ pub extern "system" fn Java_com_sentinelpass_VaultManager_nativeBiometricHasKey(
 ) -> jboolean {
     if let Some(_internal_handle) = get_internal_handle(handle) {
         match bridge::bridge_biometric_has_key(handle as u64) {
-            Ok(has_key) => if has_key { 1 } else { 0 },
+            Ok(has_key) => {
+                if has_key {
+                    1
+                } else {
+                    0
+                }
+            }
             Err(_) => 0,
         }
     } else {

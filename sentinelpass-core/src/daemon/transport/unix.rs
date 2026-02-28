@@ -1,6 +1,6 @@
 //! Unix domain socket transport for IPC.
 
-use super::{MAX_MESSAGE_SIZE, TransportConfig, TransportError, TransportResult};
+use super::{TransportConfig, TransportError, TransportResult, MAX_MESSAGE_SIZE};
 use std::path::PathBuf;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -46,7 +46,11 @@ impl UnixSocketTransport {
     /// Bind the listener to the socket path
     pub fn bind(&mut self) -> TransportResult<()> {
         let listener = tokio::net::UnixListener::bind(&self.socket_path).map_err(|e| {
-            TransportError::ConnectionFailed(format!("Failed to bind to {}: {}", self.socket_path.display(), e))
+            TransportError::ConnectionFailed(format!(
+                "Failed to bind to {}: {}",
+                self.socket_path.display(),
+                e
+            ))
         })?;
 
         // Set permissions to user-only (0o600)
@@ -54,7 +58,12 @@ impl UnixSocketTransport {
         {
             use std::os::unix::fs::PermissionsExt;
             std::fs::set_permissions(&self.socket_path, std::fs::Permissions::from_mode(0o600))
-                .map_err(|e| TransportError::Io(std::io::Error::new(std::io::ErrorKind::Other, format!("Failed to set socket permissions: {}", e))))?;
+                .map_err(|e| {
+                    TransportError::Io(std::io::Error::new(
+                        std::io::ErrorKind::Other,
+                        format!("Failed to set socket permissions: {}", e),
+                    ))
+                })?;
         }
 
         self.listener = Some(listener);
@@ -68,7 +77,9 @@ impl UnixSocketTransport {
             .as_ref()
             .ok_or_else(|| TransportError::Other("Transport not bound".to_string()))?;
 
-        let stream = listener.accept().await
+        let stream = listener
+            .accept()
+            .await
             .map_err(|e| TransportError::Io(e))?
             .0;
 
@@ -92,8 +103,13 @@ pub struct UnixSocketConnection {
 impl UnixSocketConnection {
     /// Create a new connection as a client
     pub async fn connect(path: PathBuf) -> TransportResult<Self> {
-        let stream = tokio::net::UnixStream::connect(&path).await
-            .map_err(|e| TransportError::ConnectionFailed(format!("Failed to connect to {}: {}", path.display(), e)))?;
+        let stream = tokio::net::UnixStream::connect(&path).await.map_err(|e| {
+            TransportError::ConnectionFailed(format!(
+                "Failed to connect to {}: {}",
+                path.display(),
+                e
+            ))
+        })?;
 
         Ok(Self { stream })
     }
@@ -168,7 +184,8 @@ mod tests {
         let mut transport = UnixSocketTransport::new(TransportConfig {
             unix_socket_path: Some(socket_path.to_string_lossy().to_string()),
             ..Default::default()
-        }).unwrap();
+        })
+        .unwrap();
 
         transport.bind().unwrap();
         assert!(transport.is_bound());
@@ -186,7 +203,8 @@ mod tests {
         let mut server_transport = UnixSocketTransport::new(TransportConfig {
             unix_socket_path: Some(socket_path.to_string_lossy().to_string()),
             ..Default::default()
-        }).unwrap();
+        })
+        .unwrap();
         server_transport.bind().unwrap();
 
         // Spawn server task
@@ -219,13 +237,17 @@ mod tests {
         let mut transport = UnixSocketTransport::new(TransportConfig {
             unix_socket_path: Some(socket_path.to_string_lossy().to_string()),
             ..Default::default()
-        }).unwrap();
+        })
+        .unwrap();
         transport.bind().unwrap();
 
         let server_handle = tokio::spawn(async move {
             let mut conn = transport.accept().await.unwrap();
             let result = conn.read_message().await;
-            assert!(matches!(result, Err(TransportError::MessageTooLarge { .. })));
+            assert!(matches!(
+                result,
+                Err(TransportError::MessageTooLarge { .. })
+            ));
         });
 
         // Connect and send oversized message
@@ -234,7 +256,10 @@ mod tests {
 
         let oversized = vec![0u8; MAX_MESSAGE_SIZE + 1];
         let result = client.write_message(&oversized).await;
-        assert!(matches!(result, Err(TransportError::MessageTooLarge { .. })));
+        assert!(matches!(
+            result,
+            Err(TransportError::MessageTooLarge { .. })
+        ));
 
         server_handle.await.unwrap();
     }
@@ -247,7 +272,8 @@ mod tests {
         let mut transport = UnixSocketTransport::new(TransportConfig {
             unix_socket_path: Some(socket_path.to_string_lossy().to_string()),
             ..Default::default()
-        }).unwrap();
+        })
+        .unwrap();
         transport.bind().unwrap();
 
         let server_handle = tokio::spawn(async move {

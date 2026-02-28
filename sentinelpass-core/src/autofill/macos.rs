@@ -8,9 +8,9 @@
 
 use super::{AutoFillResult, CredentialMatch};
 use crate::{PasswordManagerError, Result};
-use objc::{msg_send, sel, sel_impl, class};
 use cocoa::base::{id, nil};
 use cocoa::foundation::{NSAutoreleasePool, NSString};
+use objc::{class, msg_send, sel, sel_impl};
 use std::ffi::c_char;
 use std::ffi::CStr;
 use std::thread;
@@ -103,9 +103,10 @@ pub async fn autofill_via_clipboard(
     vault_manager: &crate::vault::VaultManager,
 ) -> Result<AutoFillResult> {
     // Parse entry ID
-    let entry_id: i64 = credential.id.parse().map_err(|_| {
-        PasswordManagerError::InvalidInput("Invalid entry ID".to_string())
-    })?;
+    let entry_id: i64 = credential
+        .id
+        .parse()
+        .map_err(|_| PasswordManagerError::InvalidInput("Invalid entry ID".to_string()))?;
 
     // Get the full entry (password is included in decrypted Entry)
     let entry = vault_manager.get_entry(entry_id)?;
@@ -153,9 +154,10 @@ pub async fn autofill_via_input(
     vault_manager: &crate::vault::VaultManager,
 ) -> Result<AutoFillResult> {
     // Parse entry ID
-    let entry_id: i64 = credential.id.parse().map_err(|_| {
-        PasswordManagerError::InvalidInput("Invalid entry ID".to_string())
-    })?;
+    let entry_id: i64 = credential
+        .id
+        .parse()
+        .map_err(|_| PasswordManagerError::InvalidInput("Invalid entry ID".to_string()))?;
 
     // Get the full entry (password is included in decrypted Entry)
     let entry = vault_manager.get_entry(entry_id)?;
@@ -218,9 +220,7 @@ unsafe fn nsstring_to_string(ns_string: id) -> String {
         return String::new();
     }
 
-    CStr::from_ptr(c_string)
-        .to_string_lossy()
-        .to_string()
+    CStr::from_ptr(c_string).to_string_lossy().to_string()
 }
 
 /// Extract domain from window title
@@ -298,19 +298,12 @@ unsafe fn simulate_key_event(keycode: u16, key_down: bool) -> Result<()> {
             keydown: bool,
         ) -> *mut std::ffi::c_void;
 
-        fn CGEventPost(
-            tap: CGEventTapLocation,
-            event: *mut std::ffi::c_void,
-        );
+        fn CGEventPost(tap: CGEventTapLocation, event: *mut std::ffi::c_void);
 
         fn CFRelease(obj: *const std::ffi::c_void);
     }
 
-    let event = CGEventCreateKeyboardEvent(
-        std::ptr::null(),
-        keycode,
-        key_down,
-    );
+    let event = CGEventCreateKeyboardEvent(std::ptr::null(), keycode, key_down);
 
     if !event.is_null() {
         CGEventPost(CGEventTapLocation::Session, event);
@@ -326,52 +319,52 @@ unsafe fn simulate_key_event(keycode: u16, key_down: bool) -> Result<()> {
 unsafe fn char_to_cg_code(ch: char) -> Result<u16> {
     // Map characters to virtual key codes (kVK_* constants)
     let vk = match ch {
-        'a' | 'A' => 0x00,  // kVK_ANSI_A
-        'b' | 'B' => 0x0B,  // kVK_ANSI_B
-        'c' | 'C' => 0x08,  // kVK_ANSI_C
-        'd' | 'D' => 0x02,  // kVK_ANSI_D
-        'e' | 'E' => 0x0E,  // kVK_ANSI_E
-        'f' | 'F' => 0x03,  // kVK_ANSI_F
-        'g' | 'G' => 0x05,  // kVK_ANSI_G
-        'h' | 'H' => 0x04,  // kVK_ANSI_H
-        'i' | 'I' => 0x22,  // kVK_ANSI_I
-        'j' | 'J' => 0x26,  // kVK_ANSI_J
-        'k' | 'K' => 0x28,  // kVK_ANSI_K
-        'l' | 'L' => 0x25,  // kVK_ANSI_L
-        'm' | 'M' => 0x2E,  // kVK_ANSI_M
-        'n' | 'N' => 0x2D,  // kVK_ANSI_N
-        'o' | 'O' => 0x1F,  // kVK_ANSI_O
-        'p' | 'P' => 0x23,  // kVK_ANSI_P
-        'q' | 'Q' => 0x0C,  // kVK_ANSI_Q
-        'r' | 'R' => 0x0F,  // kVK_ANSI_R
-        's' | 'S' => 0x01,  // kVK_ANSI_S
-        't' | 'T' => 0x11,  // kVK_ANSI_T
-        'u' | 'U' => 0x20,  // kVK_ANSI_U
-        'v' | 'V' => 0x09,  // kVK_ANSI_V
-        'w' | 'W' => 0x0D,  // kVK_ANSI_W
-        'x' | 'X' => 0x07,  // kVK_ANSI_X
-        'y' | 'Y' => 0x10,  // kVK_ANSI_Y
-        'z' | 'Z' => 0x06,  // kVK_ANSI_Z
-        '0' => 0x1D,        // kVK_ANSI_0
-        '1' => 0x12,        // kVK_ANSI_1
-        '2' => 0x13,        // kVK_ANSI_2
-        '3' => 0x14,        // kVK_ANSI_3
-        '4' => 0x15,        // kVK_ANSI_4
-        '5' => 0x17,        // kVK_ANSI_5
-        '6' => 0x16,        // kVK_ANSI_6
-        '7' => 0x1A,        // kVK_ANSI_7
-        '8' => 0x1C,        // kVK_ANSI_8
-        '9' => 0x19,        // kVK_ANSI_9
-        ' ' => 0x31,        // kVK_Space
-        '\t' => 0x30,       // kVK_Tab
-        '\n' => 0x24,       // kVK_Return
-        '-' => 0x1B,        // kVK_ANSI_Minus
-        '=' => 0x18,        // kVK_ANSI_Equal
-        '@' => 0x32,        // kVK_ANSI_Grave (with shift)
-        '.' => 0x2F,        // kVK_ANSI_Period
-        ',' => 0x2B,        // kVK_ANSI_Comma
-        '/' => 0x2C,        // kVK_ANSI_Slash
-        ':' => 0x29,        // kVK_ANSI_Semicolon (with shift)
+        'a' | 'A' => 0x00, // kVK_ANSI_A
+        'b' | 'B' => 0x0B, // kVK_ANSI_B
+        'c' | 'C' => 0x08, // kVK_ANSI_C
+        'd' | 'D' => 0x02, // kVK_ANSI_D
+        'e' | 'E' => 0x0E, // kVK_ANSI_E
+        'f' | 'F' => 0x03, // kVK_ANSI_F
+        'g' | 'G' => 0x05, // kVK_ANSI_G
+        'h' | 'H' => 0x04, // kVK_ANSI_H
+        'i' | 'I' => 0x22, // kVK_ANSI_I
+        'j' | 'J' => 0x26, // kVK_ANSI_J
+        'k' | 'K' => 0x28, // kVK_ANSI_K
+        'l' | 'L' => 0x25, // kVK_ANSI_L
+        'm' | 'M' => 0x2E, // kVK_ANSI_M
+        'n' | 'N' => 0x2D, // kVK_ANSI_N
+        'o' | 'O' => 0x1F, // kVK_ANSI_O
+        'p' | 'P' => 0x23, // kVK_ANSI_P
+        'q' | 'Q' => 0x0C, // kVK_ANSI_Q
+        'r' | 'R' => 0x0F, // kVK_ANSI_R
+        's' | 'S' => 0x01, // kVK_ANSI_S
+        't' | 'T' => 0x11, // kVK_ANSI_T
+        'u' | 'U' => 0x20, // kVK_ANSI_U
+        'v' | 'V' => 0x09, // kVK_ANSI_V
+        'w' | 'W' => 0x0D, // kVK_ANSI_W
+        'x' | 'X' => 0x07, // kVK_ANSI_X
+        'y' | 'Y' => 0x10, // kVK_ANSI_Y
+        'z' | 'Z' => 0x06, // kVK_ANSI_Z
+        '0' => 0x1D,       // kVK_ANSI_0
+        '1' => 0x12,       // kVK_ANSI_1
+        '2' => 0x13,       // kVK_ANSI_2
+        '3' => 0x14,       // kVK_ANSI_3
+        '4' => 0x15,       // kVK_ANSI_4
+        '5' => 0x17,       // kVK_ANSI_5
+        '6' => 0x16,       // kVK_ANSI_6
+        '7' => 0x1A,       // kVK_ANSI_7
+        '8' => 0x1C,       // kVK_ANSI_8
+        '9' => 0x19,       // kVK_ANSI_9
+        ' ' => 0x31,       // kVK_Space
+        '\t' => 0x30,      // kVK_Tab
+        '\n' => 0x24,      // kVK_Return
+        '-' => 0x1B,       // kVK_ANSI_Minus
+        '=' => 0x18,       // kVK_ANSI_Equal
+        '@' => 0x32,       // kVK_ANSI_Grave (with shift)
+        '.' => 0x2F,       // kVK_ANSI_Period
+        ',' => 0x2B,       // kVK_ANSI_Comma
+        '/' => 0x2C,       // kVK_ANSI_Slash
+        ':' => 0x29,       // kVK_ANSI_Semicolon (with shift)
         _ => {
             // For special characters, we'd need a more comprehensive mapping
             // or use Unicode input events via CGEventCreateUnicodeStringEvent

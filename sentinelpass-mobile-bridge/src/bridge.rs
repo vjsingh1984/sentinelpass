@@ -2,9 +2,9 @@
 
 use crate::error::{BridgeError, BridgeResult, ErrorCode};
 use sentinelpass_core::vault::{Entry, EntrySummary, VaultManager};
+use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{Arc, Mutex, OnceLock};
-use std::collections::HashMap;
 
 /// Global vault handle storage
 ///
@@ -66,7 +66,7 @@ pub type VaultHandle = u64;
 pub fn bridge_vault_init(vault_path: &str, master_password: &str) -> BridgeResult<VaultHandle> {
     if vault_path.is_empty() || master_password.is_empty() {
         return Err(BridgeError::InvalidParam(
-            "vault_path and master_password cannot be empty".into()
+            "vault_path and master_password cannot be empty".into(),
         ));
     }
 
@@ -78,9 +78,9 @@ pub fn bridge_vault_init(vault_path: &str, master_password: &str) -> BridgeResul
         VaultManager::create(vault_path, master_password.as_bytes())?
     };
 
-    let mut registry = get_registry().lock().map_err(|_| {
-        BridgeError::Unknown("Failed to acquire vault registry lock".into())
-    })?;
+    let mut registry = get_registry()
+        .lock()
+        .map_err(|_| BridgeError::Unknown("Failed to acquire vault registry lock".into()))?;
 
     let handle = registry.register_vault(vault);
     Ok(handle)
@@ -88,12 +88,13 @@ pub fn bridge_vault_init(vault_path: &str, master_password: &str) -> BridgeResul
 
 /// Destroy a vault and free resources
 pub fn bridge_vault_destroy(handle: VaultHandle) -> BridgeResult<()> {
-    let mut registry = get_registry().lock().map_err(|_| {
-        BridgeError::Unknown("Failed to acquire vault registry lock".into())
-    })?;
+    let mut registry = get_registry()
+        .lock()
+        .map_err(|_| BridgeError::Unknown("Failed to acquire vault registry lock".into()))?;
 
     registry.remove_biometric_key(handle);
-    registry.remove_vault(handle)
+    registry
+        .remove_vault(handle)
         .ok_or_else(|| BridgeError::InvalidParam(format!("Invalid vault handle: {}", handle)))?;
 
     Ok(())
@@ -101,32 +102,34 @@ pub fn bridge_vault_destroy(handle: VaultHandle) -> BridgeResult<()> {
 
 /// Check if vault is unlocked
 pub fn bridge_vault_is_unlocked(handle: VaultHandle) -> BridgeResult<bool> {
-    let registry = get_registry().lock().map_err(|_| {
-        BridgeError::Unknown("Failed to acquire vault registry lock".into())
-    })?;
+    let registry = get_registry()
+        .lock()
+        .map_err(|_| BridgeError::Unknown("Failed to acquire vault registry lock".into()))?;
 
-    let vault_arc = registry.get_vault(handle)
+    let vault_arc = registry
+        .get_vault(handle)
         .ok_or_else(|| BridgeError::InvalidParam(format!("Invalid vault handle: {}", handle)))?;
 
-    let vault = vault_arc.lock().map_err(|_| {
-        BridgeError::Unknown("Failed to acquire vault lock".into())
-    })?;
+    let vault = vault_arc
+        .lock()
+        .map_err(|_| BridgeError::Unknown("Failed to acquire vault lock".into()))?;
 
     Ok(vault.is_unlocked())
 }
 
 /// Lock the vault
 pub fn bridge_vault_lock(handle: VaultHandle) -> BridgeResult<()> {
-    let registry = get_registry().lock().map_err(|_| {
-        BridgeError::Unknown("Failed to acquire vault registry lock".into())
-    })?;
+    let registry = get_registry()
+        .lock()
+        .map_err(|_| BridgeError::Unknown("Failed to acquire vault registry lock".into()))?;
 
-    let vault_arc = registry.get_vault(handle)
+    let vault_arc = registry
+        .get_vault(handle)
         .ok_or_else(|| BridgeError::InvalidParam(format!("Invalid vault handle: {}", handle)))?;
 
-    let mut vault = vault_arc.lock().map_err(|_| {
-        BridgeError::Unknown("Failed to acquire vault lock".into())
-    })?;
+    let mut vault = vault_arc
+        .lock()
+        .map_err(|_| BridgeError::Unknown("Failed to acquire vault lock".into()))?;
 
     vault.lock();
     Ok(())
@@ -141,24 +144,33 @@ pub fn bridge_entry_add(
     url: &str,
     notes: &str,
 ) -> BridgeResult<String> {
-    let registry = get_registry().lock().map_err(|_| {
-        BridgeError::Unknown("Failed to acquire vault registry lock".into())
-    })?;
+    let registry = get_registry()
+        .lock()
+        .map_err(|_| BridgeError::Unknown("Failed to acquire vault registry lock".into()))?;
 
-    let vault_arc = registry.get_vault(handle)
+    let vault_arc = registry
+        .get_vault(handle)
         .ok_or_else(|| BridgeError::InvalidParam(format!("Invalid vault handle: {}", handle)))?;
 
-    let vault = vault_arc.lock().map_err(|_| {
-        BridgeError::Unknown("Failed to acquire vault lock".into())
-    })?;
+    let vault = vault_arc
+        .lock()
+        .map_err(|_| BridgeError::Unknown("Failed to acquire vault lock".into()))?;
 
     let entry = Entry {
         entry_id: None,
         title: title.to_string(),
         username: username.to_string(),
         password: password.to_string(),
-        url: if url.is_empty() { None } else { Some(url.to_string()) },
-        notes: if notes.is_empty() { None } else { Some(notes.to_string()) },
+        url: if url.is_empty() {
+            None
+        } else {
+            Some(url.to_string())
+        },
+        notes: if notes.is_empty() {
+            None
+        } else {
+            Some(notes.to_string())
+        },
         created_at: chrono::Utc::now(),
         modified_at: chrono::Utc::now(),
         favorite: false,
@@ -178,27 +190,47 @@ pub fn bridge_entry_update(
     url: Option<&str>,
     notes: Option<&str>,
 ) -> BridgeResult<()> {
-    let registry = get_registry().lock().map_err(|_| {
-        BridgeError::Unknown("Failed to acquire vault registry lock".into())
-    })?;
+    let registry = get_registry()
+        .lock()
+        .map_err(|_| BridgeError::Unknown("Failed to acquire vault registry lock".into()))?;
 
-    let vault_arc = registry.get_vault(handle)
+    let vault_arc = registry
+        .get_vault(handle)
         .ok_or_else(|| BridgeError::InvalidParam(format!("Invalid vault handle: {}", handle)))?;
 
-    let vault = vault_arc.lock().map_err(|_| {
-        BridgeError::Unknown("Failed to acquire vault lock".into())
-    })?;
+    let vault = vault_arc
+        .lock()
+        .map_err(|_| BridgeError::Unknown("Failed to acquire vault lock".into()))?;
 
-    let id_i64: i64 = entry_id.parse()
+    let id_i64: i64 = entry_id
+        .parse()
         .map_err(|_| BridgeError::InvalidParam(format!("Invalid entry ID: {}", entry_id)))?;
 
     let mut existing = vault.get_entry(id_i64)?;
 
-    if let Some(t) = title { existing.title = t.to_string(); }
-    if let Some(u) = username { existing.username = u.to_string(); }
-    if let Some(p) = password { existing.password = p.to_string(); }
-    if let Some(u) = url { existing.url = if u.is_empty() { None } else { Some(u.to_string()) }; }
-    if let Some(n) = notes { existing.notes = if n.is_empty() { None } else { Some(n.to_string()) }; }
+    if let Some(t) = title {
+        existing.title = t.to_string();
+    }
+    if let Some(u) = username {
+        existing.username = u.to_string();
+    }
+    if let Some(p) = password {
+        existing.password = p.to_string();
+    }
+    if let Some(u) = url {
+        existing.url = if u.is_empty() {
+            None
+        } else {
+            Some(u.to_string())
+        };
+    }
+    if let Some(n) = notes {
+        existing.notes = if n.is_empty() {
+            None
+        } else {
+            Some(n.to_string())
+        };
+    }
     existing.modified_at = chrono::Utc::now();
 
     vault.update_entry(id_i64, &existing)?;
@@ -207,18 +239,20 @@ pub fn bridge_entry_update(
 
 /// Delete an entry
 pub fn bridge_entry_delete(handle: VaultHandle, entry_id: &str) -> BridgeResult<()> {
-    let registry = get_registry().lock().map_err(|_| {
-        BridgeError::Unknown("Failed to acquire vault registry lock".into())
-    })?;
+    let registry = get_registry()
+        .lock()
+        .map_err(|_| BridgeError::Unknown("Failed to acquire vault registry lock".into()))?;
 
-    let vault_arc = registry.get_vault(handle)
+    let vault_arc = registry
+        .get_vault(handle)
         .ok_or_else(|| BridgeError::InvalidParam(format!("Invalid vault handle: {}", handle)))?;
 
-    let vault = vault_arc.lock().map_err(|_| {
-        BridgeError::Unknown("Failed to acquire vault lock".into())
-    })?;
+    let vault = vault_arc
+        .lock()
+        .map_err(|_| BridgeError::Unknown("Failed to acquire vault lock".into()))?;
 
-    let id_i64: i64 = entry_id.parse()
+    let id_i64: i64 = entry_id
+        .parse()
         .map_err(|_| BridgeError::InvalidParam(format!("Invalid entry ID: {}", entry_id)))?;
 
     vault.delete_entry(id_i64)?;
@@ -227,18 +261,20 @@ pub fn bridge_entry_delete(handle: VaultHandle, entry_id: &str) -> BridgeResult<
 
 /// Get a specific entry by ID
 pub fn bridge_entry_get(handle: VaultHandle, entry_id: &str) -> BridgeResult<Entry> {
-    let registry = get_registry().lock().map_err(|_| {
-        BridgeError::Unknown("Failed to acquire vault registry lock".into())
-    })?;
+    let registry = get_registry()
+        .lock()
+        .map_err(|_| BridgeError::Unknown("Failed to acquire vault registry lock".into()))?;
 
-    let vault_arc = registry.get_vault(handle)
+    let vault_arc = registry
+        .get_vault(handle)
         .ok_or_else(|| BridgeError::InvalidParam(format!("Invalid vault handle: {}", handle)))?;
 
-    let vault = vault_arc.lock().map_err(|_| {
-        BridgeError::Unknown("Failed to acquire vault lock".into())
-    })?;
+    let vault = vault_arc
+        .lock()
+        .map_err(|_| BridgeError::Unknown("Failed to acquire vault lock".into()))?;
 
-    let id_i64: i64 = entry_id.parse()
+    let id_i64: i64 = entry_id
+        .parse()
         .map_err(|_| BridgeError::InvalidParam(format!("Invalid entry ID: {}", entry_id)))?;
 
     Ok(vault.get_entry(id_i64)?)
@@ -246,32 +282,34 @@ pub fn bridge_entry_get(handle: VaultHandle, entry_id: &str) -> BridgeResult<Ent
 
 /// List all entries
 pub fn bridge_entry_list(handle: VaultHandle) -> BridgeResult<Vec<EntrySummary>> {
-    let registry = get_registry().lock().map_err(|_| {
-        BridgeError::Unknown("Failed to acquire vault registry lock".into())
-    })?;
+    let registry = get_registry()
+        .lock()
+        .map_err(|_| BridgeError::Unknown("Failed to acquire vault registry lock".into()))?;
 
-    let vault_arc = registry.get_vault(handle)
+    let vault_arc = registry
+        .get_vault(handle)
         .ok_or_else(|| BridgeError::InvalidParam(format!("Invalid vault handle: {}", handle)))?;
 
-    let vault = vault_arc.lock().map_err(|_| {
-        BridgeError::Unknown("Failed to acquire vault lock".into())
-    })?;
+    let vault = vault_arc
+        .lock()
+        .map_err(|_| BridgeError::Unknown("Failed to acquire vault lock".into()))?;
 
     Ok(vault.list_entries()?)
 }
 
 /// Search entries by query
 pub fn bridge_entry_search(handle: VaultHandle, query: &str) -> BridgeResult<Vec<EntrySummary>> {
-    let registry = get_registry().lock().map_err(|_| {
-        BridgeError::Unknown("Failed to acquire vault registry lock".into())
-    })?;
+    let registry = get_registry()
+        .lock()
+        .map_err(|_| BridgeError::Unknown("Failed to acquire vault registry lock".into()))?;
 
-    let vault_arc = registry.get_vault(handle)
+    let vault_arc = registry
+        .get_vault(handle)
         .ok_or_else(|| BridgeError::InvalidParam(format!("Invalid vault handle: {}", handle)))?;
 
-    let vault = vault_arc.lock().map_err(|_| {
-        BridgeError::Unknown("Failed to acquire vault lock".into())
-    })?;
+    let vault = vault_arc
+        .lock()
+        .map_err(|_| BridgeError::Unknown("Failed to acquire vault lock".into()))?;
 
     let all_entries = vault.list_entries()?;
     let query_lower = query.to_lowercase();
@@ -288,19 +326,24 @@ pub fn bridge_entry_search(handle: VaultHandle, query: &str) -> BridgeResult<Vec
 }
 
 /// Generate TOTP code for an entry
-pub fn bridge_totp_generate_code(handle: VaultHandle, entry_id: &str) -> BridgeResult<sentinelpass_core::TotpCode> {
-    let registry = get_registry().lock().map_err(|_| {
-        BridgeError::Unknown("Failed to acquire vault registry lock".into())
-    })?;
+pub fn bridge_totp_generate_code(
+    handle: VaultHandle,
+    entry_id: &str,
+) -> BridgeResult<sentinelpass_core::TotpCode> {
+    let registry = get_registry()
+        .lock()
+        .map_err(|_| BridgeError::Unknown("Failed to acquire vault registry lock".into()))?;
 
-    let vault_arc = registry.get_vault(handle)
+    let vault_arc = registry
+        .get_vault(handle)
         .ok_or_else(|| BridgeError::InvalidParam(format!("Invalid vault handle: {}", handle)))?;
 
-    let vault = vault_arc.lock().map_err(|_| {
-        BridgeError::Unknown("Failed to acquire vault lock".into())
-    })?;
+    let vault = vault_arc
+        .lock()
+        .map_err(|_| BridgeError::Unknown("Failed to acquire vault lock".into()))?;
 
-    let id_i64: i64 = entry_id.parse()
+    let id_i64: i64 = entry_id
+        .parse()
         .map_err(|_| BridgeError::InvalidParam(format!("Invalid entry ID: {}", entry_id)))?;
 
     Ok(vault.generate_totp_code(id_i64)?)
@@ -324,7 +367,9 @@ pub fn bridge_password_generate(length: usize, include_symbols: bool) -> BridgeR
 }
 
 /// Check password strength
-pub fn bridge_password_check_strength(password: &str) -> BridgeResult<sentinelpass_core::crypto::strength::PasswordAnalysis> {
+pub fn bridge_password_check_strength(
+    password: &str,
+) -> BridgeResult<sentinelpass_core::crypto::strength::PasswordAnalysis> {
     use sentinelpass_core::crypto::strength;
 
     let analysis = strength::analyze_password(password)?;
@@ -333,11 +378,12 @@ pub fn bridge_password_check_strength(password: &str) -> BridgeResult<sentinelpa
 
 /// Set biometric key data for a vault
 pub fn bridge_biometric_set_key(handle: VaultHandle, wrapped_key_data: &[u8]) -> BridgeResult<()> {
-    let mut registry = get_registry().lock().map_err(|_| {
-        BridgeError::Unknown("Failed to acquire vault registry lock".into())
-    })?;
+    let mut registry = get_registry()
+        .lock()
+        .map_err(|_| BridgeError::Unknown("Failed to acquire vault registry lock".into()))?;
 
-    registry.get_vault(handle)
+    registry
+        .get_vault(handle)
         .ok_or_else(|| BridgeError::InvalidParam(format!("Invalid vault handle: {}", handle)))?;
 
     registry.set_biometric_key(handle, wrapped_key_data.to_vec());
@@ -346,20 +392,21 @@ pub fn bridge_biometric_set_key(handle: VaultHandle, wrapped_key_data: &[u8]) ->
 
 /// Check if biometric key is set
 pub fn bridge_biometric_has_key(handle: VaultHandle) -> BridgeResult<bool> {
-    let registry = get_registry().lock().map_err(|_| {
-        BridgeError::Unknown("Failed to acquire vault registry lock".into())
-    })?;
+    let registry = get_registry()
+        .lock()
+        .map_err(|_| BridgeError::Unknown("Failed to acquire vault registry lock".into()))?;
 
     Ok(registry.get_biometric_key(handle).is_some())
 }
 
 /// Remove biometric key
 pub fn bridge_biometric_remove_key(handle: VaultHandle) -> BridgeResult<()> {
-    let mut registry = get_registry().lock().map_err(|_| {
-        BridgeError::Unknown("Failed to acquire vault registry lock".into())
-    })?;
+    let mut registry = get_registry()
+        .lock()
+        .map_err(|_| BridgeError::Unknown("Failed to acquire vault registry lock".into()))?;
 
-    registry.remove_biometric_key(handle)
+    registry
+        .remove_biometric_key(handle)
         .ok_or_else(|| BridgeError::Biometric("No biometric key set".into()))?;
 
     Ok(())
@@ -370,7 +417,9 @@ pub fn bridge_biometric_unlock(_handle: VaultHandle) -> BridgeResult<()> {
     // Platform-specific implementation required
     // This would decrypt the wrapped master key using platform keystore
     // and then unlock the vault
-    Err(BridgeError::Biometric("Platform-specific biometric unlock not yet implemented".into()))
+    Err(BridgeError::Biometric(
+        "Platform-specific biometric unlock not yet implemented".into(),
+    ))
 }
 
 // ============================================================================
@@ -397,16 +446,17 @@ pub struct SyncResult {
 
 /// Get sync status for a vault
 pub fn bridge_sync_get_status(handle: VaultHandle) -> BridgeResult<SyncStatus> {
-    let registry = get_registry().lock().map_err(|_| {
-        BridgeError::Unknown("Failed to acquire vault registry lock".into())
-    })?;
+    let registry = get_registry()
+        .lock()
+        .map_err(|_| BridgeError::Unknown("Failed to acquire vault registry lock".into()))?;
 
-    let vault_arc = registry.get_vault(handle)
+    let vault_arc = registry
+        .get_vault(handle)
         .ok_or_else(|| BridgeError::InvalidParam(format!("Invalid vault handle: {}", handle)))?;
 
-    let vault = vault_arc.lock().map_err(|_| {
-        BridgeError::Unknown("Failed to acquire vault lock".into())
-    })?;
+    let vault = vault_arc
+        .lock()
+        .map_err(|_| BridgeError::Unknown("Failed to acquire vault lock".into()))?;
 
     // Note: Mobile sync uses iCloud/Google Drive, not the relay server
     // This is a placeholder that returns basic status
@@ -420,16 +470,17 @@ pub fn bridge_sync_get_status(handle: VaultHandle) -> BridgeResult<SyncStatus> {
 
 /// Collect entries pending sync (for upload to CloudKit/Drive)
 pub fn bridge_sync_collect_pending(handle: VaultHandle) -> BridgeResult<Vec<u8>> {
-    let registry = get_registry().lock().map_err(|_| {
-        BridgeError::Unknown("Failed to acquire vault registry lock".into())
-    })?;
+    let registry = get_registry()
+        .lock()
+        .map_err(|_| BridgeError::Unknown("Failed to acquire vault registry lock".into()))?;
 
-    let vault_arc = registry.get_vault(handle)
+    let vault_arc = registry
+        .get_vault(handle)
         .ok_or_else(|| BridgeError::InvalidParam(format!("Invalid vault handle: {}", handle)))?;
 
-    let vault = vault_arc.lock().map_err(|_| {
-        BridgeError::Unknown("Failed to acquire vault lock".into())
-    })?;
+    let vault = vault_arc
+        .lock()
+        .map_err(|_| BridgeError::Unknown("Failed to acquire vault lock".into()))?;
 
     if !vault.is_unlocked() {
         return Err(BridgeError::Vault("Vault is locked".to_string()));
@@ -444,7 +495,10 @@ pub fn bridge_sync_collect_pending(handle: VaultHandle) -> BridgeResult<Vec<u8>>
         // Create a sync entry blob from the vault entry
         // Note: This is a simplified version - real implementation would use
         // the sync module's change tracking and proper encryption
-        blobs.push(format!("{{\"id\":{},\"title\":\"{}\"}}", entry.entry_id, entry.title));
+        blobs.push(format!(
+            "{{\"id\":{},\"title\":\"{}\"}}",
+            entry.entry_id, entry.title
+        ));
     }
 
     // Return as JSON bytes
@@ -455,16 +509,17 @@ pub fn bridge_sync_collect_pending(handle: VaultHandle) -> BridgeResult<Vec<u8>>
 
 /// Apply downloaded entries from CloudKit/Drive
 pub fn bridge_sync_apply_entries(handle: VaultHandle, entries_json: &[u8]) -> BridgeResult<u64> {
-    let registry = get_registry().lock().map_err(|_| {
-        BridgeError::Unknown("Failed to acquire vault registry lock".into())
-    })?;
+    let registry = get_registry()
+        .lock()
+        .map_err(|_| BridgeError::Unknown("Failed to acquire vault registry lock".into()))?;
 
-    let vault_arc = registry.get_vault(handle)
+    let vault_arc = registry
+        .get_vault(handle)
         .ok_or_else(|| BridgeError::InvalidParam(format!("Invalid vault handle: {}", handle)))?;
 
-    let vault = vault_arc.lock().map_err(|_| {
-        BridgeError::Unknown("Failed to acquire vault lock".into())
-    })?;
+    let vault = vault_arc
+        .lock()
+        .map_err(|_| BridgeError::Unknown("Failed to acquire vault lock".into()))?;
 
     if !vault.is_unlocked() {
         return Err(BridgeError::Vault("Vault is locked".to_string()));
@@ -487,18 +542,19 @@ pub fn bridge_sync_apply_entries(handle: VaultHandle, entries_json: &[u8]) -> Br
 
 /// Prepare entries for CloudKit upload (convert to CloudKit records JSON)
 pub fn bridge_sync_prepare_cloudkit(handle: VaultHandle, device_id: &str) -> BridgeResult<Vec<u8>> {
-    use crate::icloud::{ICloudSyncManager, CloudKitRecord};
+    use crate::icloud::{CloudKitRecord, ICloudSyncManager};
 
-    let registry = get_registry().lock().map_err(|_| {
-        BridgeError::Unknown("Failed to acquire vault registry lock".into())
-    })?;
+    let registry = get_registry()
+        .lock()
+        .map_err(|_| BridgeError::Unknown("Failed to acquire vault registry lock".into()))?;
 
-    let vault_arc = registry.get_vault(handle)
+    let vault_arc = registry
+        .get_vault(handle)
         .ok_or_else(|| BridgeError::InvalidParam(format!("Invalid vault handle: {}", handle)))?;
 
-    let vault = vault_arc.lock().map_err(|_| {
-        BridgeError::Unknown("Failed to acquire vault lock".into())
-    })?;
+    let vault = vault_arc
+        .lock()
+        .map_err(|_| BridgeError::Unknown("Failed to acquire vault lock".into()))?;
 
     if !vault.is_unlocked() {
         return Err(BridgeError::Vault("Vault is locked".to_string()));
@@ -516,10 +572,15 @@ pub fn bridge_sync_prepare_cloudkit(handle: VaultHandle, device_id: &str) -> Bri
     // Convert to CloudKit records
     // Note: This is a placeholder - real implementation would convert
     // actual sync blobs, not just entry summaries
-    let records: Vec<String> = entries.iter().map(|e| {
-        format!("{{\"recordType\":\"SyncEntry\",\"recordID\":\"{}\",\"title\":\"{}\"}}",
-                e.entry_id, e.title)
-    }).collect();
+    let records: Vec<String> = entries
+        .iter()
+        .map(|e| {
+            format!(
+                "{{\"recordType\":\"SyncEntry\",\"recordID\":\"{}\",\"title\":\"{}\"}}",
+                e.entry_id, e.title
+            )
+        })
+        .collect();
 
     serde_json::to_string(&records)
         .map(|s| s.into_bytes())
@@ -528,18 +589,19 @@ pub fn bridge_sync_prepare_cloudkit(handle: VaultHandle, device_id: &str) -> Bri
 
 /// Prepare entries for Google Drive upload (convert to Drive files JSON)
 pub fn bridge_sync_prepare_drive(handle: VaultHandle, device_id: &str) -> BridgeResult<Vec<u8>> {
-    use crate::drive::{DriveSyncManager, DriveFile};
+    use crate::drive::{DriveFile, DriveSyncManager};
 
-    let registry = get_registry().lock().map_err(|_| {
-        BridgeError::Unknown("Failed to acquire vault registry lock".into())
-    })?;
+    let registry = get_registry()
+        .lock()
+        .map_err(|_| BridgeError::Unknown("Failed to acquire vault registry lock".into()))?;
 
-    let vault_arc = registry.get_vault(handle)
+    let vault_arc = registry
+        .get_vault(handle)
         .ok_or_else(|| BridgeError::InvalidParam(format!("Invalid vault handle: {}", handle)))?;
 
-    let vault = vault_arc.lock().map_err(|_| {
-        BridgeError::Unknown("Failed to acquire vault lock".into())
-    })?;
+    let vault = vault_arc
+        .lock()
+        .map_err(|_| BridgeError::Unknown("Failed to acquire vault lock".into()))?;
 
     if !vault.is_unlocked() {
         return Err(BridgeError::Vault("Vault is locked".to_string()));
@@ -555,10 +617,15 @@ pub fn bridge_sync_prepare_drive(handle: VaultHandle, device_id: &str) -> Bridge
     let entries = vault.list_entries()?;
 
     // Convert to Drive files
-    let files: Vec<String> = entries.iter().map(|e| {
-        format!("{{\"id\":\"{}\",\"name\":\"{}.json\",\"title\":\"{}\"}}",
-                e.entry_id, e.entry_id, e.title)
-    }).collect();
+    let files: Vec<String> = entries
+        .iter()
+        .map(|e| {
+            format!(
+                "{{\"id\":\"{}\",\"name\":\"{}.json\",\"title\":\"{}\"}}",
+                e.entry_id, e.entry_id, e.title
+            )
+        })
+        .collect();
 
     serde_json::to_string(&files)
         .map(|s| s.into_bytes())

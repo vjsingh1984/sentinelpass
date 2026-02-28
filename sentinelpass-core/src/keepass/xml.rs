@@ -131,14 +131,14 @@ pub fn parse_keepass_xml(input: &Path) -> Result<Vec<KeePassEntry>> {
         }
         _ => {
             return Err(PasswordManagerError::InvalidInput(
-                "Unknown KeePass XML version".to_string()
+                "Unknown KeePass XML version".to_string(),
             ));
         }
     }
 
     if entries.is_empty() {
         return Err(PasswordManagerError::InvalidInput(
-            "No entries found in KeePass XML file".to_string()
+            "No entries found in KeePass XML file".to_string(),
         ));
     }
 
@@ -211,8 +211,16 @@ fn parse_keepass2_from_string(xml: &str) -> Result<Vec<KeePassEntry>> {
                     title: current_title.clone(),
                     username: current_username.clone(),
                     password: current_password.clone(),
-                    url: if current_url.is_empty() { None } else { Some(current_url.clone()) },
-                    notes: if current_notes.is_empty() { None } else { Some(current_notes.clone()) },
+                    url: if current_url.is_empty() {
+                        None
+                    } else {
+                        Some(current_url.clone())
+                    },
+                    notes: if current_notes.is_empty() {
+                        None
+                    } else {
+                        Some(current_notes.clone())
+                    },
                     tags: if tags.is_empty() { None } else { Some(tags) },
                     created_at: current_created,
                     modified_at: current_modified,
@@ -311,19 +319,28 @@ pub fn generate_keepass_xml(entries: &[KeePassEntry]) -> Result<String> {
         // Title
         xml.push_str("        <String>\n");
         xml.push_str("          <Key>Title</Key>\n");
-        xml.push_str(&format!("          <Value>{}</Value>\n", escape_xml(&entry.title)));
+        xml.push_str(&format!(
+            "          <Value>{}</Value>\n",
+            escape_xml(&entry.title)
+        ));
         xml.push_str("        </String>\n");
 
         // Username
         xml.push_str("        <String>\n");
         xml.push_str("          <Key>UserName</Key>\n");
-        xml.push_str(&format!("          <Value>{}</Value>\n", escape_xml(&entry.username)));
+        xml.push_str(&format!(
+            "          <Value>{}</Value>\n",
+            escape_xml(&entry.username)
+        ));
         xml.push_str("        </String>\n");
 
         // Password
         xml.push_str("        <String>\n");
         xml.push_str("          <Key>Password</Key>\n");
-        xml.push_str(&format!("          <Value>{}</Value>\n", escape_xml(&entry.password)));
+        xml.push_str(&format!(
+            "          <Value>{}</Value>\n",
+            escape_xml(&entry.password)
+        ));
         xml.push_str("        </String>\n");
 
         // URL
@@ -345,10 +362,16 @@ pub fn generate_keepass_xml(entries: &[KeePassEntry]) -> Result<String> {
         // Times
         xml.push_str("        <Times>\n");
         if let Some(ref created) = entry.created_at {
-            xml.push_str(&format!("          <CreationTime>{}</CreationTime>\n", created.to_rfc3339()));
+            xml.push_str(&format!(
+                "          <CreationTime>{}</CreationTime>\n",
+                created.to_rfc3339()
+            ));
         }
         if let Some(ref modified) = entry.modified_at {
-            xml.push_str(&format!("          <LastModTime>{}</LastModTime>\n", modified.to_rfc3339()));
+            xml.push_str(&format!(
+                "          <LastModTime>{}</LastModTime>\n",
+                modified.to_rfc3339()
+            ));
         }
         xml.push_str("        </Times>\n");
 
@@ -387,18 +410,16 @@ mod tests {
 
     #[test]
     fn test_generate_keepass_xml() {
-        let entries = vec![
-            KeePassEntry {
-                title: "Test Entry".to_string(),
-                username: "user@example.com".to_string(),
-                password: "password123".to_string(),
-                url: Some("https://example.com".to_string()),
-                notes: Some("Test notes".to_string()),
-                tags: Some(vec!["work".to_string()]),
-                created_at: Some(Utc::now()),
-                modified_at: Some(Utc::now()),
-            },
-        ];
+        let entries = vec![KeePassEntry {
+            title: "Test Entry".to_string(),
+            username: "user@example.com".to_string(),
+            password: "password123".to_string(),
+            url: Some("https://example.com".to_string()),
+            notes: Some("Test notes".to_string()),
+            tags: Some(vec!["work".to_string()]),
+            created_at: Some(Utc::now()),
+            modified_at: Some(Utc::now()),
+        }];
 
         let xml = generate_keepass_xml(&entries).unwrap();
         assert!(xml.contains("<Key>Title</Key>"));

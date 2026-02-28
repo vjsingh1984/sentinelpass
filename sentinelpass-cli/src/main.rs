@@ -300,6 +300,17 @@ enum Commands {
         password: Option<String>,
     },
 
+    /// Show vault password health report
+    Health {
+        /// Show detailed report for all entries
+        #[arg(long)]
+        detailed: bool,
+
+        /// Show only weak/reused passwords
+        #[arg(long)]
+        only_issues: bool,
+    },
+
     /// Export vault to file
     Export {
         /// Output file path
@@ -1271,6 +1282,126 @@ fn main() -> Result<()> {
                 }
                 println!();
             }
+        }
+
+        Commands::Health { detailed, only_issues } => {
+            use sentinelpass_core::crypto::health::HealthScore;
+
+            let vault_path = get_vault_path(&cli, false);
+
+            if !vault_path.exists() {
+                anyhow::bail!("No vault found. Use 'sentinelpass init' to create a new vault");
+            }
+
+            let master_password = prompt_password("Enter master password: ")?;
+            let master_password_bytes = master_password.as_bytes();
+
+            let vault = open_vault_with_password(&vault_path, master_password_bytes)?;
+
+            // Get health summary
+            let summary = vault.get_vault_health_summary()?;
+
+            println!();
+            println!("Vault Password Health Report");
+            println!("===========================");
+            println!();
+
+            // Print overall score with color
+            let score_color = if summary.overall_score >= 80 {
+                "\x1b[32m" // green
+            } else if summary.overall_score >= 60 {
+                "\x1b[33m" // yellow
+            } else if summary.overall_score >= 40 {
+                "\x1b[31m" // red
+            } else {
+                "\x1b[35m" // magenta (critical)
+            };
+            let reset = "\x1b[0m";
+            println!("Overall Health Score: {}{}{}{}", score_color, summary.overall_score, reset, "/100");
+            println!();
+
+            println!("Summary:");
+            println!("  Total passwords:     {}", summary.total_passwords);
+            println!("  Unique passwords:    {}", summary.unique_count);
+            println!("  Reused passwords:    {}", summary.reused_count);
+            println!("  Weak passwords:      {}", summary.weak_count);
+            println!("  Compromised:         {}", summary.compromised_count);
+            println!();
+
+            // Print strength distribution
+            println!("Strength Distribution:");
+            println!("  Excellent:  {}", summary.strength_distribution.excellent);
+            println!("  Strong:     {}", summary.strength_distribution.strong);
+            println!("  Good:       {}", summary.strength_distribution.good);
+            println!("  Fair:       {}", summary.strength_distribution.fair);
+            println!("  Weak:       {}", summary.strength_distribution.weak);
+            println!("  Critical:   {}", summary.strength_distribution.critical);
+            println!();
+
+            // Print weak passwords if any
+            if !summary.weak_passwords.is_empty() {
+                println!("⚠ Weak Passwords:");
+                for weak in &summary.weak_passwords {
+                    println!("  • {} ({})", weak.title, weak.username);
+                    println!("    Reason: {}", weak.reason);
+                }
+                println!();
+            }
+
+            // Detailed report if requested
+            if detailed {
+                let health_report = vault.get_password_health_report()?;
+                println!("Detailed Password Report:");
+                println!("========================");
+                println!();
+
+                for entry in &health_report {
+                    if only_issues && entry.score >= HealthScore::Good {
+                        continue;
+                    }
+
+                    let score_color = match entry.score {
+                        HealthScore::Critical => "\x1b[35m",    // magenta
+                        HealthScore::Weak => "\x1b[31m",       // red
+                        HealthScore::Fair => "\x1b[33m",       // yellow
+                        HealthScore::Good => "\x1b[32m",       // green
+                        HealthScore::Strong => "\x1b[36m",     // cyan
+                        HealthScore::Excellent => "\x1b[34m",  // blue
+                    };
+                    let reset = "\x1b[0m";
+
+                    println!("{}{}{}", score_color, entry.score.label(), reset);
+                    println!("  Title:    {}", entry.title);
+                    println!("  Username: {}", entry.username);
+                    println!("  Score:    {}/5", entry.score.score());
+                    println!("  Strength: {}/5", entry.strength.score);
+                    println!("  Entropy:  {:.1} bits", entry.strength.entropy_bits);
+
+                    if entry.is_compromised {
+                        println!("  ⚠ COMPROMISED (found in data breaches)");
+                    }
+                    if entry.is_reused {
+                        println!("  ⚠ REUSED across {} sites", entry.reuse_count);
+                    }
+                    println!();
+                }
+            }
+
+            // Print recommendations
+            if summary.compromised_count > 0 {
+                println!("Recommendations:");
+                println!("  • {} compromised password(s) should be changed immediately", summary.compromised_count);
+            }
+            if summary.weak_count > 0 {
+                println!("  • {} weak password(s) should be strengthened", summary.weak_count);
+            }
+            if summary.reused_count > 0 {
+                println!("  • {} reused password(s) - use unique passwords for each site", summary.reused_count);
+            }
+            if summary.overall_score >= 80 {
+                println!("  ✓ Your vault is in good shape!");
+            }
+            println!();
         }
 
         Commands::Export {

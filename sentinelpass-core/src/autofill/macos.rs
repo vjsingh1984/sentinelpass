@@ -278,13 +278,17 @@ unsafe fn simulate_typing(text: &str) -> Result<()> {
 unsafe fn simulate_key_event(keycode: u16, key_down: bool) -> Result<()> {
     // Low-level FFI declarations for CGEvent
     #[repr(C)]
+    #[allow(dead_code)]
+    #[allow(non_camel_case_types)] // Suppress HID warning
     enum CGEventTapLocation {
-        HID = 0,
+        #[allow(non_upper_case_globals)]
+        hid = 0,
         Session = 1,
         AnnotatedSession = 2,
     }
 
     #[repr(C)]
+    #[allow(dead_code)]
     enum CGEventSourceStateID {
         Private = -2,
         CombinedSessionState = -1,

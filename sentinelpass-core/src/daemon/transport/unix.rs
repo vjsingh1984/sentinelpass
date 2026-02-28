@@ -2,7 +2,6 @@
 
 use super::{TransportConfig, TransportError, TransportResult, MAX_MESSAGE_SIZE};
 use std::path::PathBuf;
-use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 /// Unix domain socket transport
@@ -25,10 +24,10 @@ impl UnixSocketTransport {
         // Ensure the parent directory exists
         if let Some(parent) = socket_path.parent() {
             std::fs::create_dir_all(parent).map_err(|e| {
-                TransportError::Io(std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    format!("Failed to create socket directory: {}", e),
-                ))
+                TransportError::Io(std::io::Error::other(format!(
+                    "Failed to create socket directory: {}",
+                    e
+                )))
             })?;
         }
 
@@ -59,10 +58,10 @@ impl UnixSocketTransport {
             use std::os::unix::fs::PermissionsExt;
             std::fs::set_permissions(&self.socket_path, std::fs::Permissions::from_mode(0o600))
                 .map_err(|e| {
-                    TransportError::Io(std::io::Error::new(
-                        std::io::ErrorKind::Other,
-                        format!("Failed to set socket permissions: {}", e),
-                    ))
+                    TransportError::Io(std::io::Error::other(format!(
+                        "Failed to set socket permissions: {}",
+                        e
+                    )))
                 })?;
         }
 
@@ -80,7 +79,7 @@ impl UnixSocketTransport {
         let stream = listener
             .accept()
             .await
-            .map_err(|e| TransportError::Io(e))?
+            .map_err(TransportError::Io)?
             .0;
 
         // Note: We rely on file system permissions (0o600) for security instead of peer credential check
@@ -175,6 +174,7 @@ impl UnixSocketConnection {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
 
     #[tokio::test]
     async fn test_unix_socket_transport_bind() {

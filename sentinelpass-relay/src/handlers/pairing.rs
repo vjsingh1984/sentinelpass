@@ -225,6 +225,7 @@ pub async fn fetch_bootstrap(
 }
 
 #[cfg(test)]
+#[allow(clippy::await_holding_lock)] // Test code uses sync DB connections across await points
 mod tests {
     use super::*;
     use crate::app_state::RelayAppState;
@@ -412,15 +413,16 @@ mod tests {
     #[tokio::test]
     async fn fetch_bootstrap_supports_legacy_raw_token_lookup() {
         let state = state_with_config(300, 5);
-        let conn = state.storage.conn().unwrap();
-        let now = Utc::now().timestamp();
-        conn.execute(
-            "INSERT INTO pairing_bootstraps (pairing_token, vault_id, encrypted_bootstrap, pairing_salt, expires_at, consumed)
-             VALUES (?1, ?2, ?3, ?4, ?5, 0)",
-            rusqlite::params!["legacy-token", "v1", vec![1u8, 2, 3], vec![4u8; 16], now + 300],
-        )
-        .unwrap();
-        drop(conn);
+        {
+            let conn = state.storage.conn().unwrap();
+            let now = Utc::now().timestamp();
+            conn.execute(
+                "INSERT INTO pairing_bootstraps (pairing_token, vault_id, encrypted_bootstrap, pairing_salt, expires_at, consumed)
+                 VALUES (?1, ?2, ?3, ?4, ?5, 0)",
+                rusqlite::params!["legacy-token", "v1", vec![1u8, 2, 3], vec![4u8; 16], now + 300],
+            )
+            .unwrap();
+        }
 
         let Json(resp) = fetch_bootstrap(State(state.clone()), Path("legacy-token".to_string()))
             .await

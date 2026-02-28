@@ -241,8 +241,8 @@ pub unsafe extern "C" fn sp_entry_get_by_id(
                 title: string_to_c(&entry.title),
                 username: string_to_c(&entry.username),
                 password: string_to_c(&entry.password),
-                url: string_to_c(&entry.url.as_deref().unwrap_or("")),
-                notes: string_to_c(&entry.notes.as_deref().unwrap_or("")),
+                url: string_to_c(entry.url.as_deref().unwrap_or("")),
+                notes: string_to_c(entry.notes.as_deref().unwrap_or("")),
                 created_at: entry.created_at.timestamp(),
                 modified_at: entry.modified_at.timestamp(),
                 favorite: entry.favorite,
@@ -401,7 +401,7 @@ pub unsafe extern "C" fn sp_password_generate(
         return ErrorCode::InvalidParam;
     }
 
-    if length < 8 || length > 128 {
+    if !(8..=128).contains(&length) {
         return ErrorCode::InvalidParam;
     }
 

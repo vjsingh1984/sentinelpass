@@ -1,6 +1,6 @@
 // Core bridge functionality shared between iOS and Android
 
-use crate::error::{BridgeError, BridgeResult, ErrorCode};
+use crate::error::{BridgeError, BridgeResult};
 use sentinelpass_core::vault::{Entry, EntrySummary, VaultManager};
 use std::collections::HashMap;
 use std::path::Path;
@@ -181,6 +181,7 @@ pub fn bridge_entry_add(
 }
 
 /// Update an existing entry
+#[allow(dead_code)] // FFI function - called from mobile platforms
 pub fn bridge_entry_update(
     handle: VaultHandle,
     entry_id: &str,
@@ -436,6 +437,7 @@ pub struct SyncStatus {
 }
 
 /// Result of a sync operation
+#[allow(dead_code)] // FFI struct - used on mobile platforms
 #[derive(Debug, Clone)]
 pub struct SyncResult {
     pub success: bool,
@@ -454,7 +456,7 @@ pub fn bridge_sync_get_status(handle: VaultHandle) -> BridgeResult<SyncStatus> {
         .get_vault(handle)
         .ok_or_else(|| BridgeError::InvalidParam(format!("Invalid vault handle: {}", handle)))?;
 
-    let vault = vault_arc
+    let _vault = vault_arc
         .lock()
         .map_err(|_| BridgeError::Unknown("Failed to acquire vault lock".into()))?;
 
@@ -531,7 +533,7 @@ pub fn bridge_sync_apply_entries(handle: VaultHandle, entries_json: &[u8]) -> Br
 
     // Apply entries (simplified - real implementation would handle conflict resolution)
     let mut applied = 0u64;
-    for entry in entries {
+    for _entry in entries {
         // In a real implementation, this would decrypt and apply each entry
         // For now, just count them
         applied += 1;
@@ -542,7 +544,7 @@ pub fn bridge_sync_apply_entries(handle: VaultHandle, entries_json: &[u8]) -> Br
 
 /// Prepare entries for CloudKit upload (convert to CloudKit records JSON)
 pub fn bridge_sync_prepare_cloudkit(handle: VaultHandle, device_id: &str) -> BridgeResult<Vec<u8>> {
-    use crate::icloud::{CloudKitRecord, ICloudSyncManager};
+    use crate::icloud::ICloudSyncManager;
 
     let registry = get_registry()
         .lock()
@@ -589,7 +591,7 @@ pub fn bridge_sync_prepare_cloudkit(handle: VaultHandle, device_id: &str) -> Bri
 
 /// Prepare entries for Google Drive upload (convert to Drive files JSON)
 pub fn bridge_sync_prepare_drive(handle: VaultHandle, device_id: &str) -> BridgeResult<Vec<u8>> {
-    use crate::drive::{DriveFile, DriveSyncManager};
+    use crate::drive::DriveSyncManager;
 
     let registry = get_registry()
         .lock()

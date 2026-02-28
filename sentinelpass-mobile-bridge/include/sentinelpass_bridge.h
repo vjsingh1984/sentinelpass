@@ -25,7 +25,7 @@ typedef enum SPErrorCode {
 } SPErrorCode;
 
 /**
- * Vault handle type (opaque u64)
+ * Vault handle type (opaque u64 for FFI)
  */
 typedef uint64_t SPVaultHandle;
 

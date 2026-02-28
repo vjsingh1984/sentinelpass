@@ -8,10 +8,12 @@ use axum::http::Request;
 use axum::middleware::Next;
 use axum::response::Response;
 use chrono::Utc;
-use ed25519_dalek::{Signature, Signer, Verifier, VerifyingKey};
-use rand::RngCore;
+use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
+
+// Import base64 Engine for use in verify_auth function
+use base64::Engine;
 
 /// Auth middleware: verifies Ed25519 signature on every authenticated request.
 pub async fn auth_middleware(
@@ -81,6 +83,79 @@ pub async fn auth_middleware(
     Ok(next.run(request).await)
 }
 
+/// Verify Ed25519 authentication header and return device_id, timestamp, and nonce
+fn verify_auth(
+    header: &str,
+    method: &str,
+    path: &str,
+    body: &[u8],
+    storage: &crate::storage::RelayStorage,
+    nonce_window_secs: i64,
+) -> Result<(Uuid, i64, String), RelayError> {
+    let stripped = header
+        .strip_prefix("SentinelPass-Ed25519 ")
+        .ok_or_else(|| RelayError::Auth("Invalid auth scheme".to_string()))?;
+
+    let parts: Vec<&str> = stripped.splitn(4, ':').collect();
+    if parts.len() != 4 {
+        return Err(RelayError::Auth("Invalid auth format".to_string()));
+    }
+
+    let device_id =
+        Uuid::parse_str(parts[0]).map_err(|_| RelayError::Auth("Invalid device ID".to_string()))?;
+    let timestamp: i64 = parts[1]
+        .parse()
+        .map_err(|_| RelayError::Auth("Invalid timestamp".to_string()))?;
+    let nonce = parts[2].to_string();
+    let sig_bytes = base64::engine::general_purpose::STANDARD
+        .decode(parts[3])
+        .map_err(|_| RelayError::Auth("Invalid signature encoding".to_string()))?;
+
+    // Check timestamp freshness (5 min window)
+    let now = Utc::now().timestamp();
+    if (now - timestamp).abs() > nonce_window_secs.max(1) {
+        return Err(RelayError::Auth("Request expired".to_string()));
+    }
+
+    // Look up device public key
+    let conn = storage.conn()?;
+    let (public_key_bytes, revoked): (Vec<u8>, bool) = conn
+        .query_row(
+            "SELECT public_key, revoked FROM devices WHERE device_id = ?1",
+            [device_id.to_string()],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .map_err(|_| RelayError::Auth("Unknown device".to_string()))?;
+
+    if revoked {
+        return Err(RelayError::Auth("Device revoked".to_string()));
+    }
+
+    // Verify signature
+    let body_hash = hex::encode(Sha256::digest(body));
+    let message = format!(
+        "{}\n{}\n{}\n{}\n{}",
+        method, path, timestamp, nonce, body_hash
+    );
+
+    let key_array: [u8; 32] = public_key_bytes
+        .try_into()
+        .map_err(|_| RelayError::Auth("Invalid public key".to_string()))?;
+    let verifying_key = VerifyingKey::from_bytes(&key_array)
+        .map_err(|_| RelayError::Auth("Invalid public key".to_string()))?;
+
+    let sig_array: [u8; 64] = sig_bytes
+        .try_into()
+        .map_err(|_| RelayError::Auth("Invalid signature length".to_string()))?;
+    let signature = Signature::from_bytes(&sig_array);
+
+    verifying_key
+        .verify(message.as_bytes(), &signature)
+        .map_err(|_| RelayError::Auth("Signature verification failed".to_string()))?;
+
+    Ok((device_id, timestamp, nonce))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -91,6 +166,8 @@ mod tests {
     use base64::engine::general_purpose::STANDARD;
     use chrono::Utc;
     use ed25519_dalek::SigningKey;
+    use ed25519_dalek::Signer; // Import Signer trait for sign method
+    use rand::RngCore; // Import RngCore trait for fill_bytes
     use uuid::Uuid;
 
     fn generate_signing_key() -> SigningKey {
@@ -446,77 +523,3 @@ mod tests {
         assert!(limiter.check("device-b"));
     }
 }
-
-fn verify_auth(
-    header: &str,
-    method: &str,
-    path: &str,
-    body: &[u8],
-    storage: &crate::storage::RelayStorage,
-    nonce_window_secs: i64,
-) -> Result<(Uuid, i64, String), RelayError> {
-    let stripped = header
-        .strip_prefix("SentinelPass-Ed25519 ")
-        .ok_or_else(|| RelayError::Auth("Invalid auth scheme".to_string()))?;
-
-    let parts: Vec<&str> = stripped.splitn(4, ':').collect();
-    if parts.len() != 4 {
-        return Err(RelayError::Auth("Invalid auth format".to_string()));
-    }
-
-    let device_id =
-        Uuid::parse_str(parts[0]).map_err(|_| RelayError::Auth("Invalid device ID".to_string()))?;
-    let timestamp: i64 = parts[1]
-        .parse()
-        .map_err(|_| RelayError::Auth("Invalid timestamp".to_string()))?;
-    let nonce = parts[2].to_string();
-    let sig_bytes = base64::engine::general_purpose::STANDARD
-        .decode(parts[3])
-        .map_err(|_| RelayError::Auth("Invalid signature encoding".to_string()))?;
-
-    // Check timestamp freshness (5 min window)
-    let now = Utc::now().timestamp();
-    if (now - timestamp).abs() > nonce_window_secs.max(1) {
-        return Err(RelayError::Auth("Request expired".to_string()));
-    }
-
-    // Look up device public key
-    let conn = storage.conn()?;
-    let (public_key_bytes, revoked): (Vec<u8>, bool) = conn
-        .query_row(
-            "SELECT public_key, revoked FROM devices WHERE device_id = ?1",
-            [device_id.to_string()],
-            |row| Ok((row.get(0)?, row.get(1)?)),
-        )
-        .map_err(|_| RelayError::Auth("Unknown device".to_string()))?;
-
-    if revoked {
-        return Err(RelayError::Auth("Device revoked".to_string()));
-    }
-
-    // Verify signature
-    let body_hash = hex::encode(Sha256::digest(body));
-    let message = format!(
-        "{}\n{}\n{}\n{}\n{}",
-        method, path, timestamp, nonce, body_hash
-    );
-
-    let key_array: [u8; 32] = public_key_bytes
-        .try_into()
-        .map_err(|_| RelayError::Auth("Invalid public key".to_string()))?;
-    let verifying_key = VerifyingKey::from_bytes(&key_array)
-        .map_err(|_| RelayError::Auth("Invalid public key".to_string()))?;
-
-    let sig_array: [u8; 64] = sig_bytes
-        .try_into()
-        .map_err(|_| RelayError::Auth("Invalid signature length".to_string()))?;
-    let signature = Signature::from_bytes(&sig_array);
-
-    verifying_key
-        .verify(message.as_bytes(), &signature)
-        .map_err(|_| RelayError::Auth("Signature verification failed".to_string()))?;
-
-    Ok((device_id, timestamp, nonce))
-}
-
-use base64::Engine;

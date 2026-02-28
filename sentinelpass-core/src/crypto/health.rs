@@ -100,7 +100,7 @@ pub struct PasswordStrengthInfo {
 impl From<PasswordAnalysis> for PasswordStrengthInfo {
     fn from(analysis: PasswordAnalysis) -> Self {
         Self {
-            score: analysis.strength.score() as u8,
+            score: analysis.strength.score(),
             entropy_bits: analysis.entropy_bits,
             crack_time_seconds: analysis.crack_time_seconds,
             length: analysis.length,
@@ -406,10 +406,8 @@ impl PasswordHealthAnalyzer {
         }
 
         // Reused strong passwords get downgraded to Good
-        if is_reused {
-            if analysis.strength.score() >= 4 {
-                return HealthScore::Good;
-            }
+        if is_reused && analysis.strength.score() >= 4 {
+            return HealthScore::Good;
         }
 
         // Map strength score to health score

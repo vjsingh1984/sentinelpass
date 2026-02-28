@@ -176,6 +176,7 @@ impl DriveSyncManager {
     }
 
     /// Set the AppData folder ID
+    #[allow(dead_code)] // FFI method - called from mobile platforms
     pub fn set_app_data_folder(&self, folder_id: String) -> BridgeResult<()> {
         let mut state = self
             .state
@@ -212,6 +213,7 @@ impl DriveSyncManager {
     }
 
     /// Get current sync state
+    #[allow(dead_code)] // FFI method - called from mobile platforms
     pub fn get_state(&self) -> BridgeResult<DriveSyncState> {
         let state_guard = self
             .state
@@ -231,6 +233,7 @@ impl DriveSyncManager {
     }
 
     /// Update start page token for incremental sync
+    #[allow(dead_code)] // FFI method - called from mobile platforms
     pub fn update_page_token(&self, token: String) -> BridgeResult<()> {
         let mut state = self
             .state
@@ -260,6 +263,7 @@ use jni::sys::{jint, jlong, jobject, jstring};
 use jni::JNIEnv;
 
 /// Handle to Drive sync manager (opaque pointer)
+#[allow(dead_code)] // FFI type - used on mobile platforms
 pub type DriveSyncHandle = usize;
 
 /// Global sync manager registry

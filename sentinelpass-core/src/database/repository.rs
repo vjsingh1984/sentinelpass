@@ -8,7 +8,6 @@
 
 use crate::database::schema::Database;
 use crate::DatabaseError;
-use chrono::Utc;
 use rusqlite::{OptionalExtension, Row};
 
 /// Filter options for listing entries
@@ -161,7 +160,7 @@ impl<'a> EntryRepository for SqliteEntryRepository<'a> {
             .map_err(DatabaseError::Sqlite)?;
 
         let result = stmt
-            .query_row(rusqlite::params![id], |row| Self::parse_row(row))
+            .query_row(rusqlite::params![id], Self::parse_row)
             .optional()
             .map_err(DatabaseError::Sqlite)?;
 
@@ -194,7 +193,7 @@ impl<'a> EntryRepository for SqliteEntryRepository<'a> {
         let mut stmt = conn.prepare(&query).map_err(DatabaseError::Sqlite)?;
 
         let rows = stmt
-            .query_map([], |row| Self::parse_row(row))
+            .query_map([], Self::parse_row)
             .map_err(DatabaseError::Sqlite)?
             .collect::<std::result::Result<Vec<_>, _>>()
             .map_err(DatabaseError::Sqlite)?;
@@ -333,6 +332,7 @@ impl<'a> EntryRepository for SqliteEntryRepository<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::Utc;
 
     fn create_in_memory_db() -> Database {
         let db = Database::in_memory().unwrap();

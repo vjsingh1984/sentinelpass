@@ -26,7 +26,7 @@ pub mod xml;
 
 use crate::{Entry, PasswordManagerError, Result, VaultManager};
 use serde::{Deserialize, Serialize};
-use std::io::{BufReader, Write};
+use std::io::Write;
 use std::path::Path;
 
 /// KeePass entry (from XML export or KDBX)

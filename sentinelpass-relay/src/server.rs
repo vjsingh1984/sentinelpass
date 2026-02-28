@@ -58,7 +58,7 @@ async fn health() -> &'static str {
 async fn public_rate_limit_middleware(
     State(state): State<RelayAppState>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
-    mut request: Request<Body>,
+    request: Request<Body>,
     next: Next,
 ) -> Result<Response, crate::error::RelayError> {
     let path = request.uri().path().to_string();

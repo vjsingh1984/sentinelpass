@@ -9,19 +9,23 @@ use serde::Deserialize;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
 
-/// KeePass XML document structure
+// These structs are for potential future serde-based XML parsing
+// Currently, the code uses manual parsing in parse_keepass2_from_string
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 struct KeePassXmlDoc {
     #[serde(rename = "Root")]
     root: Root,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 struct Root {
     #[serde(rename = "Group")]
     group: Vec<Group>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 struct Group {
     #[serde(rename = "Name")]
@@ -34,6 +38,7 @@ struct Group {
     subgroups: Vec<SubGroup>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 struct SubGroup {
     #[serde(rename = "Name")]
@@ -43,6 +48,7 @@ struct SubGroup {
     entries: Vec<Option<XmlEntry>>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 struct XmlEntry {
     #[serde(rename = "String")]
@@ -52,6 +58,7 @@ struct XmlEntry {
     times: Option<EntryTimes>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 struct KeePassString {
     #[serde(rename = "Key")]
@@ -60,6 +67,7 @@ struct KeePassString {
     value: String,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 struct EntryTimes {
     #[serde(rename = "CreationTime")]
@@ -80,7 +88,6 @@ pub fn parse_keepass_xml(input: &Path) -> Result<Vec<KeePassEntry>> {
     })?;
 
     let reader = BufReader::new(file);
-    let mut entries = Vec::new();
 
     // Quickscan to find the opening tag and detect version
     let mut version = None;
@@ -115,26 +122,20 @@ pub fn parse_keepass_xml(input: &Path) -> Result<Vec<KeePassEntry>> {
         )))
     })?;
 
-    match version.as_deref() {
+    let entries = match version {
         Some("1") | None => {
             // Try to parse as KeePass 2 XML (most common)
-            if let Ok(parsed) = try_parse_keepass2_xml(&file) {
-                entries = parsed;
-            } else {
-                return Err(PasswordManagerError::InvalidInput(
-                    "Failed to parse KeePass XML. Please ensure it's a valid KeePass 2.x XML export.".to_string()
-                ));
-            }
+            try_parse_keepass2_xml(&file).map_err(|_| PasswordManagerError::InvalidInput(
+                "Failed to parse KeePass XML. Please ensure it's a valid KeePass 2.x XML export.".to_string()
+            ))?
         }
-        Some("2") => {
-            entries = try_parse_keepass2_xml(&file)?;
-        }
+        Some("2") => try_parse_keepass2_xml(&file)?,
         _ => {
             return Err(PasswordManagerError::InvalidInput(
                 "Unknown KeePass XML version".to_string(),
             ));
         }
-    }
+    };
 
     if entries.is_empty() {
         return Err(PasswordManagerError::InvalidInput(
@@ -304,9 +305,9 @@ pub fn generate_keepass_xml(entries: &[KeePassEntry]) -> Result<String> {
     let mut xml = String::new();
 
     xml.push_str(r#"<?xml version="1.0" encoding="utf-8" standalone="yes"?>"#);
-    xml.push_str("\n");
+    xml.push('\n');
     xml.push_str(r#"<Root>"#);
-    xml.push_str("\n");
+    xml.push('\n');
 
     // Group all entries under "Imported" group
     xml.push_str("  <Group>\n");

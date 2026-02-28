@@ -210,8 +210,8 @@ impl VaultManager {
                 .map_err(PasswordManagerError::from)?,
             url,
             notes,
-            created_at: DateTime::from_timestamp(row.created_at, 0).unwrap_or_else(|| Utc::now()),
-            modified_at: DateTime::from_timestamp(row.modified_at, 0).unwrap_or_else(|| Utc::now()),
+            created_at: DateTime::from_timestamp(row.created_at, 0).unwrap_or_else(Utc::now),
+            modified_at: DateTime::from_timestamp(row.modified_at, 0).unwrap_or_else(Utc::now),
             favorite: row.favorite,
         })
     }
@@ -270,7 +270,7 @@ impl VaultManager {
             .db
             .lock()
             .map_err(|_| DatabaseError::LockPoisoned("Failed to lock database".to_string()))?;
-        let repo = SqliteEntryRepository::new(&*db);
+        let repo = SqliteEntryRepository::new(&db);
         let params = NewEntryParams {
             title: title_blob,
             username: username_blob,
@@ -308,7 +308,7 @@ impl VaultManager {
             .db
             .lock()
             .map_err(|_| DatabaseError::LockPoisoned("Failed to lock database".to_string()))?;
-        let repo = SqliteEntryRepository::new(&*db);
+        let repo = SqliteEntryRepository::new(&db);
         let raw_row = repo
             .get_raw(entry_id)?
             .ok_or_else(|| PasswordManagerError::NotFound(format!("Entry {}", entry_id)))?;
@@ -338,7 +338,7 @@ impl VaultManager {
             .db
             .lock()
             .map_err(|_| DatabaseError::LockPoisoned("Failed to lock database".to_string()))?;
-        let repo = SqliteEntryRepository::new(&*db);
+        let repo = SqliteEntryRepository::new(&db);
         let raw_rows = repo.list_raw(EntryFilter::default())?;
 
         // Drop the database lock before decrypting
@@ -380,7 +380,7 @@ impl VaultManager {
             .db
             .lock()
             .map_err(|_| DatabaseError::LockPoisoned("Failed to lock database".to_string()))?;
-        let repo = SqliteEntryRepository::new(&*db);
+        let repo = SqliteEntryRepository::new(&db);
 
         // Get total count
         let total_count = repo.count()?;
@@ -549,7 +549,7 @@ impl VaultManager {
             .db
             .lock()
             .map_err(|_| DatabaseError::LockPoisoned("Failed to lock database".to_string()))?;
-        let repo = SqliteEntryRepository::new(&*db);
+        let repo = SqliteEntryRepository::new(&db);
 
         let params = UpdateEntryParams {
             title: Some(title_blob),

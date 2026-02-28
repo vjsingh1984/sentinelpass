@@ -186,6 +186,7 @@ impl ICloudSyncManager {
     }
 
     /// Get current sync state
+    #[allow(dead_code)] // FFI method - called from mobile platforms
     pub fn get_state(&self) -> BridgeResult<CloudKitSyncState> {
         let state_guard = self
             .state
@@ -226,7 +227,6 @@ impl Default for ICloudSyncManager {
 // ============================================================================
 
 use std::ffi::{c_char, CStr, CString};
-use std::ptr;
 
 /// Handle to iCloud sync manager (opaque pointer)
 pub type ICloudSyncHandle = usize;

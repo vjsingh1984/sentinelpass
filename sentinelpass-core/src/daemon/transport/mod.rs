@@ -70,7 +70,7 @@ impl From<TransportError> for DatabaseError {
 }
 
 /// Transport configuration
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct TransportConfig {
     /// Path for Unix domain socket
     pub unix_socket_path: Option<String>,
@@ -83,17 +83,6 @@ pub struct TransportConfig {
 
     /// Authentication token for encrypted transports
     pub auth_token: Option<String>,
-}
-
-impl Default for TransportConfig {
-    fn default() -> Self {
-        Self {
-            unix_socket_path: None,
-            windows_pipe_path: None,
-            tcp_fallback_addr: None,
-            auth_token: None,
-        }
-    }
 }
 
 impl TransportConfig {

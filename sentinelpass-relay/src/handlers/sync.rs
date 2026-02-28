@@ -362,6 +362,7 @@ pub async fn status(
 }
 
 #[cfg(test)]
+#[allow(clippy::await_holding_lock)] // Test code uses sync DB connections across await points
 mod tests {
     use super::*;
     use crate::app_state::RelayAppState;

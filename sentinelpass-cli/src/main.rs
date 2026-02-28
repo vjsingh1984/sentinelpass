@@ -1334,8 +1334,8 @@ fn main() -> Result<()> {
             };
             let reset = "\x1b[0m";
             println!(
-                "Overall Health Score: {}{}{}{}",
-                score_color, summary.overall_score, reset, "/100"
+                "Overall Health Score: {}{}{}/100",
+                score_color, summary.overall_score, reset
             );
             println!();
 

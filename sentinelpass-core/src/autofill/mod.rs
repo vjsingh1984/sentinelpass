@@ -11,7 +11,7 @@ pub mod windows;
 #[cfg(target_os = "macos")]
 pub mod macos;
 
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", feature = "x11"))]
 pub mod linux;
 
 /// Result of an auto-fill operation
@@ -47,7 +47,7 @@ pub use windows::AutoFillContext;
 #[cfg(target_os = "macos")]
 pub use macos::AutoFillContext;
 
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", feature = "x11"))]
 pub use linux::AutoFillContext;
 
 /// Auto-fill manager (platform-specific)

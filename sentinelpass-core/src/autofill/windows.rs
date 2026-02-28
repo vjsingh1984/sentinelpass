@@ -6,7 +6,7 @@
 //! - Manage clipboard for credential copying
 //! - Register global hotkeys
 
-use super::{AutoFillContext, AutoFillResult, CredentialMatch};
+use super::{AutoFillResult, CredentialMatch};
 use crate::{PasswordManagerError, Result};
 use std::ffi::OsString;
 use std::os::windows::ffi::OsStringExt;
@@ -15,7 +15,6 @@ use windows::core::PCWSTR;
 use windows::Win32::Foundation::HWND;
 use windows::Win32::System::Threading::{GetCurrentProcessId, GetCurrentThreadId};
 use windows::Win32::UI::WindowsAndMessaging;
-use windows::Win32::UI::WindowsAndMessaging::{VIRTUAL_KEY, VK_RETURN};
 
 type UINT = u32;
 type WPARAM = usize;

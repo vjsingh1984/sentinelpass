@@ -76,11 +76,7 @@ impl UnixSocketTransport {
             .as_ref()
             .ok_or_else(|| TransportError::Other("Transport not bound".to_string()))?;
 
-        let stream = listener
-            .accept()
-            .await
-            .map_err(TransportError::Io)?
-            .0;
+        let stream = listener.accept().await.map_err(TransportError::Io)?.0;
 
         // Note: We rely on file system permissions (0o600) for security instead of peer credential check
         // The socket is owned by the same user who created it, and permissions restrict access

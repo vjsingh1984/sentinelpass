@@ -165,8 +165,8 @@ mod tests {
     use crate::storage::RelayStorage;
     use base64::engine::general_purpose::STANDARD;
     use chrono::Utc;
-    use ed25519_dalek::SigningKey;
     use ed25519_dalek::Signer; // Import Signer trait for sign method
+    use ed25519_dalek::SigningKey;
     use rand::RngCore; // Import RngCore trait for fill_bytes
     use uuid::Uuid;
 

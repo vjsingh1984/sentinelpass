@@ -14,22 +14,21 @@ use std::ptr;
 use windows::core::PCWSTR;
 use windows::Win32::Foundation::HWND;
 use windows::Win32::System::Threading::{GetCurrentProcessId, GetCurrentThreadId};
-use windows::Win32::UI::WindowsAndMessaging::VK_RETURN;
+use windows::Win32::UI::WindowsAndMessaging;
+use windows::Win32::UI::WindowsAndMessaging::{VIRTUAL_KEY, VK_RETURN};
 
-type HGLOBAL = isize;
-type HHOOK = isize;
-type LRESULT = isize;
+type UINT = u32;
 type WPARAM = usize;
 type LPARAM = isize;
-type DWORD = u32;
-type UINT = u32;
-type LONG = i32;
+type LRESULT = isize;
+type HGLOBAL = isize;
 
 // Windows API constants
 const WM_HOTKEY: UINT = 0x0312;
 const MOD_CONTROL: UINT = 0x0002;
 const MOD_SHIFT: UINT = 0x0004;
 const VK_F5: UINT = 0x74; // Example hotkey: Ctrl+Shift+F5
+const VK_RETURN: u32 = 0x0D; // Return key
 
 // Input constants
 const INPUT_KEYBOARD: UINT = 1;
@@ -123,17 +122,17 @@ pub fn autofill_via_clipboard(
     vault_manager: &crate::vault::VaultManager,
 ) -> Result<AutoFillResult> {
     // Get the full entry
+    let entry_id = credential
+        .id
+        .parse::<i64>()
+        .map_err(|_| PasswordManagerError::InvalidInput("Invalid entry ID format".to_string()))?;
     let entry = vault_manager
-        .get_entry(&credential.id.parse::<i64>().map_err(|_| {
-            PasswordManagerError::InvalidInput("Invalid entry ID format".to_string())
-        })?)
+        .get_entry(entry_id)
         .ok_or_else(|| PasswordManagerError::NotFound("Entry not found".to_string()))?;
 
     // Get password
     let password = vault_manager
-        .get_password(&credential.id.parse::<i64>().map_err(|_| {
-            PasswordManagerError::InvalidInput("Invalid entry ID format".to_string())
-        })?)
+        .get_password(entry_id)
         .ok_or_else(|| PasswordManagerError::NotFound("Password not found".to_string()))?;
 
     // Copy username to clipboard first
@@ -160,17 +159,17 @@ pub fn autofill_via_input(
     vault_manager: &crate::vault::VaultManager,
 ) -> Result<AutoFillResult> {
     // Get the full entry
+    let entry_id = credential
+        .id
+        .parse::<i64>()
+        .map_err(|_| PasswordManagerError::InvalidInput("Invalid entry ID format".to_string()))?;
     let entry = vault_manager
-        .get_entry(&credential.id.parse::<i64>().map_err(|_| {
-            PasswordManagerError::InvalidInput("Invalid entry ID format".to_string())
-        })?)
+        .get_entry(entry_id)
         .ok_or_else(|| PasswordManagerError::NotFound("Entry not found".to_string()))?;
 
     // Get password
     let password = vault_manager
-        .get_password(&credential.id.parse::<i64>().map_err(|_| {
-            PasswordManagerError::InvalidInput("Invalid entry ID format".to_string())
-        })?)
+        .get_password(entry_id)
         .ok_or_else(|| PasswordManagerError::NotFound("Password not found".to_string()))?;
 
     unsafe {
@@ -206,19 +205,20 @@ fn set_clipboard_text(text: &str) -> Result<()> {
 
         // Allocate global memory
         let handle = LocalAlloc(LMEM_FIXED, size as usize);
-        if handle.is_null() {
+        if handle == 0 {
             CloseClipboard();
             return Err(PasswordManagerError::Io(std::io::Error::last_os_error()));
         }
 
         // Copy text to global memory
-        let dst = handle.0 as *mut u16;
+        let dst = handle as *mut u16;
         for (i, &ch) in text_wide.iter().enumerate() {
             *dst.add(i) = ch;
         }
 
         // Set clipboard data
-        if SetClipboardData(CF_UNICODETEXT, handle).is_invalid() {
+        let result = SetClipboardData(CF_UNICODETEXT, handle);
+        if result == 0 {
             LocalFree(handle);
             CloseClipboard();
             return Err(PasswordManagerError::Io(std::io::Error::last_os_error()));
@@ -240,30 +240,35 @@ unsafe fn simulate_typing(text: &str) -> Result<()> {
 
 /// Simulate a key press (down and up)
 unsafe fn simulate_key_stroke(vk: u32) -> Result<()> {
-    let mut inputs = [
-        KEYBDINPUT {
-            wVk: vk as u16,
-            dwFlags: 0,
-            wScan: 0,
-            time: 0,
-            dwExtraInfo: 0,
+    let inputs = [
+        INPUT {
+            type_: INPUT_KEYBOARD,
+            ki: KEYBDINPUT {
+                wVk: vk as u16,
+                dwFlags: 0,
+                wScan: 0,
+                time: 0,
+                dwExtraInfo: 0,
+            },
         },
-        KEYBDINPUT {
-            wVk: vk as u16,
-            dwFlags: KEYEVENTF_KEYUP,
-            wScan: 0,
-            time: 0,
-            dwExtraInfo: 0,
+        INPUT {
+            type_: INPUT_KEYBOARD,
+            ki: KEYBDINPUT {
+                wVk: vk as u16,
+                dwFlags: KEYEVENTF_KEYUP,
+                wScan: 0,
+                time: 0,
+                dwExtraInfo: 0,
+            },
         },
     ];
 
-    let input = INPUT {
-        type_: INPUT_KEYBOARD,
-        ki: inputs[0],
-    };
-
-    let result = SendInput(1, &input, std::mem::size_of::<INPUT>() as i32);
-    if result != 1 {
+    let result = SendInput(
+        2,
+        &inputs as *const INPUT,
+        std::mem::size_of::<INPUT>() as i32,
+    );
+    if result != 2 {
         return Err(PasswordManagerError::Io(std::io::Error::last_os_error()));
     }
 
@@ -334,3 +339,13 @@ extern "system" {
 }
 
 const LMEM_FIXED: u32 = 0x0000;
+
+/// Windows-specific auto-fill context
+pub struct AutoFillContext {
+    /// Window handle
+    pub window_handle: HWND,
+    /// Window title
+    pub window_title: String,
+    /// Detected domain/URL
+    pub domain: Option<String>,
+}

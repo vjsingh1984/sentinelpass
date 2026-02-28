@@ -96,22 +96,22 @@ impl AutoFillManager {
 
     /// Auto-fill credentials via clipboard
     #[cfg(windows)]
-    pub async fn autofill_via_clipboard(
+    pub fn autofill_via_clipboard(
         &self,
         credential: &CredentialMatch,
         vault_manager: &crate::vault::VaultManager,
     ) -> Result<AutoFillResult, crate::PasswordManagerError> {
-        windows::autofill_via_clipboard(credential, vault_manager).await
+        windows::autofill_via_clipboard(credential, vault_manager)
     }
 
     /// Auto-fill credentials via direct input simulation
     #[cfg(windows)]
-    pub async fn autofill_via_input(
+    pub fn autofill_via_input(
         &self,
         credential: &CredentialMatch,
         vault_manager: &crate::vault::VaultManager,
     ) -> Result<AutoFillResult, crate::PasswordManagerError> {
-        windows::autofill_via_input(credential, vault_manager).await
+        windows::autofill_via_input(credential, vault_manager)
     }
 
     /// Register global hotkey for auto-fill

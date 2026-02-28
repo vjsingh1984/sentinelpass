@@ -35,11 +35,6 @@ use tokio::net::windows::named_pipe::{ClientOptions, NamedPipeServer, ServerOpti
 use tracing::{debug, error, info, warn};
 #[cfg(windows)]
 use windows::Win32::Foundation::BOOL;
-#[cfg(windows)]
-use windows::Win32::System::Pipes::{
-    DisconnectNamedPipe, PIPE_ACCESS_DUPLEX, PIPE_READMODE_BYTE, PIPE_REJECT_REMOTE_CLIENTS,
-    PIPE_TYPE_BYTE, PIPE_UNLIMITED_INSTANCES, PIPE_WAIT,
-};
 use zeroize::Zeroize;
 
 /// IPC message types

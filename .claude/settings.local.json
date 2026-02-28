@@ -74,7 +74,9 @@
       "Bash(/Users/vijaysingh/code/sentinelpass/sentinelpass-core/src/vault/tests.rs:*)",
       "Bash(/tmp/pagination_fix.txt:*)",
       "Bash(/tmp/fix_tests.sh:*)",
-      "Bash(bash /tmp/fix_tests.sh)"
+      "Bash(bash /tmp/fix_tests.sh)",
+      "Bash(curl:*)",
+      "Bash(gunzip:*)"
     ]
   }
 }

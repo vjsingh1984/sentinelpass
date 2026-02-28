@@ -49,9 +49,8 @@ impl WindowsNamedPipeTransport {
         let deadline = Instant::now() + Duration::from_millis(timeout_ms);
 
         loop {
-            let client = tokio::net::windows::named_pipe::ClientOptions::new()
-                .open(&self.pipe_name)
-                .await;
+            let client =
+                tokio::net::windows::named_pipe::ClientOptions::new().open(&self.pipe_name);
             match client {
                 Ok(c) => {
                     return Ok(WindowsNamedPipeConnection::from_client(c));

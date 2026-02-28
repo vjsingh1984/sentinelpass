@@ -14,6 +14,7 @@ use std::ptr;
 use windows::core::PCWSTR;
 use windows::Win32::Foundation::HWND;
 use windows::Win32::System::Threading::{GetCurrentProcessId, GetCurrentThreadId};
+use windows::Win32::UI::WindowsAndMessaging::VK_RETURN;
 
 type HGLOBAL = isize;
 type HHOOK = isize;
@@ -40,7 +41,7 @@ const CF_UNICODETEXT: UINT = 13;
 /// Get the current auto-fill context
 ///
 /// Detects the active window and attempts to extract the domain/URL
-pub fn get_context() -> Result<AutoFillContext, PasswordManagerError> {
+pub fn get_context() -> Result<AutoFillContext> {
     unsafe {
         // Get foreground window
         let hwnd = GetForegroundWindow();
@@ -117,20 +118,22 @@ fn extract_domain_from_title(title: &str) -> Option<String> {
 /// Auto-fill via clipboard
 ///
 /// Copies username/password to clipboard and notifies user
-pub async fn autofill_via_clipboard(
+pub fn autofill_via_clipboard(
     credential: &CredentialMatch,
     vault_manager: &crate::vault::VaultManager,
-) -> Result<AutoFillResult, PasswordManagerError> {
+) -> Result<AutoFillResult> {
     // Get the full entry
     let entry = vault_manager
-        .get_entry(&credential.id)
-        .await?
+        .get_entry(&credential.id.parse::<i64>().map_err(|_| {
+            PasswordManagerError::InvalidInput("Invalid entry ID format".to_string())
+        })?)
         .ok_or_else(|| PasswordManagerError::NotFound("Entry not found".to_string()))?;
 
     // Get password
     let password = vault_manager
-        .get_password(&credential.id)
-        .await?
+        .get_password(&credential.id.parse::<i64>().map_err(|_| {
+            PasswordManagerError::InvalidInput("Invalid entry ID format".to_string())
+        })?)
         .ok_or_else(|| PasswordManagerError::NotFound("Password not found".to_string()))?;
 
     // Copy username to clipboard first
@@ -152,20 +155,22 @@ pub async fn autofill_via_clipboard(
 /// Auto-fill via direct input simulation
 ///
 /// Simulates keyboard input to type username/password directly
-pub async fn autofill_via_input(
+pub fn autofill_via_input(
     credential: &CredentialMatch,
     vault_manager: &crate::vault::VaultManager,
-) -> Result<AutoFillResult, PasswordManagerError> {
+) -> Result<AutoFillResult> {
     // Get the full entry
     let entry = vault_manager
-        .get_entry(&credential.id)
-        .await?
+        .get_entry(&credential.id.parse::<i64>().map_err(|_| {
+            PasswordManagerError::InvalidInput("Invalid entry ID format".to_string())
+        })?)
         .ok_or_else(|| PasswordManagerError::NotFound("Entry not found".to_string()))?;
 
     // Get password
     let password = vault_manager
-        .get_password(&credential.id)
-        .await?
+        .get_password(&credential.id.parse::<i64>().map_err(|_| {
+            PasswordManagerError::InvalidInput("Invalid entry ID format".to_string())
+        })?)
         .ok_or_else(|| PasswordManagerError::NotFound("Password not found".to_string()))?;
 
     unsafe {
@@ -189,7 +194,7 @@ pub async fn autofill_via_input(
 }
 
 /// Set clipboard text
-fn set_clipboard_text(text: &str) -> Result<(), PasswordManagerError> {
+fn set_clipboard_text(text: &str) -> Result<()> {
     unsafe {
         if !OpenClipboard(HWND(0)) {
             return Err(PasswordManagerError::Io(std::io::Error::last_os_error()));
@@ -225,7 +230,7 @@ fn set_clipboard_text(text: &str) -> Result<(), PasswordManagerError> {
 }
 
 /// Simulate typing a string
-unsafe fn simulate_typing(text: &str) -> Result<(), PasswordManagerError> {
+unsafe fn simulate_typing(text: &str) -> Result<()> {
     for ch in text.chars() {
         let vk = char_to_virtual_key(ch)?;
         simulate_key_stroke(vk)?;
@@ -234,7 +239,7 @@ unsafe fn simulate_typing(text: &str) -> Result<(), PasswordManagerError> {
 }
 
 /// Simulate a key press (down and up)
-unsafe fn simulate_key_stroke(vk: u32) -> Result<(), PasswordManagerError> {
+unsafe fn simulate_key_stroke(vk: u32) -> Result<()> {
     let mut inputs = [
         KEYBDINPUT {
             wVk: vk as u16,
@@ -266,7 +271,7 @@ unsafe fn simulate_key_stroke(vk: u32) -> Result<(), PasswordManagerError> {
 }
 
 /// Convert character to virtual key code
-unsafe fn char_to_virtual_key(ch: char) -> Result<u32, PasswordManagerError> {
+unsafe fn char_to_virtual_key(ch: char) -> Result<u32> {
     // Map character to virtual key using VkKeyScan
     let vk = VkKeyScanW(ch as u16);
 
@@ -286,7 +291,7 @@ unsafe fn char_to_virtual_key(ch: char) -> Result<u32, PasswordManagerError> {
 /// Register global hotkey for auto-fill
 ///
 /// Registers Ctrl+Shift+F5 as the auto-fill hotkey
-pub fn register_hotkey(modifiers: u32, vk: u32) -> Result<(), PasswordManagerError> {
+pub fn register_hotkey(modifiers: u32, vk: u32) -> Result<()> {
     unsafe {
         // Get the current process's main window (or console window)
         let hwnd = GetForegroundWindow(); // In production, use actual app window

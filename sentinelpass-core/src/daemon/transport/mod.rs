@@ -3,6 +3,7 @@
 //! This module provides traits and implementations for different IPC transports,
 //! decoupling the IPC protocol from platform-specific socket handling.
 
+#[cfg(unix)]
 pub mod unix;
 #[cfg(windows)]
 pub mod windows;

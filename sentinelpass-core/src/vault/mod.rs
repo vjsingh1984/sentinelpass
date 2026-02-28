@@ -992,6 +992,36 @@ impl VaultManager {
             .map_err(DatabaseError::Sqlite)?;
         Ok(())
     }
+
+    /// Analyze password health across the vault
+    ///
+    /// Returns a summary of password health including:
+    /// - Total passwords
+    /// - Compromised passwords
+    /// - Weak passwords
+    /// - Reused passwords
+    /// - Overall health score (0-100)
+    pub fn get_vault_health_summary(&self) -> Result<crate::crypto::health::VaultHealthSummary> {
+        if !self.is_unlocked() {
+            return Err(PasswordManagerError::VaultLocked);
+        }
+        crate::crypto::health::PasswordHealthAnalyzer::analyze_vault(self)
+    }
+
+    /// Get detailed health report for all vault entries
+    ///
+    /// Returns a detailed health report for each password including:
+    /// - Health score
+    /// - Whether compromised/reused
+    /// - Strength analysis
+    pub fn get_password_health_report(
+        &self,
+    ) -> Result<Vec<crate::crypto::health::PasswordHealth>> {
+        if !self.is_unlocked() {
+            return Err(PasswordManagerError::VaultLocked);
+        }
+        crate::crypto::health::PasswordHealthAnalyzer::get_health_report(self)
+    }
 }
 
 #[cfg(feature = "sync")]

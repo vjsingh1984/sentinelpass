@@ -7,8 +7,10 @@
 //! - Zeroization utilities
 //! - Password generation
 //! - Password strength analysis
+//! - Password health assessment
 
 pub mod cipher;
+pub mod health;
 pub mod kdf;
 pub mod keyring;
 pub mod password;
@@ -16,6 +18,10 @@ pub mod strength;
 pub mod zero;
 
 pub use cipher::{decrypt_entry, encrypt_entry, DataEncryptionKey, EncryptedEntry};
+pub use health::{
+    HealthScore, PasswordHealth, PasswordHealthAnalyzer, PasswordStrengthInfo,
+    StrengthDistribution, VaultHealthSummary, WeakPasswordEntry,
+};
 pub use kdf::{derive_master_key, verify_master_password, KdfParams};
 pub use keyring::{KeyHierarchy, MasterKey, WrappedKey};
 pub use password::{

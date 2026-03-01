@@ -33,8 +33,6 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 #[cfg(windows)]
 use tokio::net::windows::named_pipe::{ClientOptions, NamedPipeServer, ServerOptions};
 use tracing::{debug, error, info, warn};
-#[cfg(windows)]
-use windows::Win32::Foundation::BOOL;
 use zeroize::Zeroize;
 
 /// IPC message types
@@ -491,7 +489,7 @@ impl IpcServer {
                                                             .ct_eq(self.auth_token.as_bytes()),
                                                     ) {
                                                         warn!("Rejected IPC request with invalid token");
-                                                        let _ = conn.close().await;
+                                                        let _ = conn.close();
                                                         continue;
                                                     }
                                                     let response =

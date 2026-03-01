@@ -146,10 +146,12 @@ impl WindowsNamedPipeConnection {
     }
 
     /// Close the connection
-    pub async fn close(&mut self) -> TransportResult<()> {
+    pub fn close(&mut self) -> TransportResult<()> {
         match self {
-            WindowsNamedPipeConnection::Server(p) => p.disconnect().await?,
-            WindowsNamedPipeConnection::Client(p) => {
+            WindowsNamedPipeConnection::Server(p) => {
+                p.disconnect().map_err(TransportError::Io)?;
+            }
+            WindowsNamedPipeConnection::Client(_) => {
                 // Client doesn't have a disconnect method - just drop it
             }
         };

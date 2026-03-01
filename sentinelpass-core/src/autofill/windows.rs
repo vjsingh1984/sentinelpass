@@ -51,7 +51,7 @@ pub fn get_context() -> Result<AutoFillContext> {
 
         // Get window title
         let mut title_buffer = [0u16; 512];
-        let length = GetWindowTextW(hwnd, &mut title_buffer);
+        let length = GetWindowTextW(hwnd, &mut title_buffer, title_buffer.len() as i32);
 
         let title = if length > 0 {
             OsString::from_wide(&title_buffer[..length as usize])
@@ -84,7 +84,7 @@ pub fn get_context() -> Result<AutoFillContext> {
 /// - "Sign in - Example.com"
 fn extract_domain_from_title(title: &str) -> Option<String> {
     // Remove common browser suffixes
-    let title = title
+    let cleaned = title
         .replace(" - Google Chrome", "")
         .replace(" - Microsoft Edge", "")
         .replace(" - Mozilla Firefox", "")
@@ -94,16 +94,16 @@ fn extract_domain_from_title(title: &str) -> Option<String> {
         .trim();
 
     // Simple domain detection
-    if title.contains('.') && !title.contains(' ') {
+    if cleaned.contains('.') && !cleaned.contains(' ') {
         // Likely a domain like "example.com"
-        Some(title.to_string())
-    } else if title.starts_with("https://") || title.starts_with("http://") {
+        Some(cleaned.to_string())
+    } else if cleaned.starts_with("https://") || cleaned.starts_with("http://") {
         // URL format
-        if let Some(start) = title.find("://") {
-            if let Some(end) = title[start + 3..].find('/') {
-                Some(title[start + 3..start + 3 + end].to_string())
+        if let Some(start) = cleaned.find("://") {
+            if let Some(end) = cleaned[start + 3..].find('/') {
+                Some(cleaned[start + 3..start + 3 + end].to_string())
             } else {
-                Some(title[start + 3..].to_string())
+                Some(cleaned[start + 3..].to_string())
             }
         } else {
             None
@@ -180,7 +180,7 @@ pub fn autofill_via_input(
 /// Set clipboard text
 fn set_clipboard_text(text: &str) -> Result<()> {
     unsafe {
-        if !OpenClipboard(HWND(0)) {
+        if OpenClipboard(HWND::default()) == 0 {
             return Err(PasswordManagerError::Io(std::io::Error::last_os_error()));
         }
 
@@ -286,7 +286,7 @@ pub fn register_hotkey(modifiers: u32, vk: u32) -> Result<()> {
         // Get the current process's main window (or console window)
         let hwnd = GetForegroundWindow(); // In production, use actual app window
 
-        if !RegisterHotKey(hwnd, 1, modifiers, vk) {
+        if RegisterHotKey(hwnd, 1, modifiers, vk) == 0 {
             return Err(PasswordManagerError::Io(std::io::Error::last_os_error()));
         }
 

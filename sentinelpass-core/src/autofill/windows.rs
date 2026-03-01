@@ -51,7 +51,8 @@ pub fn get_context() -> Result<AutoFillContext> {
 
         // Get window title
         let mut title_buffer = [0u16; 512];
-        let length = GetWindowTextW(hwnd, &mut title_buffer, title_buffer.len() as i32);
+        let buffer_len = title_buffer.len() as i32;
+        let length = GetWindowTextW(hwnd, &mut title_buffer, buffer_len);
 
         let title = if length > 0 {
             OsString::from_wide(&title_buffer[..length as usize])
@@ -84,14 +85,14 @@ pub fn get_context() -> Result<AutoFillContext> {
 /// - "Sign in - Example.com"
 fn extract_domain_from_title(title: &str) -> Option<String> {
     // Remove common browser suffixes
-    let cleaned = title
+    let binding = title
         .replace(" - Google Chrome", "")
         .replace(" - Microsoft Edge", "")
         .replace(" - Mozilla Firefox", "")
         .replace(" - Brave", "")
         .replace("Sign in - ", "")
-        .replace("Log in to ", "")
-        .trim();
+        .replace("Log in to ", "");
+    let cleaned = binding.trim();
 
     // Simple domain detection
     if cleaned.contains('.') && !cleaned.contains(' ') {

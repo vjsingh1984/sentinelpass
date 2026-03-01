@@ -125,25 +125,18 @@ pub fn autofill_via_clipboard(
         .id
         .parse::<i64>()
         .map_err(|_| PasswordManagerError::InvalidInput("Invalid entry ID format".to_string()))?;
-    let entry = vault_manager
-        .get_entry(entry_id)
-        .ok_or_else(|| PasswordManagerError::NotFound("Entry not found".to_string()))?;
-
-    // Get password
-    let password = vault_manager
-        .get_password(entry_id)
-        .ok_or_else(|| PasswordManagerError::NotFound("Password not found".to_string()))?;
+    let entry = vault_manager.get_entry(entry_id)?;
 
     // Copy username to clipboard first
-    if let Some(username) = &entry.username {
-        set_clipboard_text(username)?;
+    if !entry.username.is_empty() {
+        set_clipboard_text(&entry.username)?;
 
         // In production, you'd show a notification here
         // telling user "Username copied to clipboard, press Ctrl+V"
     }
 
     // Then copy password
-    set_clipboard_text(&password)?;
+    set_clipboard_text(&entry.password)?;
 
     // In production, show notification "Password copied to clipboard"
 
@@ -162,22 +155,15 @@ pub fn autofill_via_input(
         .id
         .parse::<i64>()
         .map_err(|_| PasswordManagerError::InvalidInput("Invalid entry ID format".to_string()))?;
-    let entry = vault_manager
-        .get_entry(entry_id)
-        .ok_or_else(|| PasswordManagerError::NotFound("Entry not found".to_string()))?;
-
-    // Get password
-    let password = vault_manager
-        .get_password(entry_id)
-        .ok_or_else(|| PasswordManagerError::NotFound("Password not found".to_string()))?;
+    let entry = vault_manager.get_entry(entry_id)?;
 
     unsafe {
         // Small delay to ensure target window is ready
         std::thread::sleep(std::time::Duration::from_millis(100));
 
         // Type username
-        if let Some(username) = &entry.username {
-            simulate_typing(username)?;
+        if !entry.username.is_empty() {
+            simulate_typing(&entry.username)?;
             simulate_key_stroke(VK_RETURN as u32)?; // Tab or Enter to move to password field
         }
 
@@ -185,7 +171,7 @@ pub fn autofill_via_input(
         std::thread::sleep(std::time::Duration::from_millis(100));
 
         // Type password
-        simulate_typing(&password)?;
+        simulate_typing(&entry.password)?;
 
         Ok(AutoFillResult::Success)
     }

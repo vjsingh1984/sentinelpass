@@ -1308,10 +1308,18 @@ mod tests {
         std::env::set_var("XDG_RUNTIME_DIR", custom_runtime);
 
         let path = default_ipc_socket_path();
-        let path_str = path.to_string_lossy();
 
         #[cfg(unix)]
-        assert!(path_str.contains(custom_runtime));
+        {
+            let path_str = path.to_string_lossy();
+            assert!(path_str.contains(custom_runtime));
+        }
+
+        #[cfg(windows)]
+        {
+            // On Windows, just verify the function runs without error
+            let _ = path;
+        }
 
         std::env::remove_var("XDG_RUNTIME_DIR");
     }
@@ -1320,10 +1328,9 @@ mod tests {
     #[test]
     fn test_windows_named_pipe_path_format() {
         let pipe_path = windows_named_pipe_path();
-        let pipe_str = pipe_path.to_string_lossy();
 
-        assert!(pipe_str.contains("\\\\.\\pipe\\"));
-        assert!(pipe_str.contains("SentinelPass"));
+        assert!(pipe_path.contains("\\\\.\\pipe\\"));
+        assert!(pipe_path.contains("SentinelPass"));
     }
 
     #[test]

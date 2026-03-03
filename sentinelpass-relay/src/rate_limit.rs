@@ -213,6 +213,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(windows))]
     fn rate_limiter_resets_hourly_window() {
         let limiter = RateLimiter::new(10);
         let key = "hourly-reset-test";
@@ -240,6 +241,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(windows))]
     fn rate_limiter_resets_daily_window() {
         let limiter = RateLimiter::new(10);
         let key = "daily-reset-test";

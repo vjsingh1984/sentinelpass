@@ -212,8 +212,8 @@ mod tests {
         assert_eq!(bucket.unwrap().count, 1, "Daily count should be 1");
     }
 
-    #[test]
     #[cfg(not(windows))]
+    #[test]
     fn rate_limiter_resets_hourly_window() {
         let limiter = RateLimiter::new(10);
         let key = "hourly-reset-test";
@@ -240,8 +240,8 @@ mod tests {
         assert_eq!(bucket.count, 1, "Count should reset to 1");
     }
 
-    #[test]
     #[cfg(not(windows))]
+    #[test]
     fn rate_limiter_resets_daily_window() {
         let limiter = RateLimiter::new(10);
         let key = "daily-reset-test";

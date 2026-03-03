@@ -109,7 +109,7 @@ jobs:
   test:
     name: Run Tests (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    needs: [format, clippy, build]
+    needs: [format, clippy]
     strategy:
       fail-fast: false
       matrix:
@@ -121,17 +121,10 @@ jobs:
       - name: Setup build environment
         uses: ./.github/actions/setup-rust-env
         with:
-          cache-key-prefix: ci-${{ matrix.os }}
-          web-build: false
+          cache-key-prefix: ci-test-${{ matrix.os }}
 
       - name: Run tests
         run: cargo test --workspace --verbose
-
-      - name: Test timeout safety net
-        if: runner.os == 'Windows'
-        shell: bash
-        run: echo "Windows tests completed successfully"
-
   # Rust coverage - runs after tests pass
   coverage:
     name: Rust LLVM Coverage

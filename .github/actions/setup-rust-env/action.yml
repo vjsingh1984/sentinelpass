@@ -37,7 +37,7 @@ runs:
     - name: Cache Rust build
       uses: Swatinem/rust-cache@v2
       with:
-        cache-key: ${{ inputs.cache-key-prefix }}
+        prefix-key: ${{ inputs.cache-key-prefix }}
 
     - name: Cache web artifacts
       if: inputs.use-web-cache == 'true'

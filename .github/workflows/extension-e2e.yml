@@ -20,7 +20,8 @@ jobs:
     runs-on: ubuntu-latest
     env:
       PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.playwright-browsers
-      HEADLESS: "1"
+      # Note: HEADLESS must be unset or "0" for Chrome extensions to work properly
+      # Chrome extensions require a full browser UI to function correctly
 
     steps:
       - name: Checkout

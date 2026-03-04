@@ -257,6 +257,102 @@ fn test_vault_add_and_list_ssh_keys() {
 }
 
 #[test]
+fn test_import_pairing_bootstrap_into_empty_vault() {
+    let password = b"pairing-password";
+    let relay_url = "https://relay.example.com";
+    let source_vault_id = uuid::Uuid::new_v4();
+
+    let source = VaultManager::create(":memory:", password).unwrap();
+    let source_identity = crate::sync::device::DeviceIdentity::generate("Source Device");
+    source
+        .init_sync(
+            relay_url,
+            "Source Device",
+            source_vault_id,
+            &source_identity,
+        )
+        .unwrap();
+    let bootstrap = source.export_pairing_bootstrap().unwrap();
+
+    let mut target = VaultManager::create(":memory:", password).unwrap();
+    {
+        let db = target.db.lock().unwrap();
+        db.conn()
+            .execute(
+                "INSERT INTO sync_devices (device_id, device_name, device_type, public_key, registered_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                rusqlite::params![
+                    uuid::Uuid::new_v4().to_string(),
+                    "Stale Device",
+                    "desktop",
+                    vec![1u8; 32],
+                    Utc::now().timestamp()
+                ],
+            )
+            .unwrap();
+    }
+    target
+        .import_pairing_bootstrap(password, &bootstrap)
+        .expect("pairing bootstrap import should succeed for empty vault");
+
+    let target_db = target.db.lock().unwrap();
+    let (target_kdf, target_wrapped) = VaultManager::load_vault_metadata(&target_db).unwrap();
+    let target_kdf_blob = bincode::serialize(&target_kdf).unwrap();
+    let target_wrapped_blob = bincode::serialize(&target_wrapped).unwrap();
+    let sync_device_count: i64 = target_db
+        .conn()
+        .query_row("SELECT COUNT(*) FROM sync_devices", [], |row| row.get(0))
+        .unwrap();
+    drop(target_db);
+
+    assert_eq!(target_kdf_blob, bootstrap.kdf_params_blob);
+    assert_eq!(target_wrapped_blob, bootstrap.wrapped_dek_blob);
+    assert_eq!(sync_device_count, 0);
+    assert!(target.key_hierarchy.dek().is_ok());
+}
+
+#[test]
+fn test_import_pairing_bootstrap_rejects_non_empty_vault() {
+    let password = b"pairing-password";
+
+    let source = VaultManager::create(":memory:", password).unwrap();
+    let source_identity = crate::sync::device::DeviceIdentity::generate("Source Device");
+    source
+        .init_sync(
+            "https://relay.example.com",
+            "Source Device",
+            uuid::Uuid::new_v4(),
+            &source_identity,
+        )
+        .unwrap();
+    let bootstrap = source.export_pairing_bootstrap().unwrap();
+
+    let mut target = VaultManager::create(":memory:", password).unwrap();
+    let entry = Entry {
+        entry_id: None,
+        title: "Local data".to_string(),
+        username: "user".to_string(),
+        password: "pass".to_string(),
+        url: None,
+        notes: None,
+        created_at: Utc::now(),
+        modified_at: Utc::now(),
+        favorite: false,
+    };
+    target.add_entry(&entry).unwrap();
+
+    let err = target
+        .import_pairing_bootstrap(password, &bootstrap)
+        .expect_err("non-empty vault should be rejected");
+    match err {
+        PasswordManagerError::InvalidInput(msg) => {
+            assert!(msg.contains("must be empty"));
+        }
+        other => panic!("unexpected error: {}", other),
+    }
+}
+
+#[test]
 fn test_vault_get_and_export_ssh_key() {
     let temp_path = ":memory:";
     let password = b"test_password";
@@ -368,4 +464,156 @@ fn test_biometric_ref_metadata_roundtrip() {
 
     VaultManager::set_biometric_ref(&db, None).unwrap();
     assert_eq!(VaultManager::load_biometric_ref(&db).unwrap(), None);
+}
+
+#[test]
+fn test_pagination_first_page() {
+    let temp_path = ":memory:";
+    let password = b"test_password";
+
+    let vault = VaultManager::create(temp_path, password).unwrap();
+
+    // Add 75 entries
+    for i in 0..75 {
+        let entry = Entry {
+            entry_id: None,
+            title: format!("Entry {:03}", i),
+            username: format!("user{}@example.com", i),
+            password: format!("pass{}", i),
+            url: Some(format!("https://example{}.com", i)),
+            notes: None,
+            created_at: Utc::now(),
+            modified_at: Utc::now(),
+            favorite: i % 2 == 0,
+        };
+        vault.add_entry(&entry).unwrap();
+    }
+
+    // Request first page with 25 items
+    let pagination = PaginationParams::new(0, 25);
+    let result = vault.list_entries_paginated(pagination).unwrap();
+
+    assert_eq!(result.items.len(), 25);
+    assert_eq!(result.total_count, 75);
+    assert!(result.has_more);
+}
+
+#[test]
+fn test_pagination_second_page() {
+    let temp_path = ":memory:";
+    let password = b"test_password";
+
+    let vault = VaultManager::create(temp_path, password).unwrap();
+
+    // Add 60 entries
+    for i in 0..60 {
+        let entry = Entry {
+            entry_id: None,
+            title: format!("Site {:03}", i),
+            username: "user@example.com".to_string(),
+            password: "secret".to_string(),
+            url: None,
+            notes: None,
+            created_at: Utc::now(),
+            modified_at: Utc::now(),
+            favorite: false,
+        };
+        vault.add_entry(&entry).unwrap();
+    }
+
+    // Request second page with 25 items
+    let pagination = PaginationParams::new(1, 25);
+    let result = vault.list_entries_paginated(pagination).unwrap();
+
+    assert_eq!(result.items.len(), 25);
+    assert_eq!(result.total_count, 60);
+    assert!(result.has_more);
+}
+
+#[test]
+fn test_pagination_last_page() {
+    let temp_path = ":memory:";
+    let password = b"test_password";
+
+    let vault = VaultManager::create(temp_path, password).unwrap();
+
+    // Add 30 entries
+    for i in 0..30 {
+        let entry = Entry {
+            entry_id: None,
+            title: format!("Item {:03}", i),
+            username: "user@example.com".to_string(),
+            password: "pass".to_string(),
+            url: None,
+            notes: None,
+            created_at: Utc::now(),
+            modified_at: Utc::now(),
+            favorite: false,
+        };
+        vault.add_entry(&entry).unwrap();
+    }
+
+    // Request second page with 25 items (should only have 5 items)
+    let pagination = PaginationParams::new(1, 25);
+    let result = vault.list_entries_paginated(pagination).unwrap();
+
+    assert_eq!(result.items.len(), 5);
+    assert_eq!(result.total_count, 30);
+    assert!(!result.has_more); // No more pages
+}
+
+#[test]
+fn test_pagination_large_page_size_capped() {
+    let temp_path = ":memory:";
+    let password = b"test_password";
+
+    let vault = VaultManager::create(temp_path, password).unwrap();
+
+    // Add 50 entries
+    for i in 0..50 {
+        let entry = Entry {
+            entry_id: None,
+            title: format!("Test {}", i),
+            username: "user@example.com".to_string(),
+            password: "pass".to_string(),
+            url: None,
+            notes: None,
+            created_at: Utc::now(),
+            modified_at: Utc::now(),
+            favorite: false,
+        };
+        vault.add_entry(&entry).unwrap();
+    }
+
+    // Request page size of 2000 (should be capped to 1000)
+    let pagination = PaginationParams::new(0, 2000);
+    let result = vault.list_entries_paginated(pagination).unwrap();
+
+    assert_eq!(result.items.len(), 50); // All 50 entries returned
+    assert_eq!(result.total_count, 50);
+    assert!(!result.has_more);
+}
+
+#[test]
+fn test_pagination_empty_vault() {
+    let temp_path = ":memory:";
+    let password = b"test_password";
+
+    let vault = VaultManager::create(temp_path, password).unwrap();
+
+    let pagination = PaginationParams::default();
+    let result = vault.list_entries_paginated(pagination).unwrap();
+
+    assert_eq!(result.items.len(), 0);
+    assert_eq!(result.total_count, 0);
+    assert!(!result.has_more);
+}
+
+#[test]
+fn test_pagination_default_params() {
+    let params = PaginationParams::default();
+    assert_eq!(params.page, 0);
+    assert_eq!(params.page_size, 50);
+    assert_eq!(params.offset(), 0);
+    assert_eq!(params.limit(), 50);
 }

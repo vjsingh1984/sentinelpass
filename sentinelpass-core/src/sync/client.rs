@@ -33,6 +33,9 @@ impl SyncClient {
     }
 
     /// Register this device with the relay.
+    ///
+    /// This helper is sufficient for first-device registration. Existing-vault joins on hardened
+    /// relays should use `register_device_with_pairing`.
     pub async fn register_device(
         &self,
         device_name: &str,
@@ -40,14 +43,51 @@ impl SyncClient {
         public_key: &[u8],
         vault_id: &Uuid,
     ) -> Result<()> {
+        self.register_device_with_pairing(
+            device_name,
+            device_type,
+            public_key,
+            vault_id,
+            None,
+            None,
+        )
+        .await
+    }
+
+    /// Register this device with the relay, optionally presenting a pairing proof for existing-vault joins.
+    pub async fn register_device_with_pairing(
+        &self,
+        device_name: &str,
+        device_type: &str,
+        public_key: &[u8],
+        vault_id: &Uuid,
+        pairing_token: Option<&str>,
+        registration_proof: Option<&[u8]>,
+    ) -> Result<()> {
         let path = "/api/v1/devices/register";
-        let body = serde_json::json!({
-            "device_id": self.device_id,
-            "device_name": device_name,
-            "device_type": device_type,
-            "public_key": base64::engine::general_purpose::STANDARD.encode(public_key),
-            "vault_id": vault_id,
-        });
+        let mut body = serde_json::Map::new();
+        body.insert("device_id".to_string(), serde_json::json!(self.device_id));
+        body.insert("device_name".to_string(), serde_json::json!(device_name));
+        body.insert("device_type".to_string(), serde_json::json!(device_type));
+        body.insert(
+            "public_key".to_string(),
+            serde_json::json!(base64::engine::general_purpose::STANDARD.encode(public_key)),
+        );
+        body.insert("vault_id".to_string(), serde_json::json!(vault_id));
+        if let Some(pairing_token) = pairing_token {
+            body.insert(
+                "pairing_token".to_string(),
+                serde_json::json!(pairing_token),
+            );
+        }
+        if let Some(registration_proof) = registration_proof {
+            body.insert(
+                "registration_proof".to_string(),
+                serde_json::json!(
+                    base64::engine::general_purpose::STANDARD.encode(registration_proof)
+                ),
+            );
+        }
         let body_bytes = serde_json::to_vec(&body)
             .map_err(|e| PasswordManagerError::InvalidInput(e.to_string()))?;
 
@@ -117,18 +157,48 @@ impl SyncClient {
     }
 
     /// Upload pairing bootstrap blob.
+    ///
+    /// Hardened relays require `upload_bootstrap_with_proof`.
     pub async fn upload_bootstrap(
         &self,
         pairing_token: &str,
         encrypted_bootstrap: &[u8],
         pairing_salt: &[u8],
     ) -> Result<()> {
+        self.upload_bootstrap_with_proof(pairing_token, encrypted_bootstrap, pairing_salt, None)
+            .await
+    }
+
+    /// Upload pairing bootstrap blob with an optional registration proof (required by hardened relays).
+    pub async fn upload_bootstrap_with_proof(
+        &self,
+        pairing_token: &str,
+        encrypted_bootstrap: &[u8],
+        pairing_salt: &[u8],
+        registration_proof: Option<&[u8]>,
+    ) -> Result<()> {
         let path = "/api/v1/pairing/bootstrap";
-        let body = serde_json::json!({
-            "pairing_token": pairing_token,
-            "encrypted_bootstrap": base64::engine::general_purpose::STANDARD.encode(encrypted_bootstrap),
-            "pairing_salt": base64::engine::general_purpose::STANDARD.encode(pairing_salt),
-        });
+        let mut body = serde_json::Map::new();
+        body.insert(
+            "pairing_token".to_string(),
+            serde_json::json!(pairing_token),
+        );
+        body.insert(
+            "encrypted_bootstrap".to_string(),
+            serde_json::json!(base64::engine::general_purpose::STANDARD.encode(encrypted_bootstrap)),
+        );
+        body.insert(
+            "pairing_salt".to_string(),
+            serde_json::json!(base64::engine::general_purpose::STANDARD.encode(pairing_salt)),
+        );
+        if let Some(registration_proof) = registration_proof {
+            body.insert(
+                "registration_proof".to_string(),
+                serde_json::json!(
+                    base64::engine::general_purpose::STANDARD.encode(registration_proof)
+                ),
+            );
+        }
         let body_bytes = serde_json::to_vec(&body)
             .map_err(|e| PasswordManagerError::InvalidInput(e.to_string()))?;
 

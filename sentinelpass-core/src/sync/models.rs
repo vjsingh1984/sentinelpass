@@ -182,6 +182,7 @@ pub struct PullRequest {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PullResponse {
     pub entries: Vec<SyncEntryBlob>,
+    /// Pagination cursor: the last returned server sequence in this page.
     pub server_sequence: u64,
     pub has_more: bool,
 }

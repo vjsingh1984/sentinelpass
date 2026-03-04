@@ -117,7 +117,7 @@ impl SyncEngine {
 
     /// Pull remote changes from the relay and apply them locally.
     async fn pull_changes(&self, dek: &DataEncryptionKey) -> Result<u64> {
-        let last_pull = {
+        let mut cursor = {
             let db = self
                 .db
                 .lock()
@@ -126,37 +126,53 @@ impl SyncEngine {
             config.last_pull_sequence
         };
 
-        let request = PullRequest {
-            since_sequence: last_pull,
-            limit: Some(1000),
-        };
+        let mut total_count = 0u64;
 
-        let response = self.client.pull(&request).await?;
+        loop {
+            let request = PullRequest {
+                since_sequence: cursor,
+                limit: Some(1000),
+            };
 
-        if response.entries.is_empty() {
-            return Ok(0);
-        }
+            let response = self.client.pull(&request).await?;
 
-        let count = response.entries.len() as u64;
-
-        let db = self
-            .db
-            .lock()
-            .map_err(|_| DatabaseError::LockPoisoned("apply pull".to_string()))?;
-
-        for blob in &response.entries {
-            // Skip our own changes
-            if blob.origin_device_id == self.device_id {
-                continue;
+            if response.entries.is_empty() {
+                break;
             }
-            self.apply_remote_entry(db.conn(), dek, blob)?;
+
+            total_count += response.entries.len() as u64;
+
+            let db = self
+                .db
+                .lock()
+                .map_err(|_| DatabaseError::LockPoisoned("apply pull".to_string()))?;
+
+            for blob in &response.entries {
+                // Skip our own changes
+                if blob.origin_device_id == self.device_id {
+                    continue;
+                }
+                self.apply_remote_entry(db.conn(), dek, blob)?;
+            }
+
+            if response.server_sequence <= cursor {
+                return Err(PasswordManagerError::InvalidInput(
+                    "Relay pull cursor did not advance".to_string(),
+                ));
+            }
+
+            cursor = response.server_sequence;
+
+            let mut config = SyncConfig::load(db.conn())?;
+            config.last_pull_sequence = cursor;
+            config.save(db.conn())?;
+
+            if !response.has_more {
+                break;
+            }
         }
 
-        let mut config = SyncConfig::load(db.conn())?;
-        config.last_pull_sequence = response.server_sequence;
-        config.save(db.conn())?;
-
-        Ok(count)
+        Ok(total_count)
     }
 
     /// Apply a single remote entry to the local database.

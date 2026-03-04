@@ -10,7 +10,10 @@ use crate::{
     audit::{get_audit_log_dir, AuditEventType, AuditLogger},
     crypto::cipher::{decrypt_to_string, encrypt_string},
     crypto::{EncryptedEntry, KdfParams, KeyHierarchy, WrappedKey},
-    database::{schema::CURRENT_SCHEMA_VERSION, Database},
+    database::{
+        schema::CURRENT_SCHEMA_VERSION, Database, EntryFilter, EntryRepository, NewEntryParams,
+        RawEntryRow, SqliteEntryRepository, UpdateEntryParams,
+    },
     lockout::DEFAULT_MAX_ATTEMPTS,
     platform::{ensure_data_dir, get_default_vault_path},
     DatabaseError, PasswordManagerError, Result,
@@ -143,6 +146,76 @@ impl VaultManager {
         self.key_hierarchy.is_unlocked()
     }
 
+    /// Convert raw entry row to summary (decrypt only title and username)
+    fn row_to_summary(&self, row: &RawEntryRow) -> Result<EntrySummary> {
+        let dek = self.key_hierarchy.dek()?;
+
+        let title_encrypted: EncryptedEntry = bincode::deserialize(&row.title)
+            .map_err(|e| PasswordManagerError::from(DatabaseError::Serialization(e.to_string())))?;
+        let username_encrypted: EncryptedEntry = bincode::deserialize(&row.username)
+            .map_err(|e| PasswordManagerError::from(DatabaseError::Serialization(e.to_string())))?;
+
+        let title = decrypt_to_string(dek, &title_encrypted).map_err(PasswordManagerError::from)?;
+        let username =
+            decrypt_to_string(dek, &username_encrypted).map_err(PasswordManagerError::from)?;
+
+        Ok(EntrySummary {
+            entry_id: row.entry_id,
+            title,
+            username,
+            favorite: row.favorite,
+        })
+    }
+
+    /// Decrypt a raw entry row from the database
+    fn decrypt_entry_row(&self, row: &RawEntryRow) -> Result<Entry> {
+        let dek = self.key_hierarchy.dek()?;
+
+        // Deserialize encrypted entries
+        let title_encrypted: EncryptedEntry = bincode::deserialize(&row.title)
+            .map_err(|e| PasswordManagerError::from(DatabaseError::Serialization(e.to_string())))?;
+        let username_encrypted: EncryptedEntry = bincode::deserialize(&row.username)
+            .map_err(|e| PasswordManagerError::from(DatabaseError::Serialization(e.to_string())))?;
+        let password_encrypted: EncryptedEntry = bincode::deserialize(&row.password)
+            .map_err(|e| PasswordManagerError::from(DatabaseError::Serialization(e.to_string())))?;
+
+        let url = row
+            .url
+            .as_ref()
+            .map(|blob| {
+                let encrypted: EncryptedEntry = bincode::deserialize(blob).map_err(|e| {
+                    PasswordManagerError::from(DatabaseError::Serialization(e.to_string()))
+                })?;
+                decrypt_to_string(dek, &encrypted).map_err(PasswordManagerError::from)
+            })
+            .transpose()?;
+
+        let notes = row
+            .notes
+            .as_ref()
+            .map(|blob| {
+                let encrypted: EncryptedEntry = bincode::deserialize(blob).map_err(|e| {
+                    PasswordManagerError::from(DatabaseError::Serialization(e.to_string()))
+                })?;
+                decrypt_to_string(dek, &encrypted).map_err(PasswordManagerError::from)
+            })
+            .transpose()?;
+
+        Ok(Entry {
+            entry_id: Some(row.entry_id),
+            title: decrypt_to_string(dek, &title_encrypted).map_err(PasswordManagerError::from)?,
+            username: decrypt_to_string(dek, &username_encrypted)
+                .map_err(PasswordManagerError::from)?,
+            password: decrypt_to_string(dek, &password_encrypted)
+                .map_err(PasswordManagerError::from)?,
+            url,
+            notes,
+            created_at: DateTime::from_timestamp(row.created_at, 0).unwrap_or_else(Utc::now),
+            modified_at: DateTime::from_timestamp(row.modified_at, 0).unwrap_or_else(Utc::now),
+            favorite: row.favorite,
+        })
+    }
+
     /// Add a new entry to the vault
     pub fn add_entry(&self, entry: &Entry) -> Result<i64> {
         if !self.is_unlocked() {
@@ -189,44 +262,30 @@ impl VaultManager {
         let auth_tag_blob = bincode::serialize(&title_encrypted.auth_tag)
             .map_err(|e| DatabaseError::Serialization(e.to_string()))?;
 
-        // For now, use a simple vault_id of 1
-        let vault_id: i64 = 1;
         let now = Utc::now().timestamp();
-        let favorite: i64 = if entry.favorite { 1 } else { 0 };
+        let sync_id = uuid::Uuid::new_v4().to_string();
 
-        // Open database and insert entry
+        // Use repository to insert the entry
         let db = self
             .db
             .lock()
             .map_err(|_| DatabaseError::LockPoisoned("Failed to lock database".to_string()))?;
+        let repo = SqliteEntryRepository::new(&db);
+        let params = NewEntryParams {
+            title: title_blob,
+            username: username_blob,
+            password: password_blob,
+            url: url_blob,
+            notes: notes_blob,
+            entry_nonce: nonce_blob,
+            auth_tag: auth_tag_blob,
+            created_at: now,
+            modified_at: now,
+            favorite: entry.favorite,
+            sync_id: Some(sync_id),
+        };
 
-        let sync_id = uuid::Uuid::new_v4().to_string();
-
-        db.conn()
-            .execute(
-                "INSERT INTO entries (
-                vault_id, title, username, password, url, notes,
-                entry_nonce, auth_tag, created_at, modified_at, favorite,
-                sync_id, sync_version, sync_state
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, 1, 'pending')",
-                rusqlite::params![
-                    vault_id,
-                    title_blob,
-                    username_blob,
-                    password_blob,
-                    url_blob.as_deref().unwrap_or(&[]),
-                    notes_blob.as_deref().unwrap_or(&[]),
-                    nonce_blob,
-                    auth_tag_blob,
-                    now,
-                    now,
-                    favorite,
-                    sync_id,
-                ],
-            )
-            .map_err(DatabaseError::Sqlite)?;
-
-        let entry_id = db.conn().last_insert_rowid();
+        let entry_id = repo.create(params)?;
 
         // Log credential creation
         if let Some(ref logger) = self.audit_logger {
@@ -245,115 +304,28 @@ impl VaultManager {
             return Err(PasswordManagerError::VaultLocked);
         }
 
-        let dek = self.key_hierarchy.dek()?;
         let db = self
             .db
             .lock()
             .map_err(|_| DatabaseError::LockPoisoned("Failed to lock database".to_string()))?;
+        let repo = SqliteEntryRepository::new(&db);
+        let raw_row = repo
+            .get_raw(entry_id)?
+            .ok_or_else(|| PasswordManagerError::NotFound(format!("Entry {}", entry_id)))?;
 
-        // Query the database
-        let mut stmt = db
-            .conn()
-            .prepare(
-                "SELECT title, username, password, url, notes, created_at, modified_at, favorite
-             FROM entries WHERE entry_id = ?1",
-            )
-            .map_err(DatabaseError::Sqlite)?;
+        // Drop the database lock before decrypting (decrypt doesn't need the DB)
+        drop(db);
 
-        let result = stmt.query_row([entry_id], |row| {
-            let title_blob: Vec<u8> = row.get(0)?;
-            let username_blob: Vec<u8> = row.get(1)?;
-            let password_blob: Vec<u8> = row.get(2)?;
-            let url_blob: Option<Vec<u8>> = row.get(3)?;
-            let notes_blob: Option<Vec<u8>> = row.get(4)?;
-            let created_at_i64: i64 = row.get(5)?;
-            let modified_at_i64: i64 = row.get(6)?;
-            let favorite_i32: i32 = row.get(7)?;
-
-            Ok((
-                title_blob,
-                username_blob,
-                password_blob,
-                url_blob,
-                notes_blob,
-                created_at_i64,
-                modified_at_i64,
-                favorite_i32,
-            ))
-        });
-
-        match result {
-            Ok((
-                title_blob,
-                username_blob,
-                password_blob,
-                url_blob,
-                notes_blob,
-                created_at,
-                modified_at,
-                favorite,
-            )) => {
-                // Deserialize and decrypt fields
-                let title_encrypted: EncryptedEntry = bincode::deserialize(&title_blob)
-                    .map_err(|e| DatabaseError::Serialization(e.to_string()))?;
-                let username_encrypted: EncryptedEntry = bincode::deserialize(&username_blob)
-                    .map_err(|e| DatabaseError::Serialization(e.to_string()))?;
-                let password_encrypted: EncryptedEntry = bincode::deserialize(&password_blob)
-                    .map_err(|e| DatabaseError::Serialization(e.to_string()))?;
-
-                let title = decrypt_to_string(dek, &title_encrypted)?;
-                let username = decrypt_to_string(dek, &username_encrypted)?;
-                let password = decrypt_to_string(dek, &password_encrypted)?;
-
-                let url = if let Some(ub) = url_blob {
-                    if ub.is_empty() {
-                        None
-                    } else {
-                        let url_encrypted: EncryptedEntry = bincode::deserialize(&ub)
-                            .map_err(|e| DatabaseError::Serialization(e.to_string()))?;
-                        Some(decrypt_to_string(dek, &url_encrypted)?)
-                    }
-                } else {
-                    None
-                };
-
-                let notes = if let Some(nb) = notes_blob {
-                    if nb.is_empty() {
-                        None
-                    } else {
-                        let notes_encrypted: EncryptedEntry = bincode::deserialize(&nb)
-                            .map_err(|e| DatabaseError::Serialization(e.to_string()))?;
-                        Some(decrypt_to_string(dek, &notes_encrypted)?)
-                    }
-                } else {
-                    None
-                };
-
-                // Log credential viewing
-                if let Some(ref logger) = self.audit_logger {
-                    let _ = logger.log(
-                        AuditEventType::CredentialViewed { entry_id },
-                        &format!("Viewed credential: {}", title),
-                    );
-                }
-
-                Ok(Entry {
-                    entry_id: Some(entry_id),
-                    title,
-                    username,
-                    password,
-                    url,
-                    notes,
-                    created_at: DateTime::from_timestamp(created_at, 0).unwrap_or_default(),
-                    modified_at: DateTime::from_timestamp(modified_at, 0).unwrap_or_default(),
-                    favorite: favorite != 0,
-                })
-            }
-            Err(_) => Err(PasswordManagerError::NotFound(format!(
-                "Entry {}",
-                entry_id
-            ))),
+        // Log credential viewing
+        let title_hint = String::from_utf8_lossy(&raw_row.title).to_string();
+        if let Some(ref logger) = self.audit_logger {
+            let _ = logger.log(
+                AuditEventType::CredentialViewed { entry_id },
+                &format!("Viewed credential: {}", title_hint),
+            );
         }
+
+        self.decrypt_entry_row(&raw_row)
     }
 
     /// List all entries
@@ -362,47 +334,21 @@ impl VaultManager {
             return Err(PasswordManagerError::VaultLocked);
         }
 
-        let dek = self.key_hierarchy.dek()?;
         let db = self
             .db
             .lock()
             .map_err(|_| DatabaseError::LockPoisoned("Failed to lock database".to_string()))?;
+        let repo = SqliteEntryRepository::new(&db);
+        let raw_rows = repo.list_raw(EntryFilter::default())?;
 
-        let mut stmt = db
-            .conn()
-            .prepare("SELECT entry_id, title, username, favorite FROM entries WHERE is_deleted = 0")
-            .map_err(DatabaseError::Sqlite)?;
+        // Drop the database lock before decrypting
+        drop(db);
 
-        let mut entries = stmt
-            .query_map([], |row| {
-                let entry_id: i64 = row.get(0)?;
-                let title_blob: Vec<u8> = row.get(1)?;
-                let username_blob: Vec<u8> = row.get(2)?;
-                let favorite: i32 = row.get(3)?;
-
-                Ok((entry_id, title_blob, username_blob, favorite))
-            })
-            .map_err(DatabaseError::Sqlite)?
-            .map(|row| -> Result<EntrySummary> {
-                let (entry_id, title_blob, username_blob, favorite) =
-                    row.map_err(|e| PasswordManagerError::from(DatabaseError::Sqlite(e)))?;
-
-                let title_encrypted: EncryptedEntry = bincode::deserialize(&title_blob)
-                    .map_err(|e| DatabaseError::Serialization(e.to_string()))?;
-                let username_encrypted: EncryptedEntry = bincode::deserialize(&username_blob)
-                    .map_err(|e| DatabaseError::Serialization(e.to_string()))?;
-
-                let title = decrypt_to_string(dek, &title_encrypted)?;
-                let username = decrypt_to_string(dek, &username_encrypted)?;
-
-                Ok(EntrySummary {
-                    entry_id,
-                    title,
-                    username,
-                    favorite: favorite != 0,
-                })
-            })
-            .collect::<std::result::Result<Vec<_>, _>>()?;
+        // Convert raw rows to summaries
+        let mut entries = raw_rows
+            .iter()
+            .map(|row| self.row_to_summary(row))
+            .collect::<Result<Vec<_>>>()?;
 
         // Sort entries alphabetically by title
         entries.sort_by(|a, b| a.title.cmp(&b.title));
@@ -418,6 +364,65 @@ impl VaultManager {
         }
 
         Ok(entries)
+    }
+
+    /// List entries with pagination to prevent performance issues with large vaults.
+    /// Returns entries for the specified page, along with total count and whether more results exist.
+    pub fn list_entries_paginated(
+        &self,
+        pagination: PaginationParams,
+    ) -> Result<PaginatedResult<EntrySummary>> {
+        if !self.is_unlocked() {
+            return Err(PasswordManagerError::VaultLocked);
+        }
+
+        let db = self
+            .db
+            .lock()
+            .map_err(|_| DatabaseError::LockPoisoned("Failed to lock database".to_string()))?;
+        let repo = SqliteEntryRepository::new(&db);
+
+        // Get total count
+        let total_count = repo.count()?;
+
+        // Get paginated entries
+        let filter = EntryFilter {
+            limit: Some(pagination.limit()),
+            offset: Some(pagination.offset()),
+            favorite_only: false,
+        };
+        let raw_rows = repo.list_raw(filter)?;
+
+        // Drop the database lock before decrypting
+        drop(db);
+
+        // Convert raw rows to summaries
+        let items = raw_rows
+            .iter()
+            .map(|row| self.row_to_summary(row))
+            .collect::<Result<Vec<_>>>()?;
+
+        // Calculate if there are more results
+        let has_more = (pagination.offset() as i64 + items.len() as i64) < total_count;
+
+        // Log credentials list operation
+        if let Some(ref logger) = self.audit_logger {
+            let _ = logger.log(
+                AuditEventType::CredentialsListed { count: items.len() },
+                &format!(
+                    "Listed {} credentials (page {}, total {})",
+                    items.len(),
+                    pagination.page,
+                    total_count
+                ),
+            );
+        }
+
+        Ok(PaginatedResult {
+            items,
+            total_count,
+            has_more,
+        })
     }
 
     /// Delete an entry (soft-delete with tombstone for sync).
@@ -498,10 +503,6 @@ impl VaultManager {
         }
 
         let dek = self.key_hierarchy.dek()?;
-        let db = self
-            .db
-            .lock()
-            .map_err(|_| DatabaseError::LockPoisoned("Failed to lock database".to_string()))?;
 
         // Encrypt the entry data
         let title_encrypted = encrypt_string(dek, &entry.title)?;
@@ -543,35 +544,27 @@ impl VaultManager {
 
         let now = Utc::now().timestamp();
 
-        // Update the entry
-        let rows_affected = db
-            .conn()
-            .execute(
-                "UPDATE entries
-             SET title = ?1, username = ?2, password = ?3, url = ?4, notes = ?5,
-                 entry_nonce = ?6, auth_tag = ?7, modified_at = ?8, favorite = ?9
-             WHERE entry_id = ?10",
-                (
-                    &title_blob,
-                    &username_blob,
-                    &password_blob,
-                    url_blob.as_deref(),
-                    notes_blob.as_deref(),
-                    &nonce_blob,
-                    &auth_tag_blob,
-                    now,
-                    entry.favorite as i32,
-                    entry_id,
-                ),
-            )
-            .map_err(DatabaseError::Sqlite)?;
+        // Use repository pattern to update
+        let db = self
+            .db
+            .lock()
+            .map_err(|_| DatabaseError::LockPoisoned("Failed to lock database".to_string()))?;
+        let repo = SqliteEntryRepository::new(&db);
 
-        if rows_affected == 0 {
-            return Err(PasswordManagerError::NotFound(format!(
-                "Entry {}",
-                entry_id
-            )));
-        }
+        let params = UpdateEntryParams {
+            title: Some(title_blob),
+            username: Some(username_blob),
+            password: Some(password_blob),
+            url: url_blob,
+            notes: notes_blob,
+            entry_nonce: Some(nonce_blob),
+            auth_tag: Some(auth_tag_blob),
+            modified_at: now,
+            favorite: Some(entry.favorite),
+        };
+
+        repo.update(entry_id, params)
+            .map_err(PasswordManagerError::from)?;
 
         // Log credential modification
         if let Some(ref logger) = self.audit_logger {
@@ -601,6 +594,119 @@ impl VaultManager {
             last_sync_at: config.last_sync_at,
             pending_changes: pending,
         })
+    }
+
+    /// Load the local sync device identity (Ed25519 signing key + metadata) if present.
+    pub fn load_sync_device_identity(&self) -> Result<Option<crate::sync::device::DeviceIdentity>> {
+        let dek = self.key_hierarchy.dek()?;
+        let db = self
+            .db
+            .lock()
+            .map_err(|e| DatabaseError::LockPoisoned(e.to_string()))?;
+        crate::sync::device::DeviceIdentity::load_from_db(db.conn(), dek)
+    }
+
+    /// Export the encrypted pairing bootstrap payload used to onboard a new sync device.
+    pub fn export_pairing_bootstrap(&self) -> Result<crate::sync::models::VaultBootstrap> {
+        let db = self
+            .db
+            .lock()
+            .map_err(|e| DatabaseError::LockPoisoned(e.to_string()))?;
+        let config = crate::sync::config::SyncConfig::load(db.conn())?;
+        let relay_url = config.relay_url.ok_or_else(|| {
+            PasswordManagerError::InvalidInput("Sync relay URL not set".to_string())
+        })?;
+        let vault_id = config.vault_id.ok_or_else(|| {
+            PasswordManagerError::InvalidInput("Sync vault ID not set".to_string())
+        })?;
+
+        let (kdf_params, wrapped_dek) = Self::load_vault_metadata(&db)?;
+        let kdf_params_blob = bincode::serialize(&kdf_params)
+            .map_err(|e| DatabaseError::Serialization(e.to_string()))?;
+        let wrapped_dek_blob = bincode::serialize(&wrapped_dek)
+            .map_err(|e| DatabaseError::Serialization(e.to_string()))?;
+
+        Ok(crate::sync::models::VaultBootstrap {
+            kdf_params_blob,
+            wrapped_dek_blob,
+            relay_url,
+            vault_id,
+        })
+    }
+
+    /// Import a pairing bootstrap into an empty local vault and switch this instance to the
+    /// remote vault's KDF parameters and wrapped DEK.
+    ///
+    /// The local vault must be unlocked and contain no entries/SSH keys/TOTP secrets.
+    pub fn import_pairing_bootstrap(
+        &mut self,
+        master_password: &[u8],
+        bootstrap: &crate::sync::models::VaultBootstrap,
+    ) -> Result<()> {
+        if !self.is_unlocked() {
+            return Err(PasswordManagerError::VaultLocked);
+        }
+
+        let imported_kdf: KdfParams = bincode::deserialize(&bootstrap.kdf_params_blob)
+            .map_err(|e| DatabaseError::Serialization(e.to_string()))?;
+        let imported_wrapped: WrappedKey = bincode::deserialize(&bootstrap.wrapped_dek_blob)
+            .map_err(|e| DatabaseError::Serialization(e.to_string()))?;
+
+        // Verify the provided master password can unlock the imported wrapped DEK before mutating
+        // local metadata.
+        let mut imported_hierarchy = KeyHierarchy::new();
+        imported_hierarchy.unlock_vault(master_password, &imported_kdf, &imported_wrapped)?;
+
+        let db = self
+            .db
+            .lock()
+            .map_err(|e| DatabaseError::LockPoisoned(e.to_string()))?;
+        let conn = db.conn();
+
+        let entry_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM entries", [], |row| row.get(0))
+            .map_err(DatabaseError::Sqlite)?;
+        let ssh_key_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM ssh_keys", [], |row| row.get(0))
+            .map_err(DatabaseError::Sqlite)?;
+        let totp_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM totp_secrets", [], |row| row.get(0))
+            .map_err(DatabaseError::Sqlite)?;
+
+        if entry_count > 0 || ssh_key_count > 0 || totp_count > 0 {
+            return Err(PasswordManagerError::InvalidInput(
+                "Pair-join target vault must be empty".to_string(),
+            ));
+        }
+
+        let nonce_blob = bincode::serialize(&imported_wrapped.nonce)
+            .map_err(|e| DatabaseError::Serialization(e.to_string()))?;
+        let rows = conn
+            .execute(
+                "UPDATE db_metadata
+                 SET kdf_params = ?1, wrapped_dek = ?2, dek_nonce = ?3
+                 WHERE id = 1",
+                rusqlite::params![
+                    &bootstrap.kdf_params_blob,
+                    &bootstrap.wrapped_dek_blob,
+                    &nonce_blob
+                ],
+            )
+            .map_err(DatabaseError::Sqlite)?;
+        if rows == 0 {
+            return Err(PasswordManagerError::NotFound("Vault metadata".to_string()));
+        }
+
+        // Pair-join may reuse a previously created local vault shell; clear stale sync caches.
+        conn.execute("DELETE FROM sync_devices", [])
+            .map_err(DatabaseError::Sqlite)?;
+        conn.execute("DELETE FROM sync_tombstones", [])
+            .map_err(DatabaseError::Sqlite)?;
+
+        drop(db);
+
+        self.key_hierarchy = imported_hierarchy;
+        Ok(())
     }
 
     /// Initialize sync for this vault: save config and device identity.
@@ -641,6 +747,75 @@ impl VaultManager {
         config.sync_enabled = false;
         config.save(db.conn())?;
         Ok(())
+    }
+
+    /// Run a full sync cycle against the configured relay (push pending changes, pull remote changes).
+    #[cfg(feature = "sync")]
+    pub async fn sync_now(&self) -> Result<crate::sync::models::SyncStatus> {
+        if !self.is_unlocked() {
+            return Err(PasswordManagerError::VaultLocked);
+        }
+
+        let dek = self.key_hierarchy.dek()?.clone();
+        let identity = self.load_sync_device_identity()?.ok_or_else(|| {
+            PasswordManagerError::InvalidInput("Sync device identity missing".to_string())
+        })?;
+
+        let (relay_url, vault_id) = {
+            let db = self
+                .db
+                .lock()
+                .map_err(|e| DatabaseError::LockPoisoned(e.to_string()))?;
+            let config = crate::sync::config::SyncConfig::load(db.conn())?;
+            if !config.sync_enabled {
+                return Err(PasswordManagerError::InvalidInput(
+                    "Sync is not enabled".to_string(),
+                ));
+            }
+
+            let relay_url = config.relay_url.ok_or_else(|| {
+                PasswordManagerError::InvalidInput("Sync relay URL missing".to_string())
+            })?;
+            let vault_id = config.vault_id.ok_or_else(|| {
+                PasswordManagerError::InvalidInput("Sync vault ID missing".to_string())
+            })?;
+            (relay_url, vault_id)
+        };
+
+        // If the relay doesn't know this device yet (first `sync init` usage), register it once
+        // before running the sync engine. Pair-joined devices are already registered and should
+        // skip this path.
+        {
+            let preflight = crate::sync::client::SyncClient::new(
+                &relay_url,
+                identity.device_id,
+                identity.signing_key.clone(),
+            )?;
+
+            if let Err(err) = preflight.list_devices().await {
+                if is_unknown_device_relay_error(&err) {
+                    preflight
+                        .register_device(
+                            &identity.device_name,
+                            crate::sync::device::DeviceIdentity::current_device_type(),
+                            &identity.public_key_bytes(),
+                            &vault_id,
+                        )
+                        .await?;
+                } else {
+                    return Err(err);
+                }
+            }
+        }
+
+        let client = crate::sync::client::SyncClient::new(
+            &relay_url,
+            identity.device_id,
+            identity.signing_key,
+        )?;
+        let engine =
+            crate::sync::engine::SyncEngine::new(client, self.db.clone(), identity.device_id);
+        engine.sync(&dek).await
     }
 
     /// List sync devices from local cache.
@@ -828,6 +1003,44 @@ impl VaultManager {
             .map_err(DatabaseError::Sqlite)?;
         Ok(())
     }
+
+    /// Analyze password health across the vault
+    ///
+    /// Returns a summary of password health including:
+    /// - Total passwords
+    /// - Compromised passwords
+    /// - Weak passwords
+    /// - Reused passwords
+    /// - Overall health score (0-100)
+    pub fn get_vault_health_summary(&self) -> Result<crate::crypto::health::VaultHealthSummary> {
+        if !self.is_unlocked() {
+            return Err(PasswordManagerError::VaultLocked);
+        }
+        crate::crypto::health::PasswordHealthAnalyzer::analyze_vault(self)
+    }
+
+    /// Get detailed health report for all vault entries
+    ///
+    /// Returns a detailed health report for each password including:
+    /// - Health score
+    /// - Whether compromised/reused
+    /// - Strength analysis
+    pub fn get_password_health_report(&self) -> Result<Vec<crate::crypto::health::PasswordHealth>> {
+        if !self.is_unlocked() {
+            return Err(PasswordManagerError::VaultLocked);
+        }
+        crate::crypto::health::PasswordHealthAnalyzer::get_health_report(self)
+    }
+}
+
+#[cfg(feature = "sync")]
+fn is_unknown_device_relay_error(err: &PasswordManagerError) -> bool {
+    match err {
+        PasswordManagerError::InvalidInput(msg) => {
+            msg.contains("Unknown device") || msg.contains("Relay error 401")
+        }
+        _ => false,
+    }
 }
 
 /// A password entry
@@ -851,4 +1064,42 @@ pub struct EntrySummary {
     pub title: String,
     pub username: String,
     pub favorite: bool,
+}
+
+/// Result of a paginated query
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PaginatedResult<T> {
+    pub items: Vec<T>,
+    pub total_count: i64,
+    pub has_more: bool,
+}
+
+/// Pagination parameters
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct PaginationParams {
+    pub page: u32,
+    pub page_size: u32,
+}
+
+impl Default for PaginationParams {
+    fn default() -> Self {
+        Self {
+            page: 0,
+            page_size: 50,
+        }
+    }
+}
+
+impl PaginationParams {
+    pub fn new(page: u32, page_size: u32) -> Self {
+        Self { page, page_size }
+    }
+
+    pub fn offset(&self) -> u32 {
+        self.page.saturating_mul(self.page_size)
+    }
+
+    pub fn limit(&self) -> u32 {
+        self.page_size.min(1000) // Cap at 1000 items per page
+    }
 }

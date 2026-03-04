@@ -4,11 +4,13 @@
 //! only opaque ciphertexts and device public keys -- it never possesses
 //! encryption keys or plaintext data.
 
+mod app_state;
 mod auth;
 mod cleanup;
 mod config;
 mod error;
 mod handlers;
+mod pairing_security;
 mod rate_limit;
 mod server;
 mod storage;
@@ -57,8 +59,16 @@ async fn main() -> anyhow::Result<()> {
 
     tracing::info!("Starting SentinelPass relay on {}", cfg.listen_addr);
 
-    let state = storage::RelayStorage::open(&cfg.storage_path)?;
-    let app = server::build_router(state, &cfg);
+    let storage = storage::RelayStorage::open(&cfg.storage_path)?;
+    cleanup::spawn_cleanup_task(
+        storage.clone(),
+        cfg.tombstone_retention_days,
+        cfg.nonce_window_secs,
+        (cfg.pairing_ttl_secs + cfg.pairing_fetch_backoff_max_secs) as i64,
+    );
+
+    let app_state = app_state::RelayAppState::new(storage, cfg.clone());
+    let app = server::build_router(app_state);
 
     let listener = tokio::net::TcpListener::bind(&cfg.listen_addr).await?;
     axum::serve(listener, app).await?;

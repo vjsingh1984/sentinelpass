@@ -13,6 +13,9 @@ pub struct RelayConfig {
     pub rate_limit_per_minute: u32,
     pub pairing_ttl_secs: u64,
     pub max_active_pairings: usize,
+    pub pairing_fetch_attempt_limit: u32,
+    pub pairing_fetch_backoff_base_secs: u64,
+    pub pairing_fetch_backoff_max_secs: u64,
     pub tombstone_retention_days: u64,
     pub nonce_window_secs: i64,
 }
@@ -27,6 +30,9 @@ impl Default for RelayConfig {
             rate_limit_per_minute: 60,
             pairing_ttl_secs: 300,
             max_active_pairings: 5,
+            pairing_fetch_attempt_limit: 5,
+            pairing_fetch_backoff_base_secs: 5,
+            pairing_fetch_backoff_max_secs: 300,
             tombstone_retention_days: 90,
             nonce_window_secs: 300,
         }

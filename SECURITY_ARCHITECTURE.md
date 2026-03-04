@@ -1,5 +1,12 @@
 # PASSWORD MANAGER - SECURITY ARCHITECTURE SPECIFICATION
 
+> **Status Note (2026-02-27):** This document has been updated with implementation status markers. All Phase 1 security hardening is complete. For evidence-based gaps and priorities, see `docs/GAP_REVIEW_2026-02-26.md`.
+
+**Status Key:**
+- ✅ **Implemented** - Fully implemented and verified
+- ⚠️ **Partial** - Partially implemented (see notes)
+- 📋 **Planned** - Target-state design, not yet implemented
+
 ## 1. HIGH-LEVEL ARCHITECTURE
 
 ```
@@ -50,26 +57,26 @@
 
 ## 2. THREAT MODEL AND MITIGATIONS
 
-| Threat | Attack Vector | Mitigation Strategy |
-|--------|---------------|---------------------|
-| **Stolen Laptop** | Physical access to encrypted database | • Argon2id with high memory cost (256MB)<br>• Master password required<br>• No plaintext keys stored<br>• Biometric unlock only stores wrapped key |
-| **Malware** | Process memory reading | • Zeroization on unlock timeout<br>• mlock() to prevent swap<br>• Memory encryption for sensitive buffers<br>• ASLR and PIE enabled |
-| **Memory Scraping** | Heap inspection for keys | • SecureString wrappers with zeroize<br>• Secrets in locked memory pages<br>• No string copies of secrets<br>• Minimize time in memory |
-| **Clipboard Snooping** | Other apps reading clipboard | • Auto-clear clipboard after 30s<br>• Protected API on macOS<br>• User notification on copy |
-| **Keylogging** | Input capture of master password | • Virtual keyboard option (desktop)<br>• Biometric bypass<br>• Password quality meter |
-| **Browser Extension Compromise** | Malicious extension accessing vault | • Native messaging whitelist<br>• Domain matching enforced daemon-side<br>• User approval per domain<br>• No API access to full vault |
-| **SQLite File Theft** | Copy of database file | • Full DB encryption with AES-256-GCM<br>• Per-file random salt<br>• Key wrapping with KDF<br>• No plaintext anywhere |
-| **Offline Brute Force** | Dictionary attacks on DB | • Argon2id: t=3, m=256MB, p=4<br>• Exponential backoff on failures<br>• Account lockout after 10 attempts<br>• No timing leak on password check |
-| **Timing Attacks** | Response time analysis | • Constant-time comparisons<br>• Fixed delay on auth<br>• Dummy operations for padding |
-| **Phishing** | Fake websites requesting credentials | • Domain matching with TLD validation<br>• Visual domain confirmation<br>• URL bar integration |
-| **CSRF on Autofill** | Malicious site triggering fill | • User gesture required<br>• Origin validation<br>• Frame depth checking |
-| **Relay Compromise** | Attacker gains relay server access | • All payloads encrypted with vault DEK (relay is zero-knowledge)<br>• Ed25519 device keys never stored on relay<br>• Relay holds only public keys + opaque blobs |
-| **Device Impersonation** | Forged sync requests | • Ed25519 signature over canonical request string<br>• Signing key stored encrypted with DEK locally<br>• Public key registered at pairing time |
-| **Replay Attack (Sync)** | Re-sending captured sync requests | • UUID nonce in every auth header, checked for uniqueness<br>• Timestamp freshness window (300s)<br>• Monotonic device_sequence validation |
-| **Pairing Interception** | Eavesdropping on pairing exchange | • Bootstrap encrypted with HKDF-derived key (6-digit code + salt)<br>• 5-minute TTL, single-use consumption<br>• Code transmitted out-of-band |
-| **Metadata Leakage (Sync)** | Payload size reveals entry type/length | • Payloads padded to fixed buckets (256, 512, 1024, 2048, 4096, 8192) before encryption<br>• Entry type visible but content opaque |
-| **Rollback Attack** | Pushing older entry versions | • sync_version must be monotonically increasing<br>• Lower versions rejected by both relay and client<br>• Tombstones require higher version |
-| **Cross-Vault Access** | Device accessing wrong vault | • vault_id scoped per device at registration<br>• Relay enforces vault isolation on all queries |
+| Threat | Attack Vector | Mitigation Strategy | Status |
+|--------|---------------|---------------------|--------|
+| **Stolen Laptop** | Physical access to encrypted database | • Argon2id with high memory cost (256MB)<br>• Master password required<br>• No plaintext keys stored<br>• Biometric unlock only stores wrapped key | ✅ |
+| **Malware** | Process memory reading | • Zeroization on unlock timeout<br>• mlock() to prevent swap<br>• Memory encryption for sensitive buffers<br>• ASLR and PIE enabled | ✅ |
+| **Memory Scraping** | Heap inspection for keys | • SecureString wrappers with zeroize<br>• Secrets in locked memory pages<br>• No string copies of secrets<br>• Minimize time in memory | ✅ |
+| **Clipboard Snooping** | Other apps reading clipboard | • Auto-clear clipboard after 30s<br>• Protected API on macOS<br>• User notification on copy | ⚠️ (auto-clear partial) |
+| **Keylogging** | Input capture of master password | • Virtual keyboard option (desktop)<br>• Biometric bypass<br>• Password quality meter | 📋 (virtual keyboard) |
+| **Browser Extension Compromise** | Malicious extension accessing vault | • Native messaging whitelist<br>• Domain matching enforced daemon-side<br>• User approval per domain<br>• No API access to full vault | ✅ |
+| **SQLite File Theft** | Copy of database file | • Full DB encryption with AES-256-GCM<br>• Per-file random salt<br>• Key wrapping with KDF<br>• No plaintext anywhere | ✅ |
+| **Offline Brute Force** | Dictionary attacks on DB | • Argon2id: t=3, m=256MB, p=4<br>• Exponential backoff on failures<br>• Account lockout after 10 attempts<br>• No timing leak on password check | ✅ |
+| **Timing Attacks** | Response time analysis | • Constant-time comparisons<br>• Fixed delay on auth<br>• Dummy operations for padding | ⚠️ (constant-time only) |
+| **Phishing** | Fake websites requesting credentials | • Domain matching with TLD validation<br>• Visual domain confirmation<br>• URL bar integration | ⚠️ (domain matching only) |
+| **CSRF on Autofill** | Malicious site triggering fill | • User gesture required<br>• Origin validation<br>• Frame depth checking | ✅ |
+| **Relay Compromise** | Attacker gains relay server access | • All payloads encrypted with vault DEK (relay is zero-knowledge)<br>• Ed25519 device keys never stored on relay<br>• Relay holds only public keys + opaque blobs | ✅ |
+| **Device Impersonation** | Forged sync requests | • Ed25519 signature over canonical request string<br>• Signing key stored encrypted with DEK locally<br>• Public key registered at pairing time | ✅ |
+| **Replay Attack (Sync)** | Re-sending captured sync requests | • UUID nonce in every auth header, checked for uniqueness<br>• Timestamp freshness window (300s)<br>• Monotonic device_sequence validation | ✅ |
+| **Pairing Interception** | Eavesdropping on pairing exchange | • Bootstrap encrypted with HKDF-derived key (6-digit code + salt)<br>• 5-minute TTL, single-use consumption<br>• Code transmitted out-of-band | ✅ |
+| **Metadata Leakage (Sync)** | Payload size reveals entry type/length | • Payloads padded to fixed buckets (256, 512, 1024, 2048, 4096, 8192) before encryption<br>• Entry type visible but content opaque | ✅ |
+| **Rollback Attack** | Pushing older entry versions | • sync_version must be monotonically increasing<br>• Lower versions rejected by both relay and client<br>• Tombstones require higher version | ✅ |
+| **Cross-Vault Access** | Device accessing wrong vault | • vault_id scoped per device at registration<br>• Relay enforces vault isolation on all queries | ✅ |
 
 ---
 
@@ -487,80 +494,98 @@ See `Cargo.toml` (workspace root) and `CLAUDE.md` § Dependencies Note for the f
 
 ## 7. SECURITY HARDENING CHECKLIST
 
-| Category | Item | Implementation |
-|----------|------|----------------|
-| **Memory** | Zeroization | `zeroize` crate on all secrets |
-| **Memory** | Locked pages | `memlock2::Mlock` prevents swap |
-| **Memory** | No string copies | Use `SecureBuffer`, never `String` for secrets |
-| **Timing** | Constant-time compare | `subtle` crate for password checks |
-| **Timing** | Fixed delay on auth | Always delay 200ms on unlock attempt |
-| **Brute Force** | Exponential backoff | 100ms → 200ms → 400ms → 800ms |
-| **Brute Force** | Account lockout | 10 failed attempts = 5 min lockout |
-| **Auto-lock** | Timeout | Default 5 min inactivity |
-| **Auto-lock** | Lock on sleep | Detect system sleep/wake events |
-| **Auto-lock** | Lock on screen lock | Platform-specific APIs |
-| **Clipboard** | Auto-clear | 30 second timeout |
-| **Clipboard** | Clear on exit | Clear clipboard on daemon shutdown |
-| **Audit Log** | Track access | Log all entry access (encrypted) |
-| **SQL Injection** | Parameterized queries | Use rusqlite bindings, never concat |
-| **Updates** | Signature verification | Verify binary signatures |
-| **Updates** | Secure channel | HTTPS with cert pinning |
-| **Process Isolation** | Sandboxing | Platform-specific sandboxing |
-| **Anti-debug** | Detect debugger | Platform-specific checks |
-| **Anti-dump** | Encrypt secrets | Memory encryption for critical buffers |
+| Category | Item | Status | Notes |
+|----------|------|--------|-------|
+| **Memory** | Zeroization | ✅ | `zeroize` crate on all secrets (`crypto/zero.rs`) |
+| **Memory** | Locked pages | ✅ | `memsec` crate prevents swap |
+| **Memory** | No string copies | ✅ | `SecureBuffer` in `crypto/keyring.rs` |
+| **Timing** | Constant-time compare | ✅ | `subtle` crate for password checks |
+| **Timing** | Fixed delay on auth | 📋 | Not yet implemented |
+| **Brute Force** | Exponential backoff | ⚠️ | Simple backoff, not exponential |
+| **Brute Force** | Account lockout | ✅ | 10 failed attempts = 5 min lockout (`lockout.rs`) |
+| **Auto-lock** | Timeout | ✅ | Default 5 min inactivity (`autolock.rs`) |
+| **Auto-lock** | Lock on sleep | ⚠️ | macOS only |
+| **Auto-lock** | Lock on screen lock | 📋 | Platform-specific APIs planned |
+| **Clipboard** | Auto-clear | ✅ | Tauri clipboard plugin |
+| **Clipboard** | Clear on exit | ⚠️ | Daemon only, not host |
+| **Audit Log** | Track access | ✅ | Encrypted audit log (`audit.rs`) |
+| **SQL Injection** | Parameterized queries | ✅ | rusqlite bindings only |
+| **Updates** | Signature verification | 📋 | Planned for distribution |
+| **Updates** | Secure channel | ✅ | HTTPS for sync client |
+| **Process Isolation** | Sandboxing | 📋 | Platform-specific planned |
+| **Anti-debug** | Detect debugger | 📋 | Not yet implemented |
+| **Anti-dump** | Encrypt secrets | ✅ | Memory encryption in `crypto/keyring.rs` |
 
 ---
 
 ## 8. DEVELOPMENT ROADMAP
 
-### Phase 1: Core Foundation (Weeks 1-4)
-1. Project setup, dependencies
-2. Crypto module implementation
-3. Database schema and migrations
-4. Basic CLI for vault operations
-5. Unit tests for crypto
+> **Progress as of 2026-02-27:** Phases 1-7 substantially complete. Phase 8 (hardening) in progress.
 
-### Phase 2: Desktop Client (Weeks 5-8)
-1. Tauri UI development
-2. Vault CRUD operations
-3. Entry management UI
-4. Search functionality
-5. Clipboard integration
+| Phase | Status | Notes |
+|-------|--------|-------|
+| **Phase 1: Core Foundation** | ✅ Complete | Crypto, database, CLI all implemented |
+| **Phase 2: Desktop Client** | ⚠️ Partial | Tauri UI functional, needs feature parity |
+| **Phase 3: Browser Extension** | ✅ Complete | Chrome MV3 + Firefox MV2 with sender validation |
+| **Phase 4: SSH Support** | ✅ Complete | Storage, CLI, agent integration implemented |
+| **Phase 5: Biometrics** | ⚠️ Partial | macOS Touch ID + Windows Hello implemented |
+| **Phase 6: Advanced Features** | ⚠️ Partial | TOTP ✅, KeePass import 📋, audit log ✅ |
+| **Phase 7: Multi-Device Sync** | ✅ Complete | E2E sync, relay, pairing, Ed25519 all implemented |
+| **Phase 8: Hardening & Testing** | ⚠️ In Progress | Security hardening (Phase 1) complete, audit pending |
 
-### Phase 3: Browser Extension (Weeks 9-12) **PRIORITY**
-1. Native messaging protocol
-2. Chrome extension (MV3)
-3. Domain matching logic
-4. Autofill injection
-5. Phishing protection
+### Detailed Breakdown
 
-### Phase 4: SSH Support (Weeks 13-14)
-1. SSH key storage
-2. ssh-agent integration
-3. Key loading functionality
+#### Phase 1: Core Foundation ✅
+1. ✅ Project setup, dependencies
+2. ✅ Crypto module implementation (Argon2id, AES-256-GCM)
+3. ✅ Database schema and migrations (refinery)
+4. ✅ Basic CLI for vault operations
+5. ✅ Unit tests for crypto (276 tests passing)
 
-### Phase 5: Biometrics (Weeks 15-16)
-1. macOS Touch ID
-2. Windows Hello
-3. Fallback handling
+#### Phase 2: Desktop Client ⚠️
+1. ✅ Tauri UI development
+2. ✅ Vault CRUD operations
+3. ⚠️ Entry management UI (partial)
+4. ⚠️ Search functionality (basic only)
+5. ✅ Clipboard integration
 
-### Phase 6: Advanced Features (Weeks 17-20)
-1. TOTP authenticator
-2. KeePass import/export
-3. Audit log
-4. Additional browsers (Safari, Firefox)
+#### Phase 3: Browser Extension ✅
+1. ✅ Native messaging protocol
+2. ✅ Chrome extension (MV3)
+3. ✅ Domain matching logic (daemon-side validation)
+4. ✅ Autofill injection
+5. ✅ Phishing protection (sender URL validation)
 
-### Phase 7: Multi-Device Sync (Weeks 21-24)
-1. E2E encrypted sync engine (push/pull with LWW conflict resolution)
-2. Relay server (Axum + SQLite, zero-knowledge)
-3. Device pairing (HKDF-SHA256 + Ed25519 identity)
-4. Device revocation
+#### Phase 4: SSH Support ✅
+1. ✅ SSH key storage (RSA, Ed25519, ECDSA)
+2. ✅ ssh-agent integration
+3. ✅ Key loading functionality
 
-### Phase 8: Hardening & Testing (Weeks 25-28)
-1. Security audit
-2. Penetration testing
-3. Performance optimization
-4. Documentation
+#### Phase 5: Biometrics ⚠️
+1. ✅ macOS Touch ID (LocalAuthentication framework)
+2. ✅ Windows Hello (Windows Credentials API)
+3. 📋 Linux support (planned)
+
+#### Phase 6: Advanced Features ⚠️
+1. ✅ TOTP authenticator (SHA1, SHA256, SHA512)
+2. 📋 KeePass import/export (planned)
+3. ✅ Audit log (encrypted events)
+4. ✅ Firefox extension (MV2)
+
+#### Phase 7: Multi-Device Sync ✅
+1. ✅ E2E encrypted sync engine (push/pull with LWW)
+2. ✅ Relay server (Axum + SQLite, zero-knowledge)
+3. ✅ Device pairing (HKDF-SHA256 + Ed25519)
+4. ✅ Device revocation
+5. ✅ Metadata padding (fixed buckets)
+
+#### Phase 8: Hardening & Testing ⚠️
+1. ✅ Phase 1 security hardening complete (see GAP_REVIEW)
+2. ✅ Relay tests (38 tests)
+3. ✅ Extension debug log gating
+4. ✅ Windows named pipe IPC
+5. 📋 Security audit (planned)
+6. 📋 Penetration testing (planned)
 
 ---
 

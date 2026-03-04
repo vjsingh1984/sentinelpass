@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<full-backup-content>
+    <!-- Exclude vault database from cloud backup for security -->
+    <exclude domain="file" path="sentinelpass_vault.db" />
+    <exclude domain="file" path="sentinelpass_vault.db-*" />
+</full-backup-content>

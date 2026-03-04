@@ -1,0 +1,67 @@
+# cbindgen configuration for iOS header generation
+
+language = "C"
+cpp_compat = true
+
+[defines]
+"target_os = ios" = "IOS_PLATFORM"
+"target_os = android" = "ANDROID_PLATFORM"
+
+[export]
+# Explicitly list items to export
+include = [
+    "SPVaultHandle",
+    "SPEntry",
+    "SPEntrySummary",
+    "SPTotpCode",
+    "SPPasswordAnalysis",
+    "SPErrorCode",
+    "sp_vault_init",
+    "sp_vault_destroy",
+    "sp_vault_is_unlocked",
+    "sp_vault_lock",
+    "sp_entry_add",
+    "sp_entry_update",
+    "sp_entry_delete",
+    "sp_entry_get_by_id",
+    "sp_entry_list_all",
+    "sp_entry_search",
+    "sp_totp_generate_code",
+    "sp_password_generate",
+    "sp_password_check_strength",
+    "sp_biometric_set_key",
+    "sp_biometric_has_key",
+    "sp_biometric_remove_key",
+    "sp_string_free",
+    "sp_bytes_free",
+]
+
+[export.rename]
+# Rename Rust types to C-compatible names
+"VaultHandle" = "SPVaultHandle"
+"Entry" = "SPEntry"
+"EntrySummary" = "SPEntrySummary"
+"TotpCode" = "SPTotpCode"
+"PasswordAnalysis" = "SPPasswordAnalysis"
+"ErrorCode" = "SPErrorCode"
+
+[fn]
+# Function naming conventions
+prefix = "sp"
+rename_args = "PascalCase"
+
+# Sort by name
+sort_by = "Name"
+
+[struct]
+# Derive eq for structs
+derive_eq = true
+
+# Generate constructor for structs
+derive_constructor = true
+
+[enum]
+# Generate enum variants with prefix
+prefix_with_name = true
+# Treat enum as a separate type
+enum_class = true

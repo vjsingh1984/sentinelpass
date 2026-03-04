@@ -1,0 +1,49 @@
+[package]
+name = "sentinelpass-mobile-bridge"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Mobile FFI/JNI bridge for SentinelPass core library"
+keywords.workspace = true
+categories.workspace = true
+
+[lib]
+crate-type = ["cdylib", "staticlib"]
+
+[features]
+default = []
+jni = ["dep:jni", "dep:lazy_static"]
+ios = []
+
+[dependencies]
+sentinelpass-core = { path = "../sentinelpass-core" }
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Encoding
+base64 = { workspace = true }
+
+# Error handling
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+
+# JNI (Android)
+jni = { version = "0.21", optional = true }
+lazy_static = { version = "1.4", optional = true }
+
+# Logging
+tracing = { workspace = true }
+
+# Time
+chrono = { workspace = true }
+
+# UUID
+uuid = { workspace = true }
+
+[build-dependencies]
+cbindgen = "0.26"

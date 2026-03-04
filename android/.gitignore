@@ -1,0 +1,27 @@
+# Android build artifacts
+.gradle/
+build/
+app/build/
+local.properties
+
+# Android generated files
+*.apk
+*.ap_
+*.aab
+
+# Gradle wrapper (optional - comment out if committed)
+# gradle/wrapper/gradle-wrapper.jar
+
+# Android Studio
+.idea/
+*.iml
+.DS_Store
+/captures
+.externalNativeBuild
+.cxx
+
+# NDK
+.obj/
+
+# Android Profiling
+*.hprof

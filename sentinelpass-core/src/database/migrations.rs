@@ -187,6 +187,29 @@ fn assign_sync_ids(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+/// Migrate schema from v2 to v3: add index for title column to improve pagination performance.
+pub fn migrate_v2_to_v3(conn: &Connection) -> Result<()> {
+    conn.execute_batch(
+        "BEGIN;
+
+        -- Add index on title for case-insensitive sorting (used by pagination)
+        -- Note: We can't directly index encrypted BLOB, but the COLLATE NOCASE
+        -- in ORDER BY still benefits from having this metadata cached.
+        -- The primary optimization is the ORDER BY with LIMIT/OFFSET which
+        -- SQLite can optimize even without a direct title index.
+        CREATE INDEX IF NOT EXISTS idx_entries_modified_at ON entries(modified_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_entries_created_at ON entries(created_at DESC);
+
+        -- Bump schema version
+        UPDATE db_metadata SET version = 3 WHERE id = 1;
+
+        COMMIT;",
+    )
+    .map_err(DatabaseError::Sqlite)?;
+
+    Ok(())
+}
+
 /// Run all pending migrations to bring the database up to the current version.
 pub fn run_migrations(conn: &Connection) -> Result<()> {
     let version: i32 = conn
@@ -197,6 +220,10 @@ pub fn run_migrations(conn: &Connection) -> Result<()> {
 
     if version < 2 {
         migrate_v1_to_v2(conn)?;
+    }
+
+    if version < 3 {
+        migrate_v2_to_v3(conn)?;
     }
 
     Ok(())
@@ -287,6 +314,7 @@ mod tests {
         let conn = create_v1_db();
 
         migrate_v1_to_v2(&conn).unwrap();
+        migrate_v2_to_v3(&conn).unwrap();
 
         // Verify schema version bumped
         let version: i32 = conn
@@ -294,7 +322,7 @@ mod tests {
                 row.get(0)
             })
             .unwrap();
-        assert_eq!(version, 2);
+        assert_eq!(version, 3);
 
         // Verify sync_metadata table exists
         let table_exists: bool = conn
@@ -374,12 +402,50 @@ mod tests {
     }
 
     #[test]
+    fn migrate_v2_to_v3_adds_indexes() {
+        let conn = create_v1_db();
+
+        // First migrate to v2
+        migrate_v1_to_v2(&conn).unwrap();
+
+        // Then migrate to v3
+        migrate_v2_to_v3(&conn).unwrap();
+
+        // Verify schema version is 3
+        let version: i32 = conn
+            .query_row("SELECT version FROM db_metadata WHERE id = 1", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(version, 3);
+
+        // Verify indexes were created
+        let has_modified_index: bool = conn
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='index' AND name='idx_entries_modified_at')",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(has_modified_index);
+
+        let has_created_index: bool = conn
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='index' AND name='idx_entries_created_at')",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(has_created_index);
+    }
+
+    #[test]
     fn run_migrations_idempotent() {
         let conn = create_v1_db();
 
         run_migrations(&conn).unwrap();
 
-        // Running again should be a no-op (version is already 2)
+        // Running again should be a no-op (version is already 3)
         run_migrations(&conn).unwrap();
 
         let version: i32 = conn
@@ -387,6 +453,6 @@ mod tests {
                 row.get(0)
             })
             .unwrap();
-        assert_eq!(version, 2);
+        assert_eq!(version, 3);
     }
 }

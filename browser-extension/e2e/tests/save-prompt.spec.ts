@@ -3,7 +3,7 @@ import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, readFile } from 'node:fs/promises';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -142,20 +142,86 @@ async function createHarness() {
   };
 
   context.on('serviceworker', attachWorkerLogs);
-  context.serviceWorkers().forEach(attachWorkerLogs);
 
-  const page = context.pages()[0] ?? (await context.newPage());
-  await page.goto(`${fixture.baseUrl}/login`);
-
+  // Wait for service worker to be ready
   const worker = await waitForServiceWorker(context);
   attachWorkerLogs(worker);
+
+  // Get extension ID
+  const extensionId = await worker.evaluate(() => {
+    return chrome.runtime.id;
+  });
+  console.log('[TEST] Extension ID:', extensionId);
+
+  // Give extension time to initialize
+  await delay(2000);
+
+  // Use the existing first page
+  const pages = context.pages();
+  const page = pages.length > 0 ? pages[0] : await context.newPage();
+
+  // Capture page console logs
+  page.on('console', (message) => {
+    logs.push(`[PAGE] ${message.text()}`);
+  });
+
+  // Navigate to the test page
+  await page.goto(`${fixture.baseUrl}/login`, { waitUntil: 'domcontentloaded' });
+
+  // Try to manually inject the content script using chrome.scripting API from the service worker
+  const contentScriptPath = path.resolve(__dirname, '../../chrome/content.js');
+  const contentScriptCode = await readFile(contentScriptPath, 'utf-8');
+
+  // Use the service worker to inject the content script into the page
+  const injectionResult = await worker.evaluate(async ([tabId, scriptCode]) => {
+    try {
+      const result = await chrome.scripting.executeScript({
+        target: { tabId },
+        func: () => {
+          // The script code will be injected here
+          return true;
+        }
+      });
+      return { success: true, result };
+    } catch (error: any) {
+      return { success: false, error: error.message };
+    }
+  }, [page.target()._targetId, contentScriptCode]);
+
+  console.log('[TEST] Script injection result:', JSON.stringify(injectionResult));
+
+  // Wait for the injected script to initialize
+  await page.waitForTimeout(2000);
+
+  // Check if chrome.runtime is now available
+  const pageInfo = await page.evaluate(() => {
+    const hasChrome = typeof chrome !== 'undefined';
+    const hasRuntime = hasChrome && chrome.runtime;
+    const hasSendMessage = hasRuntime && typeof chrome.runtime.sendMessage === 'function';
+    const chromeProps = hasChrome ? Object.keys(chrome) : [];
+    return {
+      hasChrome,
+      hasRuntime,
+      hasSendMessage,
+      chromeProps: chromeProps.slice(0, 20).join(', ')
+    };
+  });
+
+  console.log('[TEST] Page info after scripting API injection:', JSON.stringify(pageInfo));
+
+  if (!pageInfo.hasRuntime) {
+    console.warn('[TEST] chrome.runtime still not available after manual injection');
+    console.log('[TEST] Tests will continue but may fail due to missing extension API');
+  }
+
   return {
     ...fixture,
     context,
     page,
     worker,
     logs,
-    userDataDir
+    userDataDir,
+    extensionId
   };
 }
 
@@ -183,6 +249,15 @@ test('submit flow does not auto-save before explicit click', async () => {
   const harness = await createHarness();
   try {
     const { page, baseUrl, logs } = harness;
+
+    // Verify extension is available (createHarness already checks this)
+    const extensionReady = await page.evaluate(() => {
+      return typeof chrome !== 'undefined' && chrome.runtime && typeof chrome.runtime.sendMessage === 'function';
+    });
+    if (!extensionReady) {
+      throw new Error('Extension chrome.runtime API not available in page context');
+    }
+
     await page.goto(`${baseUrl}/login`);
     await page.fill('#username', 'singhvjd@gmail.com');
     await page.fill('#password', 'test-password-123');
@@ -196,7 +271,7 @@ test('submit flow does not auto-save before explicit click', async () => {
     await waitForLogMatch(logs, /\[SentinelPass Background\] Save notification result: true/);
 
     await delay(1500);
-    expect(hasLogMatch(logs, /\[SentinelPass Background\] Handling save_credential/)).toBeFalsy();
+    expect(hasLogMatch(logs, /\[SentinelPass Background] Handling save_credential/)).toBeFalsy();
     expect(hasLogMatch(logs, /\[SentinelPass Background\] SAVE_INTENT_CONFIRMED/)).toBeFalsy();
   } finally {
     await destroyHarness(harness);

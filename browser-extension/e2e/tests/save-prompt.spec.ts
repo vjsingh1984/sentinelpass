@@ -145,6 +145,12 @@ async function createHarness() {
   context.serviceWorkers().forEach(attachWorkerLogs);
 
   const page = context.pages()[0] ?? (await context.newPage());
+
+  // Capture page console logs for debugging
+  page.on('console', (message) => {
+    logs.push(`[PAGE] ${message.text()}`);
+  });
+
   await page.goto(`${fixture.baseUrl}/login`);
 
   const worker = await waitForServiceWorker(context);
@@ -182,13 +188,71 @@ async function seedPendingLogin(worker, payload) {
 test('submit flow does not auto-save before explicit click', async () => {
   const harness = await createHarness();
   try {
-    const { page, baseUrl, logs } = harness;
-    await page.goto(`${baseUrl}/login`);
+    const { page, baseUrl, logs, worker } = harness;
+
+    // Wait for content script to be fully loaded
+    await page.waitForTimeout(1000);
+
+    // Check if extension is loaded
+    const extensionInfo = await page.evaluate(() => {
+      return {
+        hasChromeAPI: typeof chrome !== 'undefined',
+        hasRuntime: typeof chrome !== 'undefined' && !!chrome.runtime,
+        hasStorage: typeof chrome !== 'undefined' && !!chrome.storage
+      };
+    });
+    console.log('[TEST] Extension info:', JSON.stringify(extensionInfo));
+
+    // Check if we're still on the login page (createHarness already navigates there)
+    const currentUrl = page.url();
+    console.log('[TEST] Current URL before test actions:', currentUrl);
+
+    // Fill form
     await page.fill('#username', 'singhvjd@gmail.com');
     await page.fill('#password', 'test-password-123');
+
+    // Check form state before submit
+    const formStateBefore = await page.evaluate(() => {
+      const form = document.querySelector('#login-form');
+      return {
+        formExists: !!form,
+        usernameValue: (document.querySelector('#username') as HTMLInputElement)?.value,
+        passwordValue: (document.querySelector('#password') as HTMLInputElement)?.value
+      };
+    });
+    console.log('[TEST] Form state before submit:', JSON.stringify(formStateBefore));
+
+    // Click submit button
     await page.click('#submit');
+
+    // Wait for navigation
     await expect(page).toHaveURL(/\/after/);
 
+    // Wait for message processing
+    await page.waitForTimeout(3000);
+
+    // Log all captured logs for debugging
+    console.log('[TEST] Total logs captured:', logs.length);
+    logs.forEach((log, index) => {
+      if (index < 50 || log.includes('[SentinelPass') || log.includes('[PAGE]')) {
+        console.log(`[TEST] Log ${index}:`, log);
+      }
+    });
+
+    // Check for specific logs
+    const hasReceivedMessageLog = logs.some((log) =>
+      log.includes('[SentinelPass Background] Received message:')
+    );
+    const hasSaveRequestLog = logs.some((log) =>
+      log.includes('[SentinelPass Background] Save request source:')
+    );
+    const hasPageLog = logs.some((log) => log.startsWith('[PAGE]'));
+
+    console.log('[TEST] Has received message log:', hasReceivedMessageLog);
+    console.log('[TEST] Has save request log:', hasSaveRequestLog);
+    console.log('[TEST] Has page logs:', hasPageLog);
+
+    // Try the wait with more debugging
     await waitForLogMatch(
       logs,
       /\[SentinelPass Background\] Save request source: (submit-button-click|submit-button-mousedown|form-submit)/

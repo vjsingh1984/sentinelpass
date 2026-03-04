@@ -76,7 +76,14 @@
       "Bash(/tmp/fix_tests.sh:*)",
       "Bash(bash /tmp/fix_tests.sh)",
       "Bash(curl:*)",
-      "Bash(gunzip:*)"
+      "Bash(gunzip:*)",
+      "Bash(xargs:*)",
+      "Bash(git fetch:*)",
+      "Bash(sw_vers:*)",
+      "Bash(tee:*)",
+      "Bash(git stash:*)",
+      "Bash(git pull:*)",
+      "Bash(git stash pop:*)"
     ]
   }
 }

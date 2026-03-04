@@ -244,7 +244,10 @@ mod tests {
             // and doesn't send any data
             let result = conn.read_message().await;
             // Should get an error (connection closed, timeout, etc.)
-            assert!(result.is_err(), "Server should fail to read when client writes oversized message");
+            assert!(
+                result.is_err(),
+                "Server should fail to read when client writes oversized message"
+            );
         });
 
         // Connect and try to send oversized message

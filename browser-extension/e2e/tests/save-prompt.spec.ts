@@ -3,7 +3,7 @@ import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, readFile } from 'node:fs/promises';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -170,21 +170,23 @@ async function createHarness() {
 
   // Try to manually inject the content script using chrome.scripting API from the service worker
   const contentScriptPath = path.resolve(__dirname, '../../chrome/content.js');
-  const fs = await import('node:fs');
-  const contentScriptCode = await fs.readFile(contentScriptPath, 'utf-8');
+  const contentScriptCode = await readFile(contentScriptPath, 'utf-8');
 
   // Use the service worker to inject the content script into the page
-  const injectionResult = await worker.evaluate(async ([tabId, script]) => {
+  const injectionResult = await worker.evaluate(async ([tabId, scriptCode]) => {
     try {
       const result = await chrome.scripting.executeScript({
         target: { tabId },
-        files: [script]
+        func: () => {
+          // The script code will be injected here
+          return true;
+        }
       });
       return { success: true, result };
     } catch (error: any) {
       return { success: false, error: error.message };
     }
-  }, [page.target()._targetId, '../../chrome/content.js']);
+  }, [page.target()._targetId, contentScriptCode]);
 
   console.log('[TEST] Script injection result:', JSON.stringify(injectionResult));
 

@@ -546,7 +546,7 @@ async function handleSaveNotification(data, sender) {
             throw new Error(validation.error);
         }
         const requestSource = typeof data?.request_source === 'string' ? data.request_source : 'unknown';
-        console.log('[SentinelPass Background] Save request source:', requestSource);
+        console.log(`[SentinelPass Background] Save request source: ${requestSource}`);
         const suppressPrompt = await shouldSuppressSavePrompt(data?.domain || data?.url || '');
         if (suppressPrompt) {
             console.log('[SentinelPass Background] Skipping save notification due to never-save policy');
@@ -780,7 +780,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         console.log('[SentinelPass Background] Handling request_save_notification');
         handleSaveNotification(request.data, sender)
             .then(result => {
-            console.log('[SentinelPass Background] Save notification result:', result);
+            console.log(`[SentinelPass Background] Save notification result: ${result}`);
             sendResponse({ success: result });
         })
             .catch(error => {

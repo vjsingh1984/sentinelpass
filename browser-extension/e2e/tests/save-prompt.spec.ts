@@ -147,10 +147,16 @@ async function createHarness() {
   const worker = await waitForServiceWorker(context);
   attachWorkerLogs(worker);
 
-  // Give extension time to fully initialize
-  await delay(3000);
+  // Get extension ID
+  const extensionId = await worker.evaluate(() => {
+    return chrome.runtime.id;
+  });
+  console.log('[TEST] Extension ID:', extensionId);
 
-  // Use the existing first page instead of creating a new one
+  // Give extension more time to fully initialize
+  await delay(5000);
+
+  // Use the existing first page
   const pages = context.pages();
   const page = pages.length > 0 ? pages[0] : await context.newPage();
 
@@ -159,19 +165,39 @@ async function createHarness() {
     logs.push(`[PAGE] ${message.text()}`);
   });
 
+  // Navigate to a blank page first to ensure clean state
+  await page.goto('about:blank');
+  await page.waitForTimeout(1000);
+
   // Navigate to the test page
   await page.goto(`${fixture.baseUrl}/login`, { waitUntil: 'domcontentloaded' });
 
-  // Wait for content script to be injected
-  await page.waitForTimeout(2000);
+  // Wait longer for content script to be injected
+  await page.waitForTimeout(5000);
 
   // Check if chrome.runtime is available
-  const hasChromeRuntime = await page.evaluate(() => {
-    return typeof chrome !== 'undefined' && chrome.runtime && typeof chrome.runtime.sendMessage === 'function';
+  const pageInfo = await page.evaluate(() => {
+    const hasChrome = typeof chrome !== 'undefined';
+    const hasRuntime = hasChrome && chrome.runtime;
+    const hasSendMessage = hasRuntime && typeof chrome.runtime.sendMessage === 'function';
+    const extensionId = hasRuntime ? chrome.runtime.id : null;
+
+    // Try to get all chrome API properties
+    const chromeProps = hasChrome ? Object.keys(chrome) : [];
+
+    return {
+      hasChrome,
+      hasRuntime,
+      hasSendMessage,
+      extensionId,
+      chromeProps: chromeProps.slice(0, 10).join(', ')
+    };
   });
 
-  if (!hasChromeRuntime) {
-    throw new Error('chrome.runtime API not available - extension content script may not be injected');
+  console.log('[TEST] Page info:', JSON.stringify(pageInfo));
+
+  if (!pageInfo.hasRuntime) {
+    throw new Error(`chrome.runtime API not available. chrome properties: ${pageInfo.chromeProps}`);
   }
 
   return {
@@ -180,7 +206,8 @@ async function createHarness() {
     page,
     worker,
     logs,
-    userDataDir
+    userDataDir,
+    extensionId
   };
 }
 

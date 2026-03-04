@@ -122,7 +122,6 @@ jobs:
         uses: ./.github/actions/setup-rust-env
         with:
           cache-key-prefix: ci-${{ matrix.os }}
-          web-build: false
 
       - name: Run tests
         run: cargo test --workspace --verbose

@@ -150,18 +150,9 @@ async function createHarness() {
   // Give extension time to fully initialize
   await delay(3000);
 
-  // Close the default blank page
+  // Use the existing first page instead of creating a new one
   const pages = context.pages();
-  for (const page of pages) {
-    try {
-      await page.close();
-    } catch {
-      // Ignore errors closing pages
-    }
-  }
-
-  // Create a new page after extension is loaded
-  const page = await context.newPage();
+  const page = pages.length > 0 ? pages[0] : await context.newPage();
 
   // Capture page console logs for debugging
   page.on('console', (message) => {

@@ -142,39 +142,45 @@ async function createHarness() {
   };
 
   context.on('serviceworker', attachWorkerLogs);
-  context.serviceWorkers().forEach(attachWorkerLogs);
 
-  // Wait for service worker to be ready before creating pages
+  // Wait for service worker to be ready
   const worker = await waitForServiceWorker(context);
   attachWorkerLogs(worker);
 
   // Give extension time to fully initialize
-  await delay(2000);
+  await delay(3000);
 
-  const page = context.pages()[0] ?? (await context.newPage());
+  // Close the default blank page
+  const pages = context.pages();
+  for (const page of pages) {
+    try {
+      await page.close();
+    } catch {
+      // Ignore errors closing pages
+    }
+  }
+
+  // Create a new page after extension is loaded
+  const page = await context.newPage();
 
   // Capture page console logs for debugging
   page.on('console', (message) => {
     logs.push(`[PAGE] ${message.text()}`);
   });
 
-  // Wait for extension to be available in page context
-  await page.goto(`${fixture.baseUrl}/login`);
+  // Navigate to the test page
+  await page.goto(`${fixture.baseUrl}/login`, { waitUntil: 'domcontentloaded' });
 
-  // Poll for chrome.runtime API availability
-  const maxWait = 10000;
-  const startWait = Date.now();
-  let hasChromeRuntime = false;
-  while (Date.now() - startWait < maxWait) {
-    hasChromeRuntime = await page.evaluate(() => {
-      return typeof chrome !== 'undefined' && chrome.runtime && typeof chrome.runtime.sendMessage === 'function';
-    });
-    if (hasChromeRuntime) break;
-    await delay(100);
-  }
+  // Wait for content script to be injected
+  await page.waitForTimeout(2000);
+
+  // Check if chrome.runtime is available
+  const hasChromeRuntime = await page.evaluate(() => {
+    return typeof chrome !== 'undefined' && chrome.runtime && typeof chrome.runtime.sendMessage === 'function';
+  });
 
   if (!hasChromeRuntime) {
-    throw new Error('chrome.runtime API not available after waiting for extension to load');
+    throw new Error('chrome.runtime API not available - extension content script may not be injected');
   }
 
   return {

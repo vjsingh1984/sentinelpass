@@ -26,11 +26,23 @@ fi
 mkdir -p target/llvm-cov
 
 echo "[rust] Running LLVM coverage (line threshold: ${MIN_LINES}%)"
+# Build with all features except x11 (requires X11 libraries not available in CI)
+FEATURES="--all-features --no-default-features"
+if [[ "$(uname)" == "Linux" ]]; then
+  # On Linux, exclude x11 feature to avoid requiring X11 libraries
+  FEATURES="$FEATURES --features sentinelpass-core/sync"
+  FEATURES="$FEATURES --features sentinelpass-core/autofill"
+  FEATURES="$FEATURES --features sentinelpass-core/ssh"
+  FEATURES="$FEATURES --features sentinelpass-core/totp"
+  FEATURES="$FEATURES --features sentinelpass-core/biometric"
+  FEATURES="$FEATURES --features sentinelpath-core/import_export"
+fi
+
 cargo llvm-cov \
   --workspace \
   --exclude sentinelpass-ui \
   --exclude sentinelpass-relay \
-  --all-features \
+  $FEATURES \
   --lcov \
   --output-path target/llvm-cov/lcov.info \
   --fail-under-lines "${MIN_LINES}" \

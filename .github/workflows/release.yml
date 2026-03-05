@@ -289,7 +289,7 @@ jobs:
   release:
     name: Create Release
     runs-on: ubuntu-latest
-    needs: [setup, bundle-smoke, native-installer-smoke]
+    needs: [setup, bundle-smoke]
     if: needs.setup.outputs.is-release == 'true'
     permissions:
       contents: write

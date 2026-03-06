@@ -179,7 +179,8 @@ jobs:
           if (Test-Path browser-extension/firefox) {
             Copy-Item -Recurse browser-extension/firefox dist/installer/root/browser-extension/
           }
-          Copy-Item README.md LICENSE dist/installer/root/
+          Copy-Item README.md dist/installer/root/
+          Copy-Item LICENSE dist/installer/root/
           Compress-Archive -Path dist/installer/root/* -DestinationPath "dist/$installerName" -Force
 
       - name: Upload package artifacts

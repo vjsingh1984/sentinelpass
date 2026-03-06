@@ -187,7 +187,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: packages-${{ matrix.platform }}
-          path: dist/*
+          path: |
+            dist/*.tar.gz
+            dist/*.zip
           retention-days: 7
 
   # Bundle smoke tests
@@ -266,12 +268,13 @@ jobs:
           web-build: true
 
       - name: Install Tauri CLI
-        run: cargo install tauri-cli --version "^2.0.0" --locked
-
-      - name: Install Tauri CLI
-        run: cargo install tauri-cli --version "^2.0.0" --locked
+        shell: bash
+        run: |
+          cargo install tauri-cli --version "^2.0.0" --locked
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
 
       - name: Build Tauri bundles
+        shell: bash
         env:
           TAURI_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
           TAURI_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
@@ -280,6 +283,7 @@ jobs:
           cargo tauri build --verbose
 
       - name: List bundle outputs
+        shell: bash
         run: |
           echo "Tauri bundle outputs:"
           find sentinelpass-ui/target/release/bundle -type f || echo "No bundles found"
@@ -288,14 +292,23 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: tauri-bundles-${{ matrix.platform }}
-          path: sentinelpass-ui/target/release/bundle/*
+          path: |
+            sentinelpass-ui/target/release/bundle/*.deb
+            sentinelpass-ui/target/release/bundle/*.AppImage
+            sentinelpass-ui/target/release/bundle/*.dmg
+            sentinelpass-ui/target/release/bundle/*.app
+            sentinelpass-ui/target/release/bundle/msi/*.msi
+            sentinelpass-ui/target/release/bundle/nsis/*.exe
+            sentinelpass-ui/target/release/bundle/update/*.msi
+            sentinelpass-ui/target/release/bundle/update/*.exe
+          if-no-files-found: ignore
           retention-days: 7
 
   # Create GitHub release and upload assets
   release:
     name: Create Release
     runs-on: ubuntu-latest
-    needs: [setup, bundle-smoke]
+    needs: [setup, bundle-smoke, native-installer-smoke]
     if: needs.setup.outputs.is-release == 'true'
     permissions:
       contents: write
@@ -375,8 +388,10 @@ jobs:
           sha256sum -c sha256sums.txt
           \`\`\`"
       - name: Upload release assets
+        shell: bash
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           VERSION="${{ needs.setup.outputs.version }}"
-          find release-assets -type f -exec gh release upload "v${VERSION}" {} + --clobber
+          cd release-assets
+          gh release upload "v${VERSION}" --clobber $(find . -type f)

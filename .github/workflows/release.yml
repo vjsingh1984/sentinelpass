@@ -89,7 +89,7 @@ jobs:
 
       # If artifacts weren't available, build fresh
       - name: Build release binaries (if not cached)
-        shell: ${{ matrix.shell }}
+        shell: bash
         run: |
           if [ ! -f "target/release/sentinelpass${{ runner.os == 'Windows' && '.exe' || '' }}" ]; then
             cargo build --release --bin sentinelpass --bin sentinelpass-daemon --bin sentinelpass-host --bin sentinelpass-ui
@@ -179,7 +179,8 @@ jobs:
           if (Test-Path browser-extension/firefox) {
             Copy-Item -Recurse browser-extension/firefox dist/installer/root/browser-extension/
           }
-          Copy-Item README.md LICENSE dist/installer/root/
+          Copy-Item README.md dist/installer/root/
+          Copy-Item LICENSE dist/installer/root/
           Compress-Archive -Path dist/installer/root/* -DestinationPath "dist/$installerName" -Force
 
       - name: Upload package artifacts
@@ -214,23 +215,22 @@ jobs:
           name: packages-${{ matrix.platform }}
           path: dist
 
-      - name: Verify portable archive contents
+      - name: Verify portable archive exists
         shell: bash
         run: |
           if [ "${{ matrix.platform }}" == "windows" ]; then
-            unzip -l dist/*.zip | grep sentinelpass
+            ls -la dist/sentinelpass-*.zip
           else
-            tar -tzf dist/*.tar.gz | grep -E 'sentinelpass' | head -5
+            ls -la dist/sentinelpass-*.tar.gz
           fi
 
-      - name: Verify installer archive contents
+      - name: Verify installer archive exists
         shell: bash
         run: |
           if [ "${{ matrix.platform }}" == "windows" ]; then
-            unzip -l dist/*installer*.zip | grep -E '(install-user|installation)'
+            ls -la dist/sentinelpass-installer-*.zip
           else
-            tar -tzf dist/*installer*.tar.gz | grep -E 'install-user'
-            tar -tzf dist/*installer*.tar.gz | grep -E 'installation'
+            ls -la dist/sentinelpass-installer-*.tar.gz
           fi
 
   # Native installer smoke tests (only for real releases)

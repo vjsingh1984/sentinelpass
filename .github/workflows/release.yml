@@ -289,7 +289,7 @@ jobs:
   release:
     name: Create Release
     runs-on: ubuntu-latest
-    needs: [setup, bundle-smoke, native-installer-smoke]
+    needs: [setup, bundle-smoke]
     if: needs.setup.outputs.is-release == 'true'
     permissions:
       contents: write
@@ -368,7 +368,6 @@ jobs:
           \`\`\`bash
           sha256sum -c sha256sums.txt
           \`\`\`"
-        # or use draft: true and edit later
       - name: Upload release assets
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

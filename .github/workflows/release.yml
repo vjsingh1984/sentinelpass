@@ -263,7 +263,7 @@ jobs:
         uses: ./.github/actions/setup-rust-env
         with:
           cache-key-prefix: installer-${{ matrix.platform }}
-          web-build: false
+          web-build: true
 
       - name: Install Tauri CLI
         run: cargo install tauri-cli --version "^2.0.0" --locked
@@ -376,4 +376,4 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           VERSION="${{ needs.setup.outputs.version }}"
-          gh release upload "v${VERSION}" release-assets/* --clobber
+          find release-assets -type f -exec gh release upload "v${VERSION}" {} + --clobber

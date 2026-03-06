@@ -219,19 +219,19 @@ jobs:
         shell: bash
         run: |
           if [ "${{ matrix.platform }}" == "windows" ]; then
-            unzip -l dist/*.zip | grep sentinelpass
+            unzip -l dist/sentinelpass-*.zip | grep sentinelpass
           else
-            tar -tzf dist/*.tar.gz | grep -E 'sentinelpass' | head -5
+            tar -tzf dist/sentinelpass-*.tar.gz | grep -E 'sentinelpass' | head -5
           fi
 
       - name: Verify installer archive contents
         shell: bash
         run: |
           if [ "${{ matrix.platform }}" == "windows" ]; then
-            unzip -l dist/*installer*.zip | grep -E '(install-user|installation)'
+            unzip -l dist/sentinelpass-installer-*.zip | grep -E '(install-user|installation)'
           else
-            tar -tzf dist/*installer*.tar.gz | grep -E 'install-user'
-            tar -tzf dist/*installer*.tar.gz | grep -E 'installation'
+            tar -tzf dist/sentinelpass-installer-*.tar.gz | grep -E 'install-user'
+            tar -tzf dist/sentinelpass-installer-*.tar.gz | grep -E 'installation'
           fi
 
   # Native installer smoke tests (only for real releases)

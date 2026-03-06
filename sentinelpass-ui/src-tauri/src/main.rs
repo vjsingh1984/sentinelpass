@@ -278,7 +278,7 @@ async fn unlock_daemon_with_password(master_password: &str) -> std::result::Resu
     .await?;
 
     match response {
-        IpcMessage::UnlockVaultResponse { success, error } if success => Ok(()),
+        IpcMessage::UnlockVaultResponse { success, error: _ } if success => Ok(()),
         IpcMessage::UnlockVaultResponse {
             success: false,
             error,

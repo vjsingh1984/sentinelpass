@@ -89,7 +89,6 @@ jobs:
 
       # If artifacts weren't available, build fresh
       - name: Build release binaries (if not cached)
-        shell: ${{ matrix.shell }}
         run: |
           if [ ! -f "target/release/sentinelpass${{ runner.os == 'Windows' && '.exe' || '' }}" ]; then
             cargo build --release --bin sentinelpass --bin sentinelpass-daemon --bin sentinelpass-host --bin sentinelpass-ui

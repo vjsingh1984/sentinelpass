@@ -368,7 +368,6 @@ jobs:
           \`\`\`bash
           sha256sum -c sha256sums.txt
           \`\`\`"
-        # or use draft: true and edit later
       - name: Upload release assets
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

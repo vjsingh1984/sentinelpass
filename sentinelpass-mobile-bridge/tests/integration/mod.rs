@@ -18,9 +18,10 @@ mod integration_tests {
     #[test]
     fn test_error_code_success() {
         // Test success error code
-        use sentinelpass_mobile_bridge::BridgeError;
-        let error = BridgeError::ok();
-        assert_eq!(format!("{:?}", error).contains("Success"), true);
+        use sentinelpass_mobile_bridge::ErrorCode;
+        let error = ErrorCode::Success;
+        assert_eq!(error, ErrorCode::Success);
+        assert_eq!(format!("{}", error), "Success");
     }
 
     // MARK: - Memory Management Tests

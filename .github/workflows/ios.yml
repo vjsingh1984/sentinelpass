@@ -51,7 +51,7 @@ jobs:
           cargo build --package sentinelpass-mobile-bridge --target aarch64-apple-ios --release
 
       - name: Run mobile bridge integration tests
-        run: cargo test --package sentinelpass-mobile-bridge --test integration --target aarch64-apple-ios-sim
+        run: cargo test --package sentinelpass-mobile-bridge --test integration_test --target aarch64-apple-ios-sim
 
       - name: Upload iOS static library (simulator)
         uses: actions/upload-artifact@v4

@@ -264,7 +264,7 @@ jobs:
       - name: Run integration tests
         run: |
           # Run mobile bridge integration tests
-          cargo test --package sentinelpass-mobile-bridge --test integration --target x86_64-linux-android -- --nocapture
+          cargo test --package sentinelpass-mobile-bridge --test integration_test --target x86_64-linux-android -- --nocapture
 
       - name: Test JNI bridge API
         working-directory: sentinelpass-mobile-bridge

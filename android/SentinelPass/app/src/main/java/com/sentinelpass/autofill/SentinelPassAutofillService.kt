@@ -2,6 +2,7 @@ package com.sentinelpass.autofill
 
 import android.annotation.TargetApi
 import android.os.Build
+import android.os.CancellationSignal
 import android.service.autofill.AutofillService
 import android.service.autofill.FillCallback
 import android.service.autofill.FillRequest
@@ -23,6 +24,7 @@ class SentinelPassAutofillService : AutofillService() {
      */
     override fun onFillRequest(
         request: FillRequest,
+        cancellationSignal: CancellationSignal,
         callback: FillCallback
     ) {
         // Stub implementation - to be implemented with full vault integration

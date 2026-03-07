@@ -78,11 +78,13 @@ fun MainScreen(
                 )
             }
         }
-    ) { padding ->
+    ) { innerPadding ->
         NavHost(
             navController = navController,
             startDestination = "entries",
-            modifier = Modifier.fillMaxSize()
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(innerPadding)
         ) {
             composable("entries") {
                 EntriesListScreen(

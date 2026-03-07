@@ -32,7 +32,7 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: aarch64-apple-ios, aarch64-apple-ios-sim, x86_64-apple-ios-sim
+          targets: aarch64-apple-ios, aarch64-apple-ios-sim, aarch64-apple-ios-sim
 
       - name: Setup Rust cache
         uses: Swatinem/rust-cache@v2
@@ -42,7 +42,7 @@ jobs:
       - name: Build iOS static library
         run: |
           # Build for iOS simulator (x86_64)
-          cargo build --package sentinelpass-mobile-bridge --target x86_64-apple-ios-sim --release
+          cargo build --package sentinelpass-mobile-bridge --target aarch64-apple-ios-sim --release
 
           # Build for iOS simulator (arm64)
           cargo build --package sentinelpass-mobile-bridge --target aarch64-apple-ios-sim --release
@@ -51,14 +51,14 @@ jobs:
           cargo build --package sentinelpass-mobile-bridge --target aarch64-apple-ios --release
 
       - name: Run mobile bridge unit tests
-        run: cargo test --package sentinelpass-mobile-bridge --target x86_64-apple-ios-sim
+        run: cargo test --package sentinelpass-mobile-bridge --target aarch64-apple-ios-sim
 
       - name: Upload iOS static library (simulator)
         uses: actions/upload-artifact@v4
         with:
           name: ios-lib-simulator
           path: |
-            target/x86_64-apple-ios-sim/release/libsentinelpass_mobile_bridge.a
+            target/aarch64-apple-ios-sim/release/libsentinelpass_mobile_bridge.a
             target/aarch64-apple-ios-sim/release/libsentinelpass_mobile_bridge.a
           retention-days: 7
 
@@ -82,7 +82,7 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: x86_64-apple-ios-sim
+          targets: aarch64-apple-ios-sim
 
       - name: Setup Rust cache
         uses: Swatinem/rust-cache@v2
@@ -93,7 +93,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: ios-lib-simulator
-          path: target/x86_64-apple-ios-sim/release
+          path: target/aarch64-apple-ios-sim/release
 
       - name: Run Swift unit tests
         run: |
@@ -120,7 +120,7 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: x86_64-apple-ios-sim
+          targets: aarch64-apple-ios-sim
 
       - name: Setup Rust cache
         uses: Swatinem/rust-cache@v2
@@ -131,7 +131,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: ios-lib-simulator
-          path: target/x86_64-apple-ios-sim/release
+          path: target/aarch64-apple-ios-sim/release
 
       - name: Boot iOS Simulator
         run: |
@@ -190,7 +190,7 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: x86_64-apple-ios-sim
+          targets: aarch64-apple-ios-sim
 
       - name: Setup Rust cache
         uses: Swatinem/rust-cache@v2
@@ -201,12 +201,12 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: ios-lib-simulator
-          path: target/x86_64-apple-ios-sim/release
+          path: target/aarch64-apple-ios-sim/release
 
       - name: Run integration tests
         run: |
           # Run mobile bridge integration tests
-          cargo test --package sentinelpass-mobile-bridge --test integration --target x86_64-apple-ios-sim -- --nocapture
+          cargo test --package sentinelpass-mobile-bridge --test integration --target aarch64-apple-ios-sim -- --nocapture
 
       - name: Test bridge API
         run: |
@@ -235,7 +235,7 @@ jobs:
           # Compile and run test
           clang -o test_bridge test_bridge.c \
             -I./include \
-            -L./target/x86_64-apple-ios-sim/release \
+            -L./target/aarch64-apple-ios-sim/release \
             -lsentinelpass_mobile_bridge \
             -framework Security \
             -framework LocalAuthentication \

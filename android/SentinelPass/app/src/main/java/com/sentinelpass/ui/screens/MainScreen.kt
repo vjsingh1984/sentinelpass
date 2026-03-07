@@ -84,7 +84,10 @@ fun MainScreen(
             startDestination = "entries",
             modifier = Modifier
                 .fillMaxSize()
-                .padding(innerPadding)
+                .padding(
+                    top = innerPadding.calculateTopPadding(),
+                    bottom = innerPadding.calculateBottomPadding()
+                )
         ) {
             composable("entries") {
                 EntriesListScreen(

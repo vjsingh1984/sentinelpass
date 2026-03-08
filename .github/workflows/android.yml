@@ -53,12 +53,12 @@ jobs:
 
       - name: Build JNI libraries
         env:
-          AARCH64_LINUX_ANDROID_AR: ${{ format('{0}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar', env.ANDROID_NDK_HOME) }}
-          AARCH64_LINUX_ANDROID_LINKER: ${{ format('{0}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android34-clang', env.ANDROID_NDK_HOME) }}
-          ARMV7_LINUX_ANDROIDEABI_AR: ${{ format('{0}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar', env.ANDROID_NDK_HOME) }}
-          ARMV7_LINUX_ANDROIDEABI_LINKER: ${{ format('{0}/toolchains/llvm/prebuilt/linux-x86_64/bin/armv7-linux-androideabi34-clang', env.ANDROID_NDK_HOME) }}
-          X86_64_LINUX_ANDROID_AR: ${{ format('{0}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar', env.ANDROID_NDK_HOME) }}
-          X86_64_LINUX_ANDROID_LINKER: ${{ format('{0}/toolchains/llvm/prebuilt/linux-x86_64/bin/x86_64-linux-android34-clang', env.ANDROID_NDK_HOME) }}
+          CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER: ${{ format('{0}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android34-clang', env.ANDROID_NDK_HOME) }}
+          CARGO_TARGET_ARMV7_LINUX_ANDROIDEABI_LINKER: ${{ format('{0}/toolchains/llvm/prebuilt/linux-x86_64/bin/armv7-linux-androideabi34-clang', env.ANDROID_NDK_HOME) }}
+          CARGO_TARGET_X86_64_LINUX_ANDROID_LINKER: ${{ format('{0}/toolchains/llvm/prebuilt/linux-x86_64/bin/x86_64-linux-android34-clang', env.ANDROID_NDK_HOME) }}
+          AR_aarch64_linux_android: ${{ format('{0}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar', env.ANDROID_NDK_HOME) }}
+          AR_armv7_linux_androideabi: ${{ format('{0}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar', env.ANDROID_NDK_HOME) }}
+          AR_x86_64_linux_android: ${{ format('{0}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar', env.ANDROID_NDK_HOME) }}
         run: |
           # Build for each architecture
           for target in aarch64-linux-android armv7-linux-androideabi x86_64-linux-android; do

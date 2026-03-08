@@ -83,7 +83,8 @@
       "Bash(tee:*)",
       "Bash(git stash:*)",
       "Bash(git pull:*)",
-      "Bash(git stash pop:*)"
+      "Bash(git stash pop:*)",
+      "Bash(python3:*)"
     ]
   }
 }

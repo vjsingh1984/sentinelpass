@@ -33,5 +33,11 @@ let package = Package(
                 .process("Assets.xcassets"),
             ]
         ),
+        // Test target
+        .testTarget(
+            name: "SentinelPassTests",
+            dependencies: ["SentinelPassApp"],
+            path: "SentinelPassTests"
+        ),
     ]
 )

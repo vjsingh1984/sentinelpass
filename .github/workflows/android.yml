@@ -52,9 +52,14 @@ jobs:
           echo "NDK_TOOLCHAIN_DIR=$NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin" >> $GITHUB_ENV
 
       - name: Build JNI libraries
+        env:
+          AARCH64_LINUX_ANDROID_AR: ${{ format('{0}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar', env.ANDROID_NDK_HOME) }}
+          AARCH64_LINUX_ANDROID_LINKER: ${{ format('{0}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android34-clang', env.ANDROID_NDK_HOME) }}
+          ARMV7_LINUX_ANDROIDEABI_AR: ${{ format('{0}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar', env.ANDROID_NDK_HOME) }}
+          ARMV7_LINUX_ANDROIDEABI_LINKER: ${{ format('{0}/toolchains/llvm/prebuilt/linux-x86_64/bin/armv7-linux-androideabi34-clang', env.ANDROID_NDK_HOME) }}
+          X86_64_LINUX_ANDROID_AR: ${{ format('{0}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar', env.ANDROID_NDK_HOME) }}
+          X86_64_LINUX_ANDROID_LINKER: ${{ format('{0}/toolchains/llvm/prebuilt/linux-x86_64/bin/x86_64-linux-android34-clang', env.ANDROID_NDK_HOME) }}
         run: |
-          NDK_ROOT=$ANDROID_NDK_HOME
-          export PATH="$NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH"
           # Build for each architecture
           for target in aarch64-linux-android armv7-linux-androideabi x86_64-linux-android; do
             cargo build --package sentinelpass-mobile-bridge --target $target --release

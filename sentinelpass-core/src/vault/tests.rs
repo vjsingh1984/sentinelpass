@@ -282,7 +282,7 @@ fn test_ssh_key_encrypt_decrypt_roundtrip() {
     let decrypted =
         crate::ssh::SshKey::decrypt_private_key(&dek, &encrypted, &nonce, &auth_tag).unwrap();
 
-    assert_eq!(decrypted, private_key);
+    assert_eq!(decrypted.as_str(), private_key);
 }
 
 #[test]
@@ -2645,4 +2645,57 @@ fn entity_ssh_totp_fields_are_sealed_v2() {
     drop(vault);
     let _ = fs::remove_file(&path);
     let _ = fs::remove_file(crate::vault::epoch_guard::sidecar_path(&path));
+}
+
+// --- WBS-308 / SR-CRYPTO-004: secret redaction & zeroizing shape ---------
+
+/// `Zeroizing`'s own `Debug` PRINTS the inner string, so `Entry`'s Debug
+/// must be hand-redacted. If anyone re-derives `Debug` on `Entry` (or makes
+/// `password` a bare `String` again), the password reappears in `{:?}` and
+/// this test fails.
+#[test]
+fn entry_debug_never_contains_the_password() {
+    let entry = Entry {
+        entry_id: Some(1),
+        title: "Bank Portal".to_string(),
+        username: "user1".to_string(),
+        password: "s3cr3t-p4ssw0rd".to_string().into(),
+        url: Some("https://bank.example".to_string()),
+        notes: Some("note".to_string()),
+        credential_type: crate::CredentialType::Password,
+        created_at: chrono::Utc::now(),
+        modified_at: chrono::Utc::now(),
+        favorite: false,
+    };
+
+    let dbg = format!("{entry:?}");
+    assert!(
+        !dbg.contains("s3cr3t-p4ssw0rd"),
+        "Entry Debug leaked the password: {dbg}"
+    );
+    assert!(
+        dbg.contains("[REDACTED]"),
+        "redaction marker expected: {dbg}"
+    );
+}
+
+/// Type-level guard: `Entry.password` must remain a zeroizing type. The
+/// helper call below only compiles while the field is `Zeroizing<String>`.
+#[test]
+fn entry_password_field_is_zeroizing() {
+    fn require_zeroing_string(_: &Zeroizing<String>) {}
+
+    let entry = Entry {
+        entry_id: None,
+        title: "t".to_string(),
+        username: "u".to_string(),
+        password: "p".to_string().into(),
+        url: None,
+        notes: None,
+        credential_type: crate::CredentialType::Password,
+        created_at: chrono::Utc::now(),
+        modified_at: chrono::Utc::now(),
+        favorite: false,
+    };
+    require_zeroing_string(&entry.password);
 }

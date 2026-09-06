@@ -385,12 +385,16 @@ impl VaultManager {
                     )
                     .map(|z| z.to_string())
                 } else {
+                    // Deliberate export boundary: `export_ssh_private_key`
+                    // hands the PEM to the caller's output path, which owns
+                    // the plaintext from here (WBS-308 audit).
                     crate::ssh::SshKey::decrypt_private_key(
                         dek,
                         &private_key_encrypted,
                         &nonce,
                         &auth_tag,
                     )
+                    .map(|z| z.to_string())
                 }
             }
             Err(_) => Err(PasswordManagerError::NotFound(format!(

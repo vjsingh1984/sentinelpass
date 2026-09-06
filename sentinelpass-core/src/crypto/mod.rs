@@ -11,6 +11,7 @@
 
 pub mod aad;
 pub mod cipher;
+pub mod envelope;
 pub mod health;
 pub mod kdf;
 pub mod keyring;
@@ -19,6 +20,11 @@ pub mod strength;
 
 pub use aad::{AadContext, AadContextBuilder, EnvelopePurpose, ObjectType, AAD_VERSION};
 pub use cipher::{decrypt_entry, encrypt_entry, DataEncryptionKey, EncryptedEntry};
+pub use envelope::{
+    open_envelope, open_envelope_relaxed_epoch, seal_envelope, seal_envelope_with_nonce, Envelope,
+    ALG_A256GCM, ENVELOPE_MAGIC, ENVELOPE_MAGIC_STR, ENVELOPE_VERSION, MAX_CIPHERTEXT_BYTES,
+    MAX_ENVELOPE_BYTES, SUPPORTED_CRYPTO_VERSION,
+};
 pub use health::{
     HealthScore, PasswordHealth, PasswordHealthAnalyzer, PasswordStrengthInfo,
     StrengthDistribution, VaultHealthSummary, WeakPasswordEntry,
@@ -64,6 +70,14 @@ pub enum CryptoError {
 
     #[error("Random number generation failed: {0}")]
     RandomFailed(String),
+
+    #[error(
+        "Unsupported format version (found {found}, this build supports exactly \
+         {supported}) — the data was written by a different version of \
+         SentinelPass. Fail-closed per ADR-005: no automatic conversion exists \
+         in either direction; repair is verified restore only"
+    )]
+    UnsupportedCryptoVersion { found: i32, supported: i32 },
 
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),

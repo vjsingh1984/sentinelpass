@@ -70,11 +70,25 @@ pub struct SyncEntryBlob {
 /// Decrypted credential data transported over sync.
 use zeroize::Zeroizing;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Credential data transported over sync. The payload is always DEK-encrypted
+/// for transport (`encrypt_for_sync`), but the in-memory decrypted struct
+/// holds the plaintext — `password` is zeroize-on-drop (WBS-308 /
+/// SR-CRYPTO-004), and Debug is HAND-WRITTEN to redact it (`Zeroizing`'s own
+/// `Debug` prints the inner string; see also [`SshKeyPayload`]).
+///
+/// Field-choice note (audit): `title`/`username`/`url` stay plain `String` —
+/// they are identity metadata, needed unredacted in debug output, and are not
+/// secret-class. `notes` is user free text that MAY embed secrets; it stays
+/// plain for now (redacting it would break existing debug flows) and is
+/// tracked in docs/SECRET_LIFETIME_AUDIT.md as a follow-up decision.
+#[derive(Clone, Serialize, Deserialize)]
 pub struct CredentialPayload {
     pub title: String,
     pub username: String,
-    pub password: String,
+    /// PLAINTEXT password, zeroize-on-drop. Serializes identically to
+    /// `String` (zeroize's `serde` feature is transparent), so the v0.8.x
+    /// wire shape is unchanged.
+    pub password: Zeroizing<String>,
     #[serde(default)]
     pub credential_type: CredentialType,
     pub url: Option<String>,
@@ -83,6 +97,23 @@ pub struct CredentialPayload {
     pub domains: Vec<DomainPayload>,
     pub created_at: i64,
     pub modified_at: i64,
+}
+
+impl std::fmt::Debug for CredentialPayload {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CredentialPayload")
+            .field("title", &self.title)
+            .field("username", &self.username)
+            .field("password", &"[REDACTED]")
+            .field("credential_type", &self.credential_type)
+            .field("url", &self.url)
+            .field("notes", &self.notes)
+            .field("favorite", &self.favorite)
+            .field("domains", &self.domains)
+            .field("created_at", &self.created_at)
+            .field("modified_at", &self.modified_at)
+            .finish()
+    }
 }
 
 /// Domain mapping within a credential sync payload.
@@ -317,7 +348,7 @@ mod tests {
         let payload = CredentialPayload {
             title: "Test".to_string(),
             username: "user".to_string(),
-            password: "pass".to_string(),
+            password: Zeroizing::new("pass".to_string()),
             credential_type: CredentialType::Password,
             url: Some("https://example.com".to_string()),
             notes: None,
@@ -335,6 +366,7 @@ mod tests {
 
         assert_eq!(payload.title, deserialized.title);
         assert_eq!(payload.domains.len(), deserialized.domains.len());
+        assert_eq!(payload.password.as_str(), deserialized.password.as_str());
     }
 }
 
@@ -404,5 +436,63 @@ mod wire_compat_tests {
         // And Debug never prints the key material.
         let dbg = format!("{:?}", payload);
         assert!(!dbg.contains("KEYMATERIAL"), "Debug must redact");
+    }
+
+    /// WBS-308 / SR-CRYPTO-004: `password` moved to `Zeroizing<String>` —
+    /// the zeroize crate's `serde` feature is transparent, so the wire
+    /// shape MUST stay byte-identical to a plain `String` field. A v0.8.x
+    /// peer (whose struct field is `String`) must be able to deserialize
+    /// our push payloads unchanged.
+    #[test]
+    fn credential_password_serializes_as_plain_wire_string() {
+        let payload = CredentialPayload {
+            title: "t".into(),
+            username: "u".into(),
+            password: Zeroizing::new("hunter2".into()),
+            credential_type: CredentialType::Password,
+            url: None,
+            notes: None,
+            favorite: false,
+            domains: vec![],
+            created_at: 1,
+            modified_at: 2,
+        };
+        let text = String::from_utf8(serde_json::to_vec(&payload).unwrap()).unwrap();
+        assert!(
+            text.contains(r#""password":"hunter2""#),
+            "password must serialize as a plain JSON string (v0.8.x wire compat): {text}"
+        );
+        // And the plain-String peer shape deserializes back.
+        let peer_json = r#"{"title":"t","username":"u","password":"hunter2","credential_type":"password","url":null,"notes":null,"favorite":false,"domains":[],"created_at":1,"modified_at":2}"#;
+        let round_tripped: CredentialPayload = serde_json::from_str(peer_json).unwrap();
+        assert_eq!(round_tripped.password.as_str(), "hunter2");
+    }
+
+    /// WBS-308 / SR-CRYPTO-004: Debug over the payload must not leak the
+    /// password (`Zeroizing`'s derived `Debug` PRINTS the inner value —
+    /// the struct therefore hand-writes a redacting `Debug`).
+    #[test]
+    fn credential_payload_debug_redacts_password() {
+        let payload = CredentialPayload {
+            title: "Bank".into(),
+            username: "user1".into(),
+            password: Zeroizing::new("s3cr3t-p4ssw0rd".into()),
+            credential_type: CredentialType::Password,
+            url: Some("https://bank.example".into()),
+            notes: None,
+            favorite: false,
+            domains: vec![],
+            created_at: 1,
+            modified_at: 2,
+        };
+        let dbg = format!("{:?}", payload);
+        assert!(
+            !dbg.contains("s3cr3t-p4ssw0rd"),
+            "Debug must not contain the password: {dbg}"
+        );
+        assert!(
+            dbg.contains("[REDACTED]"),
+            "redaction marker expected: {dbg}"
+        );
     }
 }

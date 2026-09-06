@@ -1624,7 +1624,13 @@ impl VaultManager {
 }
 
 /// A password entry
-#[derive(Debug, Clone, Serialize, Deserialize)]
+///
+/// Debug is HAND-WRITTEN to redact the password (CLAUDE.md NEVER 1: log
+/// secrets). `Zeroizing`'s own `Debug` impl is transparent — it prints the
+/// INNER string — so the derived `Debug` this struct previously had would
+/// emit the plaintext password on the first accidental `{:?}` (WBS-308 /
+/// SR-CRYPTO-004).
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Entry {
     pub entry_id: Option<i64>,
     pub title: String,
@@ -1637,6 +1643,23 @@ pub struct Entry {
     pub created_at: DateTime<Utc>,
     pub modified_at: DateTime<Utc>,
     pub favorite: bool,
+}
+
+impl std::fmt::Debug for Entry {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Entry")
+            .field("entry_id", &self.entry_id)
+            .field("title", &self.title)
+            .field("username", &self.username)
+            .field("password", &"[REDACTED]")
+            .field("url", &self.url)
+            .field("notes", &self.notes)
+            .field("credential_type", &self.credential_type)
+            .field("created_at", &self.created_at)
+            .field("modified_at", &self.modified_at)
+            .field("favorite", &self.favorite)
+            .finish()
+    }
 }
 
 /// Read-only vault metadata (schema version, key epoch) obtainable

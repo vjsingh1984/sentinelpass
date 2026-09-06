@@ -117,15 +117,16 @@ pub fn collect_pending_credential_blobs(
             cred,
         });
         let open = |purpose, blob: &Vec<u8>| {
+            // Zeroizing plaintext straight from the envelope open (WBS-308);
+            // identity metadata fields are unguarded explicitly below.
             crate::vault::envelope_ops::open_entry_field_with_identity(dek, identity, purpose, blob)
-                .map(|z| z.to_string())
         };
         let (title, username, password) = match (
             open(crate::crypto::aad::EnvelopePurpose::Summary, &title_blob),
             open(crate::crypto::aad::EnvelopePurpose::Summary, &username_blob),
             open(crate::crypto::aad::EnvelopePurpose::Secret, &password_blob),
         ) {
-            (Ok(t), Ok(u), Ok(p)) => (t, u, p),
+            (Ok(t), Ok(u), Ok(p)) => (t.to_string(), u.to_string(), p),
             (Err(e), _, _) | (_, Err(e), _) | (_, _, Err(e)) => {
                 tracing::warn!(entry_id, error = %e, "push: skipping unreadable entry");
                 continue;
@@ -136,11 +137,11 @@ pub fn collect_pending_credential_blobs(
         // WHOLE row (partial application would silently lose fields).
         let url = url_blob
             .filter(|b| !b.is_empty())
-            .map(|b| open(crate::crypto::aad::EnvelopePurpose::Secret, &b))
+            .map(|b| open(crate::crypto::aad::EnvelopePurpose::Secret, &b).map(|z| z.to_string()))
             .transpose();
         let notes = notes_blob
             .filter(|b| !b.is_empty())
-            .map(|b| open(crate::crypto::aad::EnvelopePurpose::Secret, &b))
+            .map(|b| open(crate::crypto::aad::EnvelopePurpose::Secret, &b).map(|z| z.to_string()))
             .transpose();
         let (url, notes) = match (url, notes) {
             (Ok(u), Ok(n)) => (u, n),
@@ -163,8 +164,12 @@ pub fn collect_pending_credential_blobs(
             modified_at,
         };
 
-        let payload_json = serde_json::to_vec(&payload)
-            .map_err(|e| DatabaseError::Serialization(e.to_string()))?;
+        // The serialized payload carries the plaintext secret(s) until
+        // encryption — zeroized on drop (WBS-308 / SR-CRYPTO-004).
+        let payload_json = Zeroizing::new(
+            serde_json::to_vec(&payload)
+                .map_err(|e| DatabaseError::Serialization(e.to_string()))?,
+        );
 
         let encrypted =
             encrypt_for_sync(dek, &payload_json).map_err(crate::PasswordManagerError::Crypto)?;
@@ -283,7 +288,6 @@ pub fn collect_pending_ssh_key_blobs(
             )
         } else {
             crate::ssh::SshKey::decrypt_private_key(dek, &private_key_encrypted, &nonce, &auth_tag)
-                .map(Zeroizing::new)
         };
         let private_key = match private_key {
             Ok(pk) => pk,
@@ -319,8 +323,12 @@ pub fn collect_pending_ssh_key_blobs(
             modified_at,
         };
 
-        let payload_json = serde_json::to_vec(&payload)
-            .map_err(|e| DatabaseError::Serialization(e.to_string()))?;
+        // The serialized payload carries the plaintext secret(s) until
+        // encryption — zeroized on drop (WBS-308 / SR-CRYPTO-004).
+        let payload_json = Zeroizing::new(
+            serde_json::to_vec(&payload)
+                .map_err(|e| DatabaseError::Serialization(e.to_string()))?,
+        );
 
         let encrypted =
             encrypt_for_sync(dek, &payload_json).map_err(crate::PasswordManagerError::Crypto)?;
@@ -438,7 +446,6 @@ pub fn collect_pending_totp_blobs(
             )
         } else {
             crate::totp::decrypt_totp_secret(dek, &secret_encrypted, &nonce, &auth_tag)
-                .map(Zeroizing::new)
         };
         let secret = match secret {
             Ok(s) => s,
@@ -471,8 +478,12 @@ pub fn collect_pending_totp_blobs(
             parent_credential_sync_id,
         };
 
-        let payload_json = serde_json::to_vec(&payload)
-            .map_err(|e| DatabaseError::Serialization(e.to_string()))?;
+        // The serialized payload carries the plaintext secret(s) until
+        // encryption — zeroized on drop (WBS-308 / SR-CRYPTO-004).
+        let payload_json = Zeroizing::new(
+            serde_json::to_vec(&payload)
+                .map_err(|e| DatabaseError::Serialization(e.to_string()))?,
+        );
 
         let encrypted =
             encrypt_for_sync(dek, &payload_json).map_err(crate::PasswordManagerError::Crypto)?;

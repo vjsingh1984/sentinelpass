@@ -194,9 +194,8 @@ pub(crate) fn open_object_field(
         // v1 legacy path: context-free bincode EncryptedEntry.
         let encrypted: crate::crypto::EncryptedEntry = bincode::deserialize(blob)
             .map_err(|e| PasswordManagerError::from(DatabaseError::Serialization(e.to_string())))?;
-        let s = crate::crypto::cipher::decrypt_to_string(dek, &encrypted)
-            .map_err(PasswordManagerError::from)?;
-        Ok(Zeroizing::new(s))
+        crate::crypto::cipher::decrypt_to_string(dek, &encrypted)
+            .map_err(PasswordManagerError::from)
     }
 }
 

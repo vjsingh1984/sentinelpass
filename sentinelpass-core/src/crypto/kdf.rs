@@ -39,6 +39,7 @@ use argon2::{
 use rand::rngs::OsRng;
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
+use zeroize::{Zeroize, Zeroizing};
 
 /// Hard minimum memory cost, KiB (64 MB-class floor). For numeric
 /// context from published guidance: OWASP's Argon2id minimum is 19,456
@@ -236,10 +237,18 @@ pub fn derive_master_key(password: &[u8], params: &KdfParams) -> Result<[u8; 32]
         .hash_password(password, &salt)
         .map_err(|e| CryptoError::KdfFailed(format!("Hashing failed: {}", e)))?;
 
-    // Extract the output hash
-    let hash_bytes = password_hash.hash.map(|h| h.as_bytes().to_vec());
-    let hash_bytes =
-        hash_bytes.ok_or_else(|| CryptoError::KdfFailed("No hash output".to_string()))?;
+    // Extract the output hash. The intermediate byte buffer IS derived key
+    // material (WBS-308 / SR-CRYPTO-004): it is zeroized on drop instead of
+    // being silently discarded. (The argon2 crate's own `PasswordHash`/
+    // `Output` cannot be zeroized here — upstream type, no mutable access;
+    // tracked in docs/SECRET_LIFETIME_AUDIT.md as a follow-up.)
+    let hash_bytes = Zeroizing::new(
+        password_hash
+            .hash
+            .as_ref()
+            .map(|h| h.as_bytes().to_vec())
+            .ok_or_else(|| CryptoError::KdfFailed("No hash output".to_string()))?,
+    );
 
     if hash_bytes.len() < 32 {
         return Err(CryptoError::KdfFailed(format!(
@@ -272,14 +281,20 @@ pub fn verify_master_password(
     expected_key: &[u8; 32],
 ) -> Result<()> {
     // Derive the key from the provided password
-    let derived_key = derive_master_key(password, params)?;
+    let mut derived_key = derive_master_key(password, params)?;
 
     // Constant-time comparison
     use subtle::ConstantTimeEq;
     let derived_key_ref = &derived_key as &[u8];
     let expected_key_ref = expected_key as &[u8];
 
-    if derived_key_ref.ct_eq(expected_key_ref).into() {
+    let matched = bool::from(derived_key_ref.ct_eq(expected_key_ref));
+
+    // The freshly derived key is wiped before any return path (WBS-308):
+    // it must not outlive the comparison in stack memory.
+    derived_key.zeroize();
+
+    if matched {
         // Add fixed delay to prevent timing attacks
         std::thread::sleep(std::time::Duration::from_millis(200));
         Ok(())

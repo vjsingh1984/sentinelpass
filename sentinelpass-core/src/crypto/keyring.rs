@@ -366,15 +366,21 @@ impl KeyHierarchy {
         let mut ciphertext_with_tag = wrapped.wrapped_dek.clone();
         ciphertext_with_tag.extend_from_slice(&wrapped.auth_tag);
 
-        let dek_bytes = cipher
-            .decrypt(
-                &nonce,
-                aes_gcm::aead::Payload {
-                    msg: ciphertext_with_tag.as_ref(),
-                    aad: aad.unwrap_or(&[]),
-                },
-            )
-            .map_err(|_| CryptoError::AuthenticationFailed)?;
+        // The unwrapped DEK is raw key material (WBS-308 / SR-CRYPTO-004):
+        // the plaintext buffer is zeroized on drop, covering both the
+        // success path (after the copy into the fixed-size key below) and
+        // the length-mismatch error path.
+        let dek_bytes = Zeroizing::new(
+            cipher
+                .decrypt(
+                    &nonce,
+                    aes_gcm::aead::Payload {
+                        msg: ciphertext_with_tag.as_ref(),
+                        aad: aad.unwrap_or(&[]),
+                    },
+                )
+                .map_err(|_| CryptoError::AuthenticationFailed)?,
+        );
 
         if dek_bytes.len() != 32 {
             return Err(CryptoError::DecryptionFailed(format!(
@@ -383,11 +389,11 @@ impl KeyHierarchy {
             )));
         }
 
-        let dek_array: [u8; 32] = dek_bytes
-            .try_into()
-            .map_err(|_| CryptoError::DecryptionFailed("Invalid DEK format".to_string()))?;
+        let mut dek_array = [0u8; 32];
+        dek_array.copy_from_slice(&dek_bytes);
 
-        Ok(DataEncryptionKey::from_bytes(&mut { dek_array }))
+        // `from_bytes` zeroizes the stack array after copying into the key.
+        Ok(DataEncryptionKey::from_bytes(&mut dek_array))
     }
 }
 

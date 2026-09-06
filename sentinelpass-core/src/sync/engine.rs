@@ -80,13 +80,15 @@ fn resolve_sync_secret(
     legacy_ct: Option<&[u8]>,
     legacy_nonce: Option<&[u8]>,
     legacy_auth_tag: Option<&[u8]>,
-    decrypt_v1: impl Fn(&[u8], &[u8], &[u8]) -> Result<String>,
+    // WBS-308: v1 decryptors return zeroizing secrets, matching the v2
+    // envelope path.
+    decrypt_v1: impl Fn(&[u8], &[u8], &[u8]) -> Result<Zeroizing<String>>,
 ) -> Result<Zeroizing<String>> {
     if !plaintext.is_empty() {
-        return Ok(Zeroizing::new(plaintext.to_string()));
+        return Ok(plaintext.to_string().into());
     }
     match (legacy_ct, legacy_nonce, legacy_auth_tag) {
-        (Some(ct), Some(nonce), Some(tag)) => Ok(Zeroizing::new(decrypt_v1(ct, nonce, tag)?)),
+        (Some(ct), Some(nonce), Some(tag)) => decrypt_v1(ct, nonce, tag),
         _ => Err(PasswordManagerError::InvalidInput(
             "sync payload carries neither the current plaintext field nor the complete \
              legacy secret shape"

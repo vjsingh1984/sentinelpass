@@ -101,7 +101,7 @@ pub const AAD_VERSION: u32 = 1;
 /// may someday see less-trusted input (debugging tools, stored-metadata
 /// introspection). ADR-005's "hard decode limits" applies here too, not
 /// just to the durable envelope format WBS-305 will define.
-const MAX_AAD_BYTES: usize = 4096;
+pub(crate) const MAX_AAD_BYTES: usize = 4096;
 
 impl AadContext {
     /// Encode to the canonical AAD bytes fed to AES-256-GCM as associated
@@ -142,7 +142,11 @@ impl AadContext {
                 "AAD context exceeds the maximum size ({MAX_AAD_BYTES} bytes)"
             )));
         }
-        reject_if_too_deep(bytes, MAX_JSON_DEPTH)?;
+        if json_depth_exceeds(bytes, MAX_JSON_DEPTH) {
+            return Err(PasswordManagerError::InvalidInput(format!(
+                "AAD context exceeds the maximum nesting depth ({MAX_JSON_DEPTH})"
+            )));
+        }
         serde_json::from_slice(bytes)
             .map_err(|e| PasswordManagerError::InvalidInput(format!("malformed AAD context: {e}")))
     }
@@ -258,14 +262,16 @@ impl AadContextBuilder {
     }
 }
 
-/// Pre-parse structural depth guard (ADR-005's "fixed depth cap"): counts
+/// Pre-parse structural depth scan (ADR-005's "fixed depth cap"): counts
 /// `{`/`[` vs `}`/`]` nesting outside of JSON string literals (backslash
 /// escapes respected so a brace inside a quoted string never counts).
-/// Rejects before any JSON parsing/allocation happens, independent of
-/// whatever internal recursion guard `serde_json` itself may or may not
-/// apply — this cap is OUR contract, not an implementation detail borrowed
-/// from a dependency.
-fn reject_if_too_deep(bytes: &[u8], max_depth: usize) -> Result<()> {
+/// Pure predicate, shared with the envelope module (review round 1 of
+/// WBS-304, finding 9: the escape-tracking loop is the security-sensitive
+/// logic — one copy, per-module caps and error mapping). Rejects before
+/// any JSON parsing/allocation happens, independent of whatever internal
+/// recursion guard `serde_json` itself may or may not apply — this cap is
+/// OUR contract, not an implementation detail borrowed from a dependency.
+pub(crate) fn json_depth_exceeds(bytes: &[u8], max_depth: usize) -> bool {
     let mut depth: usize = 0;
     let mut in_string = false;
     let mut escaped = false;
@@ -286,16 +292,14 @@ fn reject_if_too_deep(bytes: &[u8], max_depth: usize) -> Result<()> {
             b'{' | b'[' => {
                 depth += 1;
                 if depth > max_depth {
-                    return Err(PasswordManagerError::InvalidInput(format!(
-                        "AAD context exceeds the maximum nesting depth ({max_depth})"
-                    )));
+                    return true;
                 }
             }
             b'}' | b']' => depth = depth.saturating_sub(1),
             _ => {}
         }
     }
-    Ok(())
+    false
 }
 
 #[cfg(test)]
@@ -493,7 +497,7 @@ mod tests {
         // (not a real AadContext — vault/object only ever hold canonical
         // UUID strings) exercises it directly.
         let payload = br#"{"note":"{{{{{{{{{{{{"}"#;
-        assert!(reject_if_too_deep(payload, MAX_JSON_DEPTH).is_ok());
+        assert!(!json_depth_exceeds(payload, MAX_JSON_DEPTH));
     }
 
     #[test]

@@ -2273,3 +2273,376 @@ mod wbs312_review_gaps {
         let _ = fs::remove_dir_all(&dir);
     }
 }
+
+// ---------------------------------------------------------------------------
+// WBS-304 second half: entry-field envelope adoption (dual-read, v2 writes).
+// ---------------------------------------------------------------------------
+
+mod wbs304_adoption {
+    use super::*;
+    use crate::crypto::ENVELOPE_MAGIC;
+    use std::fs;
+
+    fn temp_vault(name: &str) -> std::path::PathBuf {
+        let path = std::env::temp_dir().join(format!(
+            "sp-wbs304-{}-{}.db",
+            name,
+            uuid::Uuid::new_v4().simple()
+        ));
+        let _ = fs::remove_file(&path);
+        let _ = fs::remove_file(crate::vault::epoch_guard::sidecar_path(&path));
+        path
+    }
+
+    fn cleanup(path: &std::path::Path) {
+        let _ = fs::remove_file(path);
+        let _ = fs::remove_file(crate::vault::epoch_guard::sidecar_path(path));
+    }
+
+    fn sample_entry(title: &str, secret: &str) -> Entry {
+        Entry {
+            entry_id: None,
+            title: title.to_string(),
+            username: "user@example.com".to_string(),
+            password: secret.to_string().into(),
+            url: Some("https://example.com".to_string()),
+            notes: Some("top secret notes".to_string()),
+            credential_type: CredentialType::Password,
+            created_at: Utc::now(),
+            modified_at: Utc::now(),
+            favorite: false,
+        }
+    }
+
+    /// New rows seal ALL sensitive fields as v2 envelopes (SPENV magic),
+    /// and the full public API round-trips them.
+    #[test]
+    fn new_entries_are_sealed_as_v2_envelopes() {
+        let path = temp_vault("v2writes");
+        let vault = VaultManager::create(&path, b"correct-horse-battery").unwrap();
+        let entry_id = vault.add_entry(&sample_entry("Bank", "hunter2")).unwrap();
+
+        // Every sensitive column on the row now carries an SPENV document.
+        {
+            let db = vault.lock_db().unwrap();
+            for col in ["title", "username", "password", "url", "notes"] {
+                let blob: Vec<u8> = db
+                    .conn()
+                    .query_row(
+                        &format!("SELECT {col} FROM entries WHERE entry_id = ?1"),
+                        rusqlite::params![entry_id],
+                        |r| r.get(0),
+                    )
+                    .unwrap();
+                assert!(
+                    blob.starts_with(ENVELOPE_MAGIC),
+                    "{col} column must be a v2 envelope, got {} bytes",
+                    blob.len()
+                );
+            }
+        }
+
+        let fetched = vault.get_entry(entry_id).unwrap();
+        assert_eq!(fetched.title, "Bank");
+        assert_eq!(fetched.username, "user@example.com");
+        assert_eq!(fetched.password.as_str(), "hunter2");
+        assert_eq!(fetched.url.as_deref(), Some("https://example.com"));
+        assert_eq!(fetched.notes.as_deref(), Some("top secret notes"));
+        // Summaries decrypt too (list path).
+        let summaries = vault.list_entries().unwrap();
+        assert_eq!(summaries.len(), 1);
+        assert_eq!(summaries[0].title, "Bank");
+        drop(vault);
+        cleanup(&path);
+    }
+
+    /// Legacy v1 rows (context-free bincode blobs) still read via the
+    /// dual-read fallback — a pre-adoption vault opens unchanged.
+    #[test]
+    fn legacy_v1_rows_read_through_the_fallback() {
+        let path = temp_vault("v1row");
+        let vault = VaultManager::create(&path, b"correct-horse-battery").unwrap();
+        let dek = vault.key_hierarchy.dek().unwrap().clone();
+
+        // Hand-insert a v1-shaped row (context-free bincode blobs), the
+        // exact shape every pre-WBS-304 row has.
+        let title_enc = crate::crypto::cipher::encrypt_string(&dek, "Legacy Site").unwrap();
+        let user_enc = crate::crypto::cipher::encrypt_string(&dek, "legacy@example.com").unwrap();
+        let pass_enc = crate::crypto::cipher::encrypt_string(&dek, "legacy-pass").unwrap();
+        let ser = |e: &[u8]| bincode::serialize(e).unwrap();
+        let ser_entry = |e: &crate::crypto::EncryptedEntry| bincode::serialize(e).unwrap();
+        let entry_id = {
+            let db = vault.lock_db().unwrap();
+            db.conn()
+                .execute(
+                    "INSERT INTO entries (vault_id, title, username, password, credential_type,
+                        entry_nonce, auth_tag, created_at, modified_at, favorite, sync_id)
+                     VALUES (1, ?1, ?2, ?3, 'password', ?4, ?5, strftime('%s','now'),
+                             strftime('%s','now'), 0, NULL)",
+                    rusqlite::params![
+                        ser_entry(&title_enc),
+                        ser_entry(&user_enc),
+                        ser_entry(&pass_enc),
+                        ser(&title_enc.nonce),
+                        ser(&title_enc.auth_tag),
+                    ],
+                )
+                .unwrap();
+            db.conn().last_insert_rowid()
+        };
+
+        let fetched = vault.get_entry(entry_id).unwrap();
+        assert_eq!(fetched.title, "Legacy Site");
+        assert_eq!(fetched.password.as_str(), "legacy-pass");
+
+        // Updating a v1 row keeps it v1 (rows are never mixed-format;
+        // bulk conversion is WBS-404's migration).
+        let mut updated = fetched;
+        updated.title = "Legacy Renamed".to_string();
+        vault.update_entry(entry_id, &updated).unwrap();
+        {
+            let db = vault.lock_db().unwrap();
+            let blob: Vec<u8> = db
+                .conn()
+                .query_row(
+                    "SELECT password FROM entries WHERE entry_id = ?1",
+                    rusqlite::params![entry_id],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert!(!blob.starts_with(ENVELOPE_MAGIC), "v1 row must stay v1");
+        }
+        assert_eq!(vault.get_entry(entry_id).unwrap().title, "Legacy Renamed");
+        drop(vault);
+        cleanup(&path);
+    }
+
+    /// THE adoption acceptance property: swapping a valid v2 password blob
+    /// between two entries of the same vault is REFUSED — the envelope's
+    /// identity no longer matches the row it was planted in.
+    #[test]
+    fn cross_entry_blob_swap_is_refused() {
+        let path = temp_vault("swap");
+        let vault = VaultManager::create(&path, b"correct-horse-battery").unwrap();
+        let id_a = vault
+            .add_entry(&sample_entry("Entry A", "password-a"))
+            .unwrap();
+        let id_b = vault
+            .add_entry(&sample_entry("Entry B", "password-b"))
+            .unwrap();
+
+        let blob_a: (Vec<u8>, Option<String>) = {
+            let db = vault.lock_db().unwrap();
+            db.conn()
+                .query_row(
+                    "SELECT password, sync_id FROM entries WHERE entry_id = ?1",
+                    rusqlite::params![id_a],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )
+                .unwrap()
+        };
+        {
+            let db = vault.lock_db().unwrap();
+            db.conn()
+                .execute(
+                    "UPDATE entries SET password = ?1 WHERE entry_id = ?2",
+                    rusqlite::params![blob_a.0, id_b],
+                )
+                .unwrap();
+        }
+
+        // A still opens (untouched).
+        assert_eq!(
+            vault.get_entry(id_a).unwrap().password.as_str(),
+            "password-a"
+        );
+        // B now carries A's blob: the identity mismatch (different
+        // sync_id) must be caught structurally.
+        let err = vault.get_entry(id_b).unwrap_err();
+        assert!(
+            err.to_string().contains("moved or swapped") || err.to_string().contains("identity"),
+            "expected the relocation refusal, got: {err}"
+        );
+        drop(vault);
+        cleanup(&path);
+    }
+
+    /// A v2 envelope on a row whose sync_id was NULLed must REFUSE —
+    /// absence of identity on a v2 blob means tamper, not fallback
+    /// (adoption review, finding 10: this branch was declared load-bearing
+    /// in the module docs but pinned by no test; simplifying the fallback
+    /// to treat missing sync_id as must-be-v1 passed the whole suite).
+    #[test]
+    fn v2_blob_on_nulled_sync_id_refuses() {
+        let path = temp_vault("nullsid");
+        let vault = VaultManager::create(&path, b"correct-horse-battery").unwrap();
+        let entry_id = vault.add_entry(&sample_entry("Bank", "hunter2")).unwrap();
+
+        {
+            let db = vault.lock_db().unwrap();
+            db.conn()
+                .execute(
+                    "UPDATE entries SET sync_id = NULL WHERE entry_id = ?1",
+                    rusqlite::params![entry_id],
+                )
+                .unwrap();
+        }
+
+        match vault.get_entry(entry_id) {
+            Err(e) => assert!(
+                e.to_string().contains("no stable identity"),
+                "expected the NULL-sync_id refusal, got: {e}"
+            ),
+            Ok(_) => panic!("v2 blob with NULL sync_id must refuse, not fall back to v1"),
+        }
+        drop(vault);
+        cleanup(&path);
+    }
+
+    /// Master-password rotation does not disturb entry envelopes: the DEK
+    /// is rotation-invariant and the entry open path takes the epoch from
+    /// the authenticated document (relaxed-epoch policy).
+    #[test]
+    fn entries_survive_master_password_rotation() {
+        let path = temp_vault("rotate");
+        let vault = VaultManager::create(&path, b"first-password-11").unwrap();
+        let entry_id = vault.add_entry(&sample_entry("Bank", "hunter2")).unwrap();
+        drop(vault);
+
+        let mut vault = VaultManager::open(&path, b"first-password-11").unwrap();
+        vault
+            .change_master_password(b"first-password-11", b"second-password-22")
+            .unwrap();
+        assert_eq!(vault.key_epoch().unwrap(), 2);
+
+        let fetched = vault.get_entry(entry_id).unwrap();
+        assert_eq!(fetched.password.as_str(), "hunter2");
+        assert_eq!(fetched.title, "Bank");
+        drop(vault);
+        cleanup(&path);
+    }
+}
+
+/// WBS-304 adoption: registry entities, SSH keys, and TOTP secrets seal
+/// v2 envelopes bound to (vault_uuid, object identity, type, epoch).
+#[test]
+fn entity_ssh_totp_fields_are_sealed_v2() {
+    use crate::registry::{Criticality, EntityKind};
+    use std::fs;
+    let path = std::env::temp_dir().join(format!(
+        "sp-wbs304-classes-{}.db",
+        uuid::Uuid::new_v4().simple()
+    ));
+    let _ = fs::remove_file(&path);
+    let _ = fs::remove_file(crate::vault::epoch_guard::sidecar_path(&path));
+
+    let vault = VaultManager::create(&path, b"correct-horse-battery").unwrap();
+
+    // Entity: create → v2 name/notes blobs → list decrypts.
+    let entity = vault
+        .create_entity(
+            "prod-broker",
+            EntityKind::Broker,
+            Criticality::High,
+            Some("trading account"),
+            None,
+        )
+        .unwrap();
+    {
+        let db = vault.lock_db().unwrap();
+        let name_blob: Vec<u8> = db
+            .conn()
+            .query_row(
+                "SELECT name FROM entities WHERE entity_id = ?1",
+                rusqlite::params![entity.entity_id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(crate::vault::envelope_ops::is_envelope_blob(&name_blob));
+    }
+    let entities = vault.list_entities().unwrap();
+    assert_eq!(entities.len(), 1);
+    assert_eq!(entities[0].name, "prod-broker");
+    assert_eq!(entities[0].notes.as_deref(), Some("trading account"));
+
+    // SSH key: plaintext add → v2 private-key blob → export round-trips.
+    let key_id = vault
+        .add_ssh_key_plaintext(
+            "deploy-key".into(),
+            None,
+            crate::ssh::SshKeyType::Ed25519,
+            None,
+            "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI... test".into(),
+            "-----BEGIN OPENSSH PRIVATE KEY-----test-----END OPENSSH PRIVATE KEY-----".into(),
+            "SHA256:testfp".into(),
+        )
+        .unwrap();
+    {
+        let db = vault.lock_db().unwrap();
+        let blob: Vec<u8> = db
+            .conn()
+            .query_row(
+                "SELECT private_key_encrypted FROM ssh_keys WHERE key_id = ?1",
+                rusqlite::params![key_id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(crate::vault::envelope_ops::is_envelope_blob(&blob));
+        let sync_id: Option<String> = db
+            .conn()
+            .query_row(
+                "SELECT sync_id FROM ssh_keys WHERE key_id = ?1",
+                rusqlite::params![key_id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(sync_id.is_some(), "new ssh rows must carry a sync_id");
+    }
+    let exported = vault.export_ssh_private_key(key_id).unwrap();
+    assert!(exported.contains("BEGIN OPENSSH PRIVATE KEY"));
+
+    // TOTP: add against an entry → v2 secret blob → code generates.
+    let entry_id = vault
+        .add_entry(&Entry {
+            entry_id: None,
+            title: "totp entry".into(),
+            username: "u".into(),
+            password: "p".to_string().into(),
+            url: None,
+            notes: None,
+            credential_type: CredentialType::Password,
+            created_at: Utc::now(),
+            modified_at: Utc::now(),
+            favorite: false,
+        })
+        .unwrap();
+    vault
+        .add_totp_secret(
+            entry_id,
+            "JBSWY3DPEHPK3PXP",
+            crate::totp::TotpAlgorithm::Sha1,
+            6,
+            30,
+            None,
+            None,
+        )
+        .unwrap();
+    {
+        let db = vault.lock_db().unwrap();
+        let blob: Vec<u8> = db
+            .conn()
+            .query_row(
+                "SELECT secret_encrypted FROM totp_secrets WHERE entry_id = ?1",
+                rusqlite::params![entry_id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(crate::vault::envelope_ops::is_envelope_blob(&blob));
+    }
+    let code = vault.generate_totp_code(entry_id).unwrap();
+    assert_eq!(code.code.len(), 6);
+
+    drop(vault);
+    let _ = fs::remove_file(&path);
+    let _ = fs::remove_file(crate::vault::epoch_guard::sidecar_path(&path));
+}

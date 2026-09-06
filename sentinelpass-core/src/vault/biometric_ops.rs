@@ -97,6 +97,7 @@ impl VaultManager {
             audit_logger,
             epoch_sidecar,
             vault_uuid,
+            session_epoch: std::sync::atomic::AtomicI64::new(snapshot.key_epoch),
         };
 
         if let Some(ref logger) = vault_manager.audit_logger {

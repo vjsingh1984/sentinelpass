@@ -81,6 +81,18 @@ impl VaultManager {
             return Err(PasswordManagerError::VaultLocked);
         }
 
+        // Validate the peer-signed epoch BEFORE any durable write: a
+        // 0/negative epoch adopted and THEN refused here would leave a
+        // fully-adopted vault behind a "pairing failed" message, and its
+        // key_epoch=0 would trip the rollback guard at the next open
+        // (gate review, finding 2).
+        if bootstrap.key_epoch < 1 {
+            return Err(PasswordManagerError::InvalidInput(format!(
+                "pairing bootstrap carries an invalid key epoch ({}) — refusing",
+                bootstrap.key_epoch
+            )));
+        }
+
         let imported_kdf: KdfParams = bincode::deserialize(&bootstrap.kdf_params_blob)
             .map_err(|e| DatabaseError::Serialization(e.to_string()))?;
         // Accept both the current 4-field wrap shape and the legacy
@@ -220,6 +232,10 @@ impl VaultManager {
         // against imported disk state: any write in that session produced
         // ciphertext nothing could ever decrypt).
         self.key_hierarchy = imported_hierarchy;
+        // Session epoch cache follows the adopted vault's epoch (validated
+        // above, before the durable adoption).
+        self.session_epoch
+            .store(bootstrap.key_epoch, std::sync::atomic::Ordering::Relaxed);
 
         // Pair-join deliberately adopts the origin vault's epoch and key
         // material: rebase the epoch high-water sidecar to the imported

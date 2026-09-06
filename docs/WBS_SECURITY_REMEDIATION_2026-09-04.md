@@ -345,7 +345,146 @@ AAD decisions come from the ADRs; WPs below assume the ADR-004/005 direction.
 - **Deliverables:** `crypto/envelope.rs` (new) + vault encrypt/decrypt paths.
 - **Tests:** P: roundtrip; golden vectors. N: cross-field/record/vault/type/purpose/
   tombstone/version/epoch substitution all fail authentication.
-- **Migration:** v1 records re-encrypted only via 404. **Est:** 5d · **Status:** Proposed.
+- **Migration:** v1 records re-encrypted only via 404. **Est:** 5d ·
+  **Status:** In Progress (2026-09-05) — format module DONE: `crypto/envelope.rs`
+  self-describing bounded JSON document (magic pre-scan before parsing, 4 MiB
+  doc cap, depth cap, exact-length base64 nonce/tag, 1 MiB ct cap, typed-struct
+  decode); the embedded `AadContext`'s canonical bytes are the GCM AAD, so
+  every identity substitution breaks the tag (tested: vault/object/purpose/
+  type/schema/epoch/tombstone/ct/DEK all fail authentication; version+alg fail
+  closed with typed errors; duplicate keys rejected; top-level crypto_version
+  must agree with the authenticated context copy — drift refuses). Per-field
+  plaintext maximums enforced at seal (policy bound under the global cap).
+  Round-1 adversarial review of the format module: core binding property
+  verified EMPIRICALLY (parse→re-encode injective on identity — integer
+  respellings rejected by serde_json, enums exact-tag, base64 strict-
+  canonical; no panic path; nonce freshness per seal). 10 findings
+  addressed: (1) authenticated context.crypto_version now gated against
+  SUPPORTED_CRYPTO_VERSION on BOTH seal and open (ADR-005 fail-closed for
+  future scheme bumps, not just envelope_version); (2) THE structural fix —
+  open_envelope now takes the EXPECTED context (from the trusted DB row),
+  derives the GCM AAD from it, and cross-checks the parsed document context
+  against it BEFORE GCM: whole-envelope relocation between rows is refused
+  by the SIGNATURE, not by adopter diligence (regression-tested); (3)
+  UnsupportedCryptoVersion Display reworded direction-neutral ("found X,
+  supports exactly Y" — the old text claimed "newer version, upgrade" even
+  for downgrades/tamper); (4) WBS-313 citation corrected (see that entry);
+  (5) substitution needles are full key:value patterns; (6) true byte-exact
+  golden vector via seal_envelope_with_nonce (fixed DEK+nonce; also the
+  WBS-305 seal-parity hook, documented as test/golden-only); (7) ct cap now
+  declared-length BEFORE decode, and the 4 KiB AAD size contract enforced
+  on the envelope path; (8) deny_unknown_fields on the document + unknown-
+  key rejection test; module docs state the SEMANTIC (not byte-level)
+  binding guarantee; (9) depth scanner deduplicated into aad::
+  json_depth_exceeds (one copy of the escape-tracking logic); (10) magic
+  field enforced post-parse, derived from one spelling.
+  ADOPTION (entry fields) DONE (2026-09-05): `vault/envelope_ops.rs` routes
+  every entry field (title/username = summary purpose; password/url/notes =
+  secret purpose) through the envelope. New rows seal v2 bound to
+  (vault_uuid, sync_id, purpose, type, schema/crypto versions, epoch) —
+  `sync_id` (generated on every add) is the stable object identity, so no
+  schema change was needed. Reads are dual (SPENV magic → v2 against row
+  identity, else v1 bincode); v1 rows never mix formats on update (row-level
+  policy; bulk conversion is WBS-404). Registry equality/sweep/posture paths
+  route through the same dual-read (entity fields remain v1 until adopted).
+  CROSS-EPOCH policy: entry envelopes use `open_envelope_relaxed_epoch` —
+  the DEK is rotation-invariant, so pre-rotation entries must open
+  post-rotation; the epoch stays tag-bound (authenticated from the
+  document), only not required to equal the reader's current epoch.
+  Rotation-variant classes (key slots) use strict open. Adoption tests (4):
+  v2 magic on all five columns + roundtrip, legacy v1 row read + update
+  stays v1, CROSS-ENTRY blob swap refused (the relocation property, proven
+  end-to-end at the vault API), rotation survival. Found+fixed during
+  adoption: the epoch-override in open_envelope_impl ran AFTER the AAD
+  derivation (every rotated-vault read failed auth — caught by the
+  rotation test, ordering fixed + commented); the registry sweep/overview
+  deadlocked re-locking key_epoch under the held DB Mutex (epoch now
+  fetched once from the held guard and threaded through `*_with_epoch`
+  variants).
+  ADOPTION ROUND-1 ADVERSARIAL REVIEW addressed (2026-09-05, 10 findings —
+  the relaxed-epoch policy, sync_id stability, zero-fill safety, no-half-v2
+  reachability, dual-read fail-closedness, deadlock-fix completeness,
+  update TOCTOU convergence, and registry_on_add/update plaintext flow all
+  verified SOUND against the actual code): (1) CRITICAL — the sync push
+  collector still decrypted v1-only, so every new v2 entry permanently
+  aborted the whole push; the collector now dual-reads against
+  (vault_uuid from db_metadata, row sync_id); (2) CRITICAL — the AAD bound
+  the DB CURRENT_SCHEMA_VERSION, so the next routine schema bump would
+  auto-migrate forward and then refuse every v2 entry as tampered; entry
+  envelopes now bind a dedicated ENTRY_ENVELOPE_SCHEMA constant that moves
+  only with the entry-identity contract; (3) CRITICAL — sync pull-apply
+  wrote v1 blobs over synced rows (silent downgrade, re-propagated to all
+  peers by the sync trigger); apply now seals v2 under the local identity;
+  (4) get_entry's audit hint logged the raw title column — harmless v1
+  mojibake, but v2 made it the full envelope JSON (vault/entry UUIDs,
+  epoch, ciphertext) in the plaintext audit log; now logs the decrypted
+  title; (5) seal caps raised to 64 KiB summary / 2 MiB secret (the
+  original 4 KiB/256 KiB would abort imports of legacy vaults mid-file);
+  (6) field opens return Zeroizing<String>; (7)+(8) per-field key_epoch()
+  re-derivation (a full metadata SELECT + two bincode deserializes per
+  field, and the deadlock source) replaced by a session-epoch cache on
+  VaultManager (AtomicI64; set at create/open, updated at rotation and
+  pair-join commit points; seal-staleness is self-healing under relaxed
+  reads) — the *_with_epoch threading and its dead seal variant deleted;
+  (9) sweep refusal rows now skip-and-warn with entry_id + a failed count
+  on SweepReport instead of aborting the backfill anonymously; (10) the
+  v2-blob-on-NULL-sync_id refusal branch is now pinned by a test. Known
+  residuals: sync_id ownership is by convention (dedicated object_uuid
+  column at WBS-404); imports commit per-entry (partial state on abort is
+  pre-existing); seal_envelope_with_nonce remains crate-visible for
+  golden vectors.
+  ALL OBJECT CLASSES ADOPTED (2026-09-05): registry entities (name/notes
+  seal v2 against the entity_id PRIMARY KEY; load_entities dual-reads;
+  membership labels remain v1 pending entity-schema work), SSH private
+  keys (add decrypts the incoming v1 components and re-seals v2 under a
+  fresh sync_id; export dual-reads), and TOTP secrets (add/upsert seals v2
+  against the row's OWN stable sync_id; code generation dual-reads and
+  re-normalizes). Sync SSH/TOTP payloads now carry PLAINTEXT (the whole
+  payload is DEK-encrypted for transport) with each device sealing under
+  its OWN identity on apply — passing local envelopes through would
+  transplant them with the wrong identity; sync fixtures now hold real
+  DEK-encrypted material. KEY SLOTS: deliberately NOT converted to SPENV —
+  they are already identity-bound through the ADR-004 slot scheme
+  (recovery slots carry full vault/slot/type/epoch AAD; password slots
+  bind the epoch as wrap AAD), and conversion would churn recovery
+  cryptography for zero security gain.
+  FINAL REVIEW PASS COMPLETE (2026-09-06, 8 parallel angles over the
+  whole adoption; lead aggregator lost to API rate limits — angle reports
+  were each self-verified against the working tree and fixed directly).
+  SYNC CORRECTNESS: push collectors are per-row skip-and-warn (one
+  corrupt pending row no longer permanently wedges push AND pull);
+  pull-apply is per-blob skip-and-warn with the cursor advancing (no
+  more poison-pill pages); SSH/TOTP wire payloads carry PLAINTEXT with
+  TRUE v0.8.x wire backward compatibility (old field names
+  private_key_encrypted/nonce/auth_tag deserialize via serde defaults +
+  aliases, resolve_sync_secret decrypts with the shared DEK, and both
+  apply arms seal the RESOLVED plaintext — an empty-string-sealing
+  wrong-variable drift in the SSH UPDATE branch was caught and fixed);
+  TOTP apply warns-and-skips when the parent credential hasn't landed;
+  TOTP upsert now writes sync_id = excluded.sync_id (a legacy
+  NULL-sync_id row re-added can no longer strand a v2 envelope with no
+  stored identity) and SELECT errors propagate (no silent masking);
+  TOTP v2 seals the NORMALIZED secret (add-time base32 validation
+  restored). LOCAL: add_ssh_key refuses already-v2 input with guidance
+  (get→add round-trip regression closed); get_entry audits FAILED views
+  (tamper probing leaves a trace); registry overview matches the sweep's
+  skip-and-warn containment; MAX_CIPHERTEXT_BYTES raised to 3 MiB so the
+  2 MiB secret-class policy is genuinely reachable; pair-join validates
+  bootstrap.key_epoch >= 1. CONSOLIDATION: read_local_identity (one
+  fail-closed SELECT for all six identity sites; per-row fetches hoisted),
+  zeroed_legacy_v1_columns (nine sites), SealedEntryFields + a single
+  field→purpose owner (add/update/sync no longer restate the mapping),
+  session_epoch fallback branch removed (dead complexity; recover_access
+  documented as the accepted out-of-session exception), Zeroizing<String>
+  + hand-written redacting Debug on the secret-bearing wire payloads.
+  Test-honesty residuals (documented, accepted): entity/ssh/totp lack
+  class-parity negatives for swap/NULL-identity (the shared core path is
+  pinned by the entry tests); the legacy sync-apply resolution path has
+  no engine-level test (engine has no test module; resolve_sync_secret is
+  pure and the wiring was angle-verified line-by-line after a
+  wrong-variable bug was caught and fixed mid-review).
+  STATUS: **Done.** Membership-label sealing remains the WP's only open
+  minor item (tracked with entity-schema work, WBS-404).
 
 ### WBS-305 — Replace bincode-only durable contracts
 - **Outcome:** Documented, language-neutral, bounded serialization for all durable
@@ -501,8 +640,21 @@ AAD decisions come from the ADRs; WPs below assume the ADR-004/005 direction.
   online authority revoked at sync v2 / WBS-614).
 ### WBS-313 — Final-usable-slot deletion guard
 - **Reqs/TDs:** SR-RECOVERY-004 · **Deps:** 302. **Est:** 1d.
-- **Tests:** N: deleting last usable slot rejected; force path requires explicit
-  acknowledgment of lockout risk.
+- **Status:** Done (2026-09-05) — the guard is enforced INSIDE the registry
+  (`slot_ops.rs::revoke_key_slot` refuses when zero usable slots would remain,
+  under the BEGIN IMMEDIATE write lock; no caller can bypass it) and tested
+  (`final_usable_slot_revocation_is_refused`). There is no public slot-DELETION
+  API at all — only revocation, which keeps history. The "force path" this
+  entry anticipated is REJECTED AS A DESIGN DECISION RECORDED HERE (this WP's
+  own record; review round 2 of WBS-304 flagged that the earlier wording
+  misattributed it to ADR-004, whose "no in-place repair path" clause at
+  lines 45-46 is scoped to REGISTRY-CORRUPTION repair, not slot force-revoke):
+  an explicit-acknowledgment force-revoke would be new lockout surface with
+  no legitimate flow — every multi-slot path (onboarding replacement,
+  pair-join adoption, recovery) revokes-and-replaces within one transaction
+  where the guard's invariant holds at commit. Deleting the last usable slot
+  is impossible; deleting any slot is impossible; the guard's negative
+  evidence covers the revocation path.
 
 ### WBS-314 — Optional full-DEK rotation (compromise response)
 - **Reqs/TDs:** SR-RECOVERY-003 · TD-SEC-05 · **Deps:** 312, 304; relay

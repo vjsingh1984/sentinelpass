@@ -36,13 +36,54 @@ impl VaultManager {
         self.add_ssh_key(&ssh_key)
     }
 
-    /// Add an SSH key to the vault
+    /// Add an SSH key to the vault. The incoming struct carries its
+    /// private key in the legacy v1 three-part shape; it is decrypted and
+    /// RE-SEALED as a v2 envelope bound to (vault_uuid, sync_id, type,
+    /// epoch) before insert (WBS-304). New rows always carry a sync_id.
     pub fn add_ssh_key(&self, key: &crate::ssh::SshKey) -> Result<i64> {
         if !self.is_unlocked() {
             return Err(PasswordManagerError::VaultLocked);
         }
 
-        let _dek = self.key_hierarchy.dek()?;
+        let dek = self.key_hierarchy.dek()?;
+
+        // A v2-shaped input cannot be re-sealed: its envelope binds the
+        // ORIGINAL row's identity, which this call does not know (the
+        // supported round trip is get → plaintext →
+        // add_ssh_key_plaintext). Refuse with guidance instead of
+        // AES-GCM-ing the JSON document with a zero nonce (adoption
+        // review: the get→add round trip regression).
+        if crate::vault::envelope_ops::is_envelope_blob(&key.private_key_encrypted) {
+            return Err(PasswordManagerError::InvalidInput(
+                "this SSH key's private-key field is already a v2 envelope from another \
+                 row; to copy a key, export its plaintext and add via \
+                 add_ssh_key_plaintext"
+                    .to_string(),
+            ));
+        }
+
+        // Recover the plaintext from the incoming v1 components, then
+        // seal under the row's new identity.
+        let private_key_plaintext = crate::ssh::SshKey::decrypt_private_key(
+            dek,
+            &key.private_key_encrypted,
+            &key.nonce,
+            &key.auth_tag,
+        )?;
+
+        let sync_id = uuid::Uuid::new_v4().to_string();
+        let private_key_blob = crate::vault::envelope_ops::seal_object_field(
+            dek,
+            self.vault_uuid_str()?,
+            &sync_id,
+            crate::crypto::aad::ObjectType::SshKey,
+            crate::crypto::aad::EnvelopePurpose::Secret,
+            &private_key_plaintext,
+            self.session_epoch(),
+        )?;
+        // Deprecated v1 columns — zero-filled on v2 rows (see envelope_ops).
+        let (nonce_blob, auth_tag_blob) = crate::vault::envelope_ops::zeroed_legacy_v1_columns();
+
         let db = self.lock_db()?;
 
         let now = Utc::now().timestamp();
@@ -52,20 +93,21 @@ impl VaultManager {
                 "INSERT INTO ssh_keys (
                 name, comment, key_type, key_size, public_key,
                 private_key_encrypted, nonce, auth_tag, fingerprint,
-                created_at, modified_at
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                created_at, modified_at, sync_id
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
                 (
                     &key.name,
                     key.comment.as_deref(),
                     key.key_type.to_string(),
                     key.key_size,
                     &key.public_key,
-                    &key.private_key_encrypted,
-                    &key.nonce,
-                    &key.auth_tag,
+                    &private_key_blob,
+                    &nonce_blob,
+                    &auth_tag_blob,
                     &key.fingerprint,
                     now,
                     now,
+                    &sync_id,
                 ),
             )
             .map_err(|e| PasswordManagerError::from(DatabaseError::Sqlite(e)))?;
@@ -316,7 +358,7 @@ impl VaultManager {
         let mut stmt = db
             .conn()
             .prepare(
-                "SELECT private_key_encrypted, nonce, auth_tag FROM ssh_keys WHERE key_id = ?1",
+                "SELECT private_key_encrypted, nonce, auth_tag, sync_id FROM ssh_keys WHERE key_id = ?1",
             )
             .map_err(|e| PasswordManagerError::from(DatabaseError::Sqlite(e)))?;
 
@@ -324,17 +366,32 @@ impl VaultManager {
             let private_key_encrypted: Vec<u8> = row.get(0)?;
             let nonce: Vec<u8> = row.get(1)?;
             let auth_tag: Vec<u8> = row.get(2)?;
-            Ok((private_key_encrypted, nonce, auth_tag))
+            let sync_id: Option<String> = row.get(3)?;
+            Ok((private_key_encrypted, nonce, auth_tag, sync_id))
         });
 
         match result {
-            Ok((private_key_encrypted, nonce, auth_tag)) => {
-                crate::ssh::SshKey::decrypt_private_key(
-                    dek,
-                    &private_key_encrypted,
-                    &nonce,
-                    &auth_tag,
-                )
+            Ok((private_key_encrypted, nonce, auth_tag, sync_id)) => {
+                // Dual-read (WBS-304): a v2 envelope opens against the
+                // row's identity; legacy rows take the v1 three-part path.
+                if crate::vault::envelope_ops::is_envelope_blob(&private_key_encrypted) {
+                    crate::vault::envelope_ops::open_object_field(
+                        dek,
+                        self.vault_uuid.as_deref(),
+                        sync_id.as_deref(),
+                        crate::crypto::aad::ObjectType::SshKey,
+                        crate::crypto::aad::EnvelopePurpose::Secret,
+                        &private_key_encrypted,
+                    )
+                    .map(|z| z.to_string())
+                } else {
+                    crate::ssh::SshKey::decrypt_private_key(
+                        dek,
+                        &private_key_encrypted,
+                        &nonce,
+                        &auth_tag,
+                    )
+                }
             }
             Err(_) => Err(PasswordManagerError::NotFound(format!(
                 "SSH key {}",

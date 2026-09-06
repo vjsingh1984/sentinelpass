@@ -309,6 +309,35 @@ Canonical string (signed):
 - Nonce: UUID v4; checked for uniqueness (replay protection)
 - Body hash: SHA-256 of raw request body (empty string if no body)
 
+## Pull Resilience & Data-Loss Semantics (WBS-304, envelope v2)
+
+Sync v1 (experimental) degrades per-blob, not per-vault:
+
+- **Push**: a pending row whose blob fails to decrypt/open (bit-rot,
+  tamper caught by the envelope MAC) is SKIPPED with a `warn` naming the
+  row (entry_id / sync_id); every other pending change still pushes. The
+  skipped row stays `pending`, so it retries every sync — a tampered row
+  therefore also surfaces as a persistent warning, not a silent drop.
+- **Pull**: a blob that fails to apply (unparseable payload, unknown
+  wire shape, unreadable after decrypt) is SKIPPED with a `warn` naming
+  its sync_id, and the pull cursor advances. This is **permanent data
+  loss for that blob on this device** — the sender has already marked it
+  synced and the relay page is consumed; there is no retry. This is a
+  deliberate tradeoff: the alternative (aborting the page) let ONE bad
+  blob wedge a device's entire sync forever. Sync v2 (ADR-006) replaces
+  this with a requeue/dead-letter mechanism.
+- **Mixed versions**: SSH/TOTP payloads interoperate in BOTH directions
+  with v0.8.x peers. This build emits the legacy triplet
+  (`private_key_encrypted`/`nonce`/`auth_tag` — a context-free
+  encryption of the same plaintext) alongside the current plaintext
+  fields, so an old peer applies the triplet and ignores the unknown
+  plaintext fields (plain serde derives, no `deny_unknown_fields`); and
+  this build accepts an old peer's legacy-only payload, decrypting the
+  triplet with the shared DEK. Credential payloads are unchanged. Note
+  an old peer stores/re-emits the context-free form (no envelope
+  identity) — upgrade both sides of a pairing so stored copies gain
+  the identity binding.
+
 ## Conflict Resolution
 
 Last-Write-Wins with version precedence:

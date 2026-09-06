@@ -123,6 +123,31 @@ impl VaultManager {
         // Ensure data directory exists
         ensure_data_dir()?;
 
+        // Refuse to initialize over ANY existing non-empty database file
+        // (WBS-402 / ADR-005 rev 3). The db_metadata probe below only
+        // recognizes SentinelPass-shaped vaults; a legacy/foreign database
+        // (no db_metadata table) or an empty-schema one (db_metadata table
+        // present but zero rows) would otherwise be silently resurrected —
+        // `initialize_schema` merges our tables into the foreign file with
+        // IF NOT EXISTS and the probe passes. A zero-byte file is allowed:
+        // there is no data to destroy and SQLite treats it as a fresh
+        // database. `:memory:` passes naturally (the path never exists), so
+        // the dev/in-memory flow is unaffected.
+        match std::fs::metadata(&vault_path) {
+            Ok(meta) if meta.is_file() && meta.len() > 0 => {
+                return Err(PasswordManagerError::InvalidInput(format!(
+                    "a database file already exists at {} ({} bytes); refusing to \
+                     initialize a new vault over it — remove the file explicitly or \
+                     choose a different path",
+                    vault_path.display(),
+                    meta.len()
+                )));
+            }
+            Ok(_) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(PasswordManagerError::Io(e)),
+        }
+
         // Create and initialize database
         let db = Database::open(&vault_path)?;
         db.initialize_schema()?;
@@ -134,11 +159,13 @@ impl VaultManager {
         // Durable vault identity (WBS-301 / ADR-004 rev 4)
         let vault_uuid = uuid::Uuid::new_v4().to_string();
 
-        // Refuse to initialize over an existing vault: all in-repo creators
-        // guard with path-exists checks, but TOCTOU (a restore/copy racing
-        // init) or a direct embedder call would otherwise overwrite the old
-        // vault's rollback protection and then fail the INSERT — bricking
-        // the pre-existing vault (adversarial-review finding).
+        // Second create-guard layer (the file check above ran before the
+        // database existed): refuse if a db_metadata row appeared in the
+        // race window between the file check and this probe — TOCTOU (a
+        // restore/copy racing init) or a direct embedder call would
+        // otherwise overwrite the old vault's rollback protection and then
+        // fail the INSERT — bricking the pre-existing vault
+        // (adversarial-review finding).
         {
             let existing: bool = db
                 .conn()

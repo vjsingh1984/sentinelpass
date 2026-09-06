@@ -417,10 +417,13 @@ impl Database {
 
     /// Validate the database schema version, running migrations if needed.
     ///
-    /// - Older databases are auto-migrated forward (v1 → v2 → v3).
-    /// - Newer databases (created by a newer binary) are allowed if they are
-    ///   within a forward-compatible range, since newer schema versions only add
-    ///   non-breaking changes (indexes, optional columns).
+    /// - Older databases are auto-migrated forward (v1 → v2 → … → current).
+    /// - Newer databases (created by a newer binary) fail CLOSED with the
+    ///   typed [`DatabaseError::UnsupportedFutureSchema`] error (WBS-315 /
+    ///   SR-CRYPTO-005). This is the FIRST read on every vault-open path and
+    ///   touches only `db_metadata` — a refused vault has no entry data read
+    ///   or modified, so a future schema's rows are never interpreted by an
+    ///   older binary that cannot know their shape.
     pub fn validate_schema_version(&self) -> Result<()> {
         let version: i32 = self
             .conn
@@ -455,16 +458,21 @@ impl Database {
             return Ok(());
         }
 
-        // Database was created/migrated by a newer binary. Allow it — newer
-        // schema versions only add non-breaking changes (indexes, optional
-        // columns, new tables). The code queries specific columns/tables and
-        // SQLite will produce a clear error if something is truly missing.
+        // Database was created/migrated by a newer binary — refuse without
+        // reading or mutating any entry data. Newer versions may change row
+        // shapes, column semantics, or crypto formats in ways this build
+        // cannot know; "works by luck" is not an open policy.
         warn!(
             db_version = version,
             code_version = CURRENT_SCHEMA_VERSION,
-            "Database schema version is newer than this binary expects; proceeding anyway"
+            "vault schema is newer than this binary supports; refusing to open"
         );
-        Ok(())
+        Err(PasswordManagerError::from(
+            DatabaseError::UnsupportedFutureSchema {
+                found: version,
+                supported: CURRENT_SCHEMA_VERSION,
+            },
+        ))
     }
 
     /// Get a reference to the underlying connection
@@ -544,22 +552,83 @@ mod tests {
     }
 
     #[test]
-    fn newer_db_version_does_not_error() {
-        // Simulates opening a DB that was migrated by a newer binary.
-        // The code should allow this instead of hard-failing.
+    fn newer_db_version_fails_closed() {
+        // WBS-315 / SR-CRYPTO-005: a vault whose schema version is NEWER than
+        // this build must be refused with the specific typed compatibility
+        // error — never opened, never migrated backward, never probed.
+        // (Supersedes the pre-WBS-315 `newer_db_version_does_not_error`,
+        // which pinned the old warn-and-proceed behavior.) The version is
+        // expressed RELATIVE to CURRENT_SCHEMA_VERSION so a routine bump by
+        // another workstream does not require edits here.
         let db = Database::in_memory().unwrap();
         db.initialize_schema().unwrap();
 
-        // Insert metadata at a future version (e.g., v99)
+        let future = CURRENT_SCHEMA_VERSION + 1;
         db.conn()
             .execute(
                 "INSERT INTO db_metadata (id, version, kdf_params, wrapped_dek, dek_nonce, created_at, last_modified)
-                 VALUES (1, 99, X'00', X'00', X'00', 0, 0)",
-                [],
+                 VALUES (1, ?1, X'00', X'00', X'00', 0, 0)",
+                rusqlite::params![future],
             )
             .unwrap();
 
-        // Should succeed (warn, not error)
+        match db.validate_schema_version() {
+            Err(PasswordManagerError::Database(DatabaseError::UnsupportedFutureSchema {
+                found,
+                supported,
+            })) => {
+                assert_eq!(found, future);
+                assert_eq!(supported, CURRENT_SCHEMA_VERSION);
+            }
+            other => panic!(
+                "future-version vault must fail closed with UnsupportedFutureSchema, got {other:?}"
+            ),
+        }
+    }
+
+    #[test]
+    fn newer_version_gate_runs_before_any_entry_table_read() {
+        // Ordering proof for WBS-315: the version check must precede ANY
+        // entry/metadata-content read. With the version set to a future
+        // value and the entries table ABSENT (here: renamed away), a
+        // fail-closed open must surface the TYPED version error — a Sqlite
+        // "no such table" error would mean the open proceeded past the
+        // version gate and started touching other tables.
+        let db = Database::in_memory().unwrap();
+        db.initialize_schema().unwrap();
+        db.conn().execute("DROP TABLE entries", []).unwrap();
+        let future = CURRENT_SCHEMA_VERSION + 1;
+        db.conn()
+            .execute(
+                "INSERT INTO db_metadata (id, version, kdf_params, wrapped_dek, dek_nonce, created_at, last_modified)
+                 VALUES (1, ?1, X'00', X'00', X'00', 0, 0)",
+                rusqlite::params![future],
+            )
+            .unwrap();
+
+        match db.validate_schema_version() {
+            Err(PasswordManagerError::Database(DatabaseError::UnsupportedFutureSchema {
+                ..
+            })) => {}
+            other => panic!("version gate must fire before any other table access, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn current_schema_version_validates_cleanly() {
+        // Positive control for the fail-closed flip: a CURRENT-version vault
+        // must keep validating without error (the flip must never lock out
+        // vaults this build fully understands).
+        let db = Database::in_memory().unwrap();
+        db.initialize_schema().unwrap();
+        db.conn()
+            .execute(
+                "INSERT INTO db_metadata (id, version, kdf_params, wrapped_dek, dek_nonce, created_at, last_modified)
+                 VALUES (1, ?1, X'00', X'00', X'00', 0, 0)",
+                rusqlite::params![CURRENT_SCHEMA_VERSION],
+            )
+            .unwrap();
+
         db.validate_schema_version().unwrap();
     }
 

@@ -68,6 +68,8 @@ pub struct SyncEntryBlob {
 }
 
 /// Decrypted credential data transported over sync.
+use zeroize::Zeroizing;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CredentialPayload {
     pub title: String,
@@ -90,28 +92,62 @@ pub struct DomainPayload {
     pub is_primary: bool,
 }
 
-/// Decrypted SSH key data transported over sync.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Decrypted SSH key data transported over sync. Debug is HAND-WRITTEN
+/// to redact the private key (CLAUDE.md NEVER 1: log secrets — a derived
+/// Debug would print the PEM on the first accidental `{:?}`).
+#[derive(Clone, Serialize, Deserialize)]
 pub struct SshKeyPayload {
     pub name: String,
     pub comment: Option<String>,
     pub key_type: String,
     pub key_size: Option<i64>,
     pub public_key: String,
-    pub private_key_encrypted: Vec<u8>,
-    pub nonce: Vec<u8>,
-    pub auth_tag: Vec<u8>,
+    /// PLAINTEXT private key (PEM), zeroize-on-drop. The whole payload is
+    /// DEK-encrypted for transport (encrypt_for_sync); storing the LOCAL
+    /// v2 envelope here instead would transplant it to peers whose
+    /// identity differs (WBS-304 adoption review, finding 3 class). Each
+    /// device seals under its own identity on apply.
+    /// `default` + `skip_serializing`: EMPTY on a v0.8.x peer's payload
+    /// (whose key material arrives in `private_key_encrypted` below), and
+    /// never emitted by this build — resolve_sync_secret picks whichever
+    /// shape is present.
+    #[serde(default)]
+    pub private_key: Zeroizing<String>,
+    /// v0.8.x wire shape under the ORIGINAL field names: pre-envelope
+    /// peers carried the SENDER's local three-part v1 blob here.
+    /// Deserialized when present and decrypted with the shared DEK on
+    /// apply (resolves to the same plaintext as `private_key`); never
+    /// emitted by this build.
+    // alias: the v0.8.x wire emitted the old top-level names `nonce`/
+    // `auth_tag` — without the aliases they would be ignored as unknown
+    // fields and the legacy fallback could never fire (cross-file angle).
+    #[serde(default, skip_serializing)]
+    pub private_key_encrypted: Option<Vec<u8>>,
+    #[serde(default, skip_serializing, alias = "nonce")]
+    pub legacy_nonce: Option<Vec<u8>>,
+    #[serde(default, skip_serializing, alias = "auth_tag")]
+    pub legacy_auth_tag: Option<Vec<u8>>,
     pub fingerprint: String,
     pub created_at: i64,
     pub modified_at: i64,
 }
 
-/// Decrypted TOTP secret data transported over sync.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Decrypted TOTP secret data transported over sync. Debug is
+/// HAND-WRITTEN to redact the seed (see SshKeyPayload).
+#[derive(Clone, Serialize, Deserialize)]
 pub struct TotpPayload {
-    pub secret_encrypted: Vec<u8>,
-    pub nonce: Vec<u8>,
-    pub auth_tag: Vec<u8>,
+    /// PLAINTEXT normalized base32 secret, zeroize-on-drop. `default` +
+    /// `skip_serializing` (see SshKeyPayload.private_key).
+    #[serde(default)]
+    pub secret: Zeroizing<String>,
+    /// v0.8.x wire shape under the ORIGINAL field names (see
+    /// SshKeyPayload.private_key_encrypted).
+    #[serde(default, skip_serializing)]
+    pub secret_encrypted: Option<Vec<u8>>,
+    #[serde(default, skip_serializing, alias = "nonce")]
+    pub legacy_nonce: Option<Vec<u8>>,
+    #[serde(default, skip_serializing, alias = "auth_tag")]
+    pub legacy_auth_tag: Option<Vec<u8>>,
     pub algorithm: String,
     pub digits: u8,
     pub period: u32,
@@ -121,6 +157,35 @@ pub struct TotpPayload {
     /// The sync_id of the parent credential (so the receiving device
     /// can re-link `totp_secrets.entry_id`).
     pub parent_credential_sync_id: Option<Uuid>,
+}
+
+impl std::fmt::Debug for SshKeyPayload {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SshKeyPayload")
+            .field("name", &self.name)
+            .field("key_type", &self.key_type)
+            .field("fingerprint", &self.fingerprint)
+            .field("private_key", &"[REDACTED]")
+            .field(
+                "private_key_encrypted",
+                &self.private_key_encrypted.is_some(),
+            )
+            .finish()
+    }
+}
+
+impl std::fmt::Debug for TotpPayload {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TotpPayload")
+            .field("algorithm", &self.algorithm)
+            .field("digits", &self.digits)
+            .field("period", &self.period)
+            .field("issuer", &self.issuer)
+            .field("account_name", &self.account_name)
+            .field("secret", &"[REDACTED]")
+            .field("secret_encrypted", &self.secret_encrypted.is_some())
+            .finish()
+    }
 }
 
 /// Bootstrap blob sent during device pairing (encrypted with pairing key).

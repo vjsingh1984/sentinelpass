@@ -220,6 +220,18 @@ impl VaultManager {
         // against imported disk state: any write in that session produced
         // ciphertext nothing could ever decrypt).
         self.key_hierarchy = imported_hierarchy;
+        // Session epoch cache follows the adopted vault's epoch. The
+        // peer-signed value is validated: a 0/negative epoch would corrupt
+        // every envelope sealed this session (adoption review — the old
+        // fallback silently masked it).
+        if bootstrap.key_epoch < 1 {
+            return Err(PasswordManagerError::InvalidInput(format!(
+                "pairing bootstrap carries an invalid key epoch ({})",
+                bootstrap.key_epoch
+            )));
+        }
+        self.session_epoch
+            .store(bootstrap.key_epoch, std::sync::atomic::Ordering::Relaxed);
 
         // Pair-join deliberately adopts the origin vault's epoch and key
         // material: rebase the epoch high-water sidecar to the imported

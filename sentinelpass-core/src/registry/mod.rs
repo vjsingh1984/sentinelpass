@@ -224,6 +224,11 @@ pub struct SweepReport {
     pub rekeyed: usize,
     pub removed: usize,
     pub orphans_pruned: usize,
+    /// Rows skipped because their blob refused to open (tampered,
+    /// relocated, or corrupt — WBS-304 adoption review, finding 9). Each
+    /// skip is warn-logged with its entry_id; the index stays completable
+    /// and the tamper stays visible.
+    pub failed: usize,
 }
 
 /// Result of one equality-index upsert.

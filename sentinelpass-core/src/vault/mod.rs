@@ -1,6 +1,7 @@
 //! Vault management - coordinates crypto and database layers
 
 mod biometric_ops;
+pub(crate) mod envelope_ops;
 pub(crate) mod epoch_guard;
 mod health_ops;
 pub mod recovery;
@@ -16,8 +17,8 @@ mod totp_ops;
 
 use crate::{
     audit::{get_audit_log_dir, AuditEventType, AuditLogger},
-    crypto::cipher::{decrypt_to_string, encrypt_string},
-    crypto::{EncryptedEntry, KdfParams, KeyHierarchy, WrappedKey},
+    crypto::cipher::encrypt_string,
+    crypto::{KdfParams, KeyHierarchy, WrappedKey},
     database::{
         schema::CURRENT_SCHEMA_VERSION, Database, EntryFilter, EntryRepository, NewEntryParams,
         RawEntryRow, SqliteEntryRepository, UpdateEntryParams,
@@ -101,6 +102,17 @@ pub struct VaultManager {
     /// Stable vault identity (WBS-301). `None` only for in-memory vaults that
     /// never went through `create()`/`open()` identity provisioning.
     pub(super) vault_uuid: Option<String>,
+    /// Session-cached key epoch for envelope sealing (WBS-304 adoption
+    /// review, findings 7+8): the epoch is session-constant between
+    /// rotation commits, and reading it from db_metadata per field would
+    /// both re-lock the non-reentrant Mutex under guard-holding callers
+    /// (the registry sweep deadlock) and burn a full metadata SELECT per
+    /// field. Set at create/open; updated at every rotation commit point
+    /// (password rotation, pair-join adoption). Envelope reads don't need
+    /// it at all (relaxed-epoch takes the epoch from the authenticated
+    /// document); a stale cache value on seal is self-healing — the seal
+    /// simply records the older epoch, which relaxed reads accept.
+    pub(super) session_epoch: std::sync::atomic::AtomicI64,
 }
 
 impl VaultManager {
@@ -210,6 +222,7 @@ impl VaultManager {
             audit_logger,
             epoch_sidecar,
             vault_uuid: Some(vault_uuid),
+            session_epoch: std::sync::atomic::AtomicI64::new(1),
         };
 
         // Log vault creation
@@ -338,6 +351,7 @@ impl VaultManager {
             audit_logger,
             epoch_sidecar,
             vault_uuid,
+            session_epoch: std::sync::atomic::AtomicI64::new(key_epoch),
         };
 
         // Surface epoch-guard outcomes in the audit trail (ADR-004 rev 4:
@@ -507,6 +521,20 @@ impl VaultManager {
     }
 
     /// Acquire the database lock, mapping a poison error to a structured error.
+    /// The session-cached key epoch (see the `session_epoch` field docs).
+    pub(super) fn session_epoch(&self) -> i64 {
+        // No fallback read exists: every constructor initializes the
+        // atomic (create=1; open/biometric=COALESCE(key_epoch,1) >= 1),
+        // and a `key_epoch()` call here could re-lock the non-reentrant
+        // Mutex under guard-holding callers. KNOWN EXCEPTION (documented,
+        // accepted): `recover_access` is a static path-based operation
+        // and cannot update a concurrently-live manager's cache — a
+        // manager held open across an external recovery seals with the
+        // pre-recovery epoch, which relaxed-epoch reads accept by design.
+        self.session_epoch
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
     fn lock_db(&self) -> Result<std::sync::MutexGuard<'_, Database>> {
         self.db
             .lock()
@@ -515,46 +543,66 @@ impl VaultManager {
 
     /// Convert raw entry row to summary (decrypt only title and username)
     fn row_to_summary(&self, row: &RawEntryRow) -> Result<EntrySummary> {
-        let dek = self.key_hierarchy.dek()?;
-
-        let title_encrypted: EncryptedEntry = bincode::deserialize(&row.title)
-            .map_err(|e| PasswordManagerError::from(DatabaseError::Serialization(e.to_string())))?;
-        let username_encrypted: EncryptedEntry = bincode::deserialize(&row.username)
-            .map_err(|e| PasswordManagerError::from(DatabaseError::Serialization(e.to_string())))?;
-
-        let title = decrypt_to_string(dek, &title_encrypted).map_err(PasswordManagerError::from)?;
-        let username =
-            decrypt_to_string(dek, &username_encrypted).map_err(PasswordManagerError::from)?;
+        let cred = CredentialType::parse(&row.credential_type)?;
+        let title = self
+            .open_entry_field(
+                row.sync_id.as_deref(),
+                cred,
+                crate::crypto::aad::EnvelopePurpose::Summary,
+                &row.title,
+            )?
+            .to_string();
+        let username = self
+            .open_entry_field(
+                row.sync_id.as_deref(),
+                cred,
+                crate::crypto::aad::EnvelopePurpose::Summary,
+                &row.username,
+            )?
+            .to_string();
 
         Ok(EntrySummary {
             entry_id: row.entry_id,
             title,
             username,
-            credential_type: CredentialType::parse(&row.credential_type)?,
+            credential_type: cred,
             favorite: row.favorite,
         })
     }
 
     /// Decrypt a raw entry row from the database
     fn decrypt_entry_row(&self, row: &RawEntryRow) -> Result<Entry> {
-        let dek = self.key_hierarchy.dek()?;
-
-        // Deserialize encrypted entries
-        let title_encrypted: EncryptedEntry = bincode::deserialize(&row.title)
-            .map_err(|e| PasswordManagerError::from(DatabaseError::Serialization(e.to_string())))?;
-        let username_encrypted: EncryptedEntry = bincode::deserialize(&row.username)
-            .map_err(|e| PasswordManagerError::from(DatabaseError::Serialization(e.to_string())))?;
-        let password_encrypted: EncryptedEntry = bincode::deserialize(&row.password)
-            .map_err(|e| PasswordManagerError::from(DatabaseError::Serialization(e.to_string())))?;
+        let cred = CredentialType::parse(&row.credential_type)?;
+        let sid = row.sync_id.as_deref();
+        let title = self
+            .open_entry_field(
+                sid,
+                cred,
+                crate::crypto::aad::EnvelopePurpose::Summary,
+                &row.title,
+            )?
+            .to_string();
+        let username = self
+            .open_entry_field(
+                sid,
+                cred,
+                crate::crypto::aad::EnvelopePurpose::Summary,
+                &row.username,
+            )?
+            .to_string();
+        let password = self.open_entry_field(
+            sid,
+            cred,
+            crate::crypto::aad::EnvelopePurpose::Secret,
+            &row.password,
+        )?;
 
         let url = row
             .url
             .as_ref()
             .map(|blob| {
-                let encrypted: EncryptedEntry = bincode::deserialize(blob).map_err(|e| {
-                    PasswordManagerError::from(DatabaseError::Serialization(e.to_string()))
-                })?;
-                decrypt_to_string(dek, &encrypted).map_err(PasswordManagerError::from)
+                self.open_entry_field(sid, cred, crate::crypto::aad::EnvelopePurpose::Secret, blob)
+                    .map(|z| z.to_string())
             })
             .transpose()?;
 
@@ -562,24 +610,19 @@ impl VaultManager {
             .notes
             .as_ref()
             .map(|blob| {
-                let encrypted: EncryptedEntry = bincode::deserialize(blob).map_err(|e| {
-                    PasswordManagerError::from(DatabaseError::Serialization(e.to_string()))
-                })?;
-                decrypt_to_string(dek, &encrypted).map_err(PasswordManagerError::from)
+                self.open_entry_field(sid, cred, crate::crypto::aad::EnvelopePurpose::Secret, blob)
+                    .map(|z| z.to_string())
             })
             .transpose()?;
 
         Ok(Entry {
             entry_id: Some(row.entry_id),
-            title: decrypt_to_string(dek, &title_encrypted).map_err(PasswordManagerError::from)?,
-            username: decrypt_to_string(dek, &username_encrypted)
-                .map_err(PasswordManagerError::from)?,
-            password: decrypt_to_string(dek, &password_encrypted)
-                .map_err(PasswordManagerError::from)?
-                .into(),
+            title,
+            username,
+            password,
             url,
             notes,
-            credential_type: CredentialType::parse(&row.credential_type)?,
+            credential_type: cred,
             created_at: DateTime::from_timestamp(row.created_at, 0).unwrap_or_else(Utc::now),
             modified_at: DateTime::from_timestamp(row.modified_at, 0).unwrap_or_else(Utc::now),
             favorite: row.favorite,
@@ -592,48 +635,37 @@ impl VaultManager {
             return Err(PasswordManagerError::VaultLocked);
         }
 
-        let dek = self.key_hierarchy.dek()?;
+        // Stable object identity FIRST (WBS-304): the v2 envelope's AAD
+        // binds it, so it must exist before sealing.
+        let sync_id = uuid::Uuid::new_v4().to_string();
+        let cred = entry.credential_type;
 
-        // Encrypt sensitive fields
-        let title_encrypted = encrypt_string(dek, &entry.title)?;
-        let username_encrypted = encrypt_string(dek, &entry.username)?;
-        let password_encrypted = encrypt_string(dek, &entry.password)?;
+        // Seal sensitive fields as v2 envelopes bound to
+        // (vault_uuid, sync_id, purpose, type, schema/crypto versions,
+        // epoch). New rows are always v2 — dual-read keeps older rows on
+        // the v1 path until the WBS-404 migration re-encrypts them.
+        let sealed = crate::vault::envelope_ops::seal_entry_fields(
+            self.key_hierarchy.dek()?,
+            self.vault_uuid_str()?,
+            &sync_id,
+            cred,
+            entry,
+            self.session_epoch(),
+        )?;
+        let title_blob = sealed.title;
+        let username_blob = sealed.username;
+        let password_blob = sealed.password;
+        let url_blob = sealed.url;
+        let notes_blob = sealed.notes;
 
-        let url_encrypted = entry
-            .url
-            .as_ref()
-            .map(|u| encrypt_string(dek, u))
-            .transpose()?;
-
-        let notes_encrypted = entry
-            .notes
-            .as_ref()
-            .map(|n| encrypt_string(dek, n))
-            .transpose()?;
-
-        // Serialize encrypted entries
-        let title_blob = bincode::serialize(&title_encrypted)
-            .map_err(|e| DatabaseError::Serialization(e.to_string()))?;
-        let username_blob = bincode::serialize(&username_encrypted)
-            .map_err(|e| DatabaseError::Serialization(e.to_string()))?;
-        let password_blob = bincode::serialize(&password_encrypted)
-            .map_err(|e| DatabaseError::Serialization(e.to_string()))?;
-        let url_blob = url_encrypted
-            .as_ref()
-            .map(|e| bincode::serialize(e).map_err(|e| DatabaseError::Serialization(e.to_string())))
-            .transpose()?;
-        let notes_blob = notes_encrypted
-            .as_ref()
-            .map(|e| bincode::serialize(e).map_err(|e| DatabaseError::Serialization(e.to_string())))
-            .transpose()?;
-
-        let nonce_blob = bincode::serialize(&title_encrypted.nonce)
-            .map_err(|e| DatabaseError::Serialization(e.to_string()))?;
-        let auth_tag_blob = bincode::serialize(&title_encrypted.auth_tag)
-            .map_err(|e| DatabaseError::Serialization(e.to_string()))?;
+        // Legacy v1 columns (`entry_nonce`/`auth_tag` mirrored the TITLE
+        // field's v1 nonce/tag for pre-envelope readers). v2 envelopes
+        // carry their own nonce/tag inside the document — the columns are
+        // zero-filled to satisfy NOT NULL and are read by nothing on v2
+        // rows (deprecated; dropped by the eventual v2 schema migration).
+        let (nonce_blob, auth_tag_blob) = crate::vault::envelope_ops::zeroed_legacy_v1_columns();
 
         let now = Utc::now().timestamp();
-        let sync_id = uuid::Uuid::new_v4().to_string();
 
         // Use repository to insert the entry
         let db = self.lock_db()?;
@@ -692,16 +724,37 @@ impl VaultManager {
         // Drop the database lock before decrypting (decrypt doesn't need the DB)
         drop(db);
 
-        // Log credential viewing
-        let title_hint = String::from_utf8_lossy(&raw_row.title).to_string();
+        // Decrypt FIRST, then audit with the real title. The former
+        // shape (from_utf8_lossy of the raw column) was harmless when
+        // columns held v1 bincode mojibake, but a v2 envelope document is
+        // readable JSON — logging it would leak vault UUID, entry
+        // sync_id, purpose/type, epoch, and ciphertext into the long-lived
+        // plaintext audit log on every credential view (adoption review,
+        // finding 4).
+        let entry = match self.decrypt_entry_row(&raw_row) {
+            Ok(entry) => entry,
+            // A FAILED view is the security-interesting case (tamper
+            // probing, corruption) — it must leave an audit trace too,
+            // not just the success path (adoption review).
+            Err(e) => {
+                if let Some(ref logger) = self.audit_logger {
+                    let _ = logger.log(
+                        AuditEventType::CredentialViewed { entry_id },
+                        &format!("Credential view FAILED (decrypt refused): {e}"),
+                    );
+                }
+                return Err(e);
+            }
+        };
+
         if let Some(ref logger) = self.audit_logger {
             let _ = logger.log(
                 AuditEventType::CredentialViewed { entry_id },
-                &format!("Viewed credential: {}", title_hint),
+                &format!("Viewed credential: {}", entry.title),
             );
         }
 
-        self.decrypt_entry_row(&raw_row)
+        Ok(entry)
     }
 
     /// List all entries
@@ -899,45 +952,111 @@ impl VaultManager {
             return Err(PasswordManagerError::VaultLocked);
         }
 
-        let dek = self.key_hierarchy.dek()?;
+        // Row-level format policy (WBS-304): the row's stable sync_id is
+        // required to seal v2 (it is the AAD's object identity); v1 rows —
+        // legacy imports with no sync_id — stay on the v1 write path so a
+        // row is never mixed-format. Bulk v1→v2 conversion is WBS-404.
+        let (sync_id, row_is_v2) = {
+            let db = self.lock_db()?;
+            let row: (Option<String>, Vec<u8>) = db
+                .conn()
+                .query_row(
+                    "SELECT sync_id, password FROM entries WHERE entry_id = ?1",
+                    rusqlite::params![entry_id],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )
+                .map_err(DatabaseError::Sqlite)?;
+            let v2 = row.1.starts_with(crate::crypto::ENVELOPE_MAGIC);
+            (row.0, v2)
+        };
 
-        // Encrypt the entry data
-        let title_encrypted = encrypt_string(dek, &entry.title)?;
-        let username_encrypted = encrypt_string(dek, &entry.username)?;
-        let password_encrypted = encrypt_string(dek, &entry.password)?;
-
-        let url_encrypted = entry
-            .url
-            .as_ref()
-            .map(|u| encrypt_string(dek, u))
-            .transpose()?;
-
-        let notes_encrypted = entry
-            .notes
-            .as_ref()
-            .map(|n| encrypt_string(dek, n))
-            .transpose()?;
-
-        // Serialize encrypted entries
-        let title_blob = bincode::serialize(&title_encrypted)
-            .map_err(|e| DatabaseError::Serialization(e.to_string()))?;
-        let username_blob = bincode::serialize(&username_encrypted)
-            .map_err(|e| DatabaseError::Serialization(e.to_string()))?;
-        let password_blob = bincode::serialize(&password_encrypted)
-            .map_err(|e| DatabaseError::Serialization(e.to_string()))?;
-        let url_blob = url_encrypted
-            .as_ref()
-            .map(|e| bincode::serialize(e).map_err(|e| DatabaseError::Serialization(e.to_string())))
-            .transpose()?;
-        let notes_blob = notes_encrypted
-            .as_ref()
-            .map(|e| bincode::serialize(e).map_err(|e| DatabaseError::Serialization(e.to_string())))
-            .transpose()?;
-
-        let nonce_blob = bincode::serialize(&title_encrypted.nonce)
-            .map_err(|e| DatabaseError::Serialization(e.to_string()))?;
-        let auth_tag_blob = bincode::serialize(&title_encrypted.auth_tag)
-            .map_err(|e| DatabaseError::Serialization(e.to_string()))?;
+        let (
+            title_blob,
+            username_blob,
+            password_blob,
+            url_blob,
+            notes_blob,
+            nonce_blob,
+            auth_tag_blob,
+        ) = if row_is_v2 {
+            let sid = sync_id.as_deref().ok_or_else(|| {
+                PasswordManagerError::InvalidInput(
+                    "v2 entry row has no sync_id — refusing update (identity cannot \
+                         be established)"
+                        .to_string(),
+                )
+            })?;
+            let cred = entry.credential_type;
+            let seal =
+                |purpose, plaintext: &str| self.seal_entry_field(sid, cred, purpose, plaintext);
+            (
+                seal(crate::crypto::aad::EnvelopePurpose::Summary, &entry.title)?,
+                seal(
+                    crate::crypto::aad::EnvelopePurpose::Summary,
+                    &entry.username,
+                )?,
+                seal(
+                    crate::crypto::aad::EnvelopePurpose::Secret,
+                    entry.password.as_str(),
+                )?,
+                entry
+                    .url
+                    .as_ref()
+                    .map(|u| seal(crate::crypto::aad::EnvelopePurpose::Secret, u))
+                    .transpose()?,
+                entry
+                    .notes
+                    .as_ref()
+                    .map(|n| seal(crate::crypto::aad::EnvelopePurpose::Secret, n))
+                    .transpose()?,
+                // Deprecated v1 columns — zero-filled on v2 rows.
+                bincode::serialize(&[0u8; 12])
+                    .map_err(|e| DatabaseError::Serialization(e.to_string()))?,
+                bincode::serialize(&[0u8; 16])
+                    .map_err(|e| DatabaseError::Serialization(e.to_string()))?,
+            )
+        } else {
+            let dek = self.key_hierarchy.dek()?;
+            let title_encrypted = encrypt_string(dek, &entry.title)?;
+            let username_encrypted = encrypt_string(dek, &entry.username)?;
+            let password_encrypted = encrypt_string(dek, &entry.password)?;
+            let url_encrypted = entry
+                .url
+                .as_ref()
+                .map(|u| encrypt_string(dek, u))
+                .transpose()?;
+            let notes_encrypted = entry
+                .notes
+                .as_ref()
+                .map(|n| encrypt_string(dek, n))
+                .transpose()?;
+            (
+                bincode::serialize(&title_encrypted)
+                    .map_err(|e| DatabaseError::Serialization(e.to_string()))?,
+                bincode::serialize(&username_encrypted)
+                    .map_err(|e| DatabaseError::Serialization(e.to_string()))?,
+                bincode::serialize(&password_encrypted)
+                    .map_err(|e| DatabaseError::Serialization(e.to_string()))?,
+                url_encrypted
+                    .as_ref()
+                    .map(|e| {
+                        bincode::serialize(e)
+                            .map_err(|e| DatabaseError::Serialization(e.to_string()))
+                    })
+                    .transpose()?,
+                notes_encrypted
+                    .as_ref()
+                    .map(|e| {
+                        bincode::serialize(e)
+                            .map_err(|e| DatabaseError::Serialization(e.to_string()))
+                    })
+                    .transpose()?,
+                bincode::serialize(&title_encrypted.nonce)
+                    .map_err(|e| DatabaseError::Serialization(e.to_string()))?,
+                bincode::serialize(&title_encrypted.auth_tag)
+                    .map_err(|e| DatabaseError::Serialization(e.to_string()))?,
+            )
+        };
 
         let now = Utc::now().timestamp();
 
@@ -1240,6 +1359,10 @@ impl VaultManager {
 
                 // Adopt the new master key only now — after durable commit.
                 self.key_hierarchy.adopt_master_key(new_master);
+                // Session epoch cache follows the committed rotation
+                // (envelope seals record the new epoch from here on).
+                self.session_epoch
+                    .store(new_epoch, std::sync::atomic::Ordering::Relaxed);
 
                 // Durable epoch advance: follow the out-of-DB high-water mark
                 // forward (WBS-301 / ADR-004 rev 4). The DB row above is the

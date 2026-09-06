@@ -319,7 +319,7 @@ pub fn seconds_remaining(period: u32, timestamp: i64) -> u32 {
     }
 }
 
-fn normalize_secret(secret_base32: &str) -> Result<String> {
+pub(crate) fn normalize_secret(secret_base32: &str) -> Result<String> {
     let normalized = secret_base32
         .trim()
         .replace([' ', '-'], "")

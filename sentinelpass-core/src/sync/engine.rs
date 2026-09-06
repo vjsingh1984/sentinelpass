@@ -17,6 +17,7 @@ use crate::sync::models::{
 use crate::{DatabaseError, PasswordManagerError, Result};
 use std::sync::{Arc, Mutex};
 use uuid::Uuid;
+use zeroize::Zeroizing;
 
 /// Decrypt a sync blob's payload and deserialize it into `T`.
 fn decrypt_sync_payload<T: serde::de::DeserializeOwned>(
@@ -80,12 +81,12 @@ fn resolve_sync_secret(
     legacy_nonce: Option<&[u8]>,
     legacy_auth_tag: Option<&[u8]>,
     decrypt_v1: impl Fn(&[u8], &[u8], &[u8]) -> Result<String>,
-) -> Result<String> {
+) -> Result<Zeroizing<String>> {
     if !plaintext.is_empty() {
-        return Ok(plaintext.to_string());
+        return Ok(Zeroizing::new(plaintext.to_string()));
     }
     match (legacy_ct, legacy_nonce, legacy_auth_tag) {
-        (Some(ct), Some(nonce), Some(tag)) => decrypt_v1(ct, nonce, tag),
+        (Some(ct), Some(nonce), Some(tag)) => Ok(Zeroizing::new(decrypt_v1(ct, nonce, tag)?)),
         _ => Err(PasswordManagerError::InvalidInput(
             "sync payload carries neither the current plaintext field nor the complete \
              legacy secret shape"

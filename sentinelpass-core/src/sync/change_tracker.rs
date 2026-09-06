@@ -131,14 +131,25 @@ pub fn collect_pending_credential_blobs(
                 continue;
             }
         };
+        // Optional fields: skip-and-warn per row (same containment as the
+        // required fields above) — a corrupt url/notes blob skips the
+        // WHOLE row (partial application would silently lose fields).
         let url = url_blob
             .filter(|b| !b.is_empty())
             .map(|b| open(crate::crypto::aad::EnvelopePurpose::Secret, &b))
-            .transpose()?;
+            .transpose()
+            .map_err(|e| {
+                tracing::warn!(entry_id, error = %e, "push: skipping entry (unreadable url)");
+                e
+            })?;
         let notes = notes_blob
             .filter(|b| !b.is_empty())
             .map(|b| open(crate::crypto::aad::EnvelopePurpose::Secret, &b))
-            .transpose()?;
+            .transpose()
+            .map_err(|e| {
+                tracing::warn!(entry_id, error = %e, "push: skipping entry (unreadable notes)");
+                e
+            })?;
 
         let payload = CredentialPayload {
             title,
@@ -212,6 +223,9 @@ pub fn collect_pending_ssh_key_blobs(
 
     let mut blobs = Vec::new();
 
+    // Fetched ONCE per push (fail-closed) — hoisted from the per-row loop.
+    let (vault_uuid, _epoch) = crate::vault::envelope_ops::read_local_identity(conn)?;
+
     for row in rows {
         let (
             sync_id_str,
@@ -257,10 +271,8 @@ pub fn collect_pending_ssh_key_blobs(
         // peer seals under ITS OWN identity on apply. Passing the local
         // v2 envelope through would transplant it with the wrong
         // identity. v1 rows are the SSH three-part shape (ct + separate
-        // nonce/tag columns).
-        // Fetched ONCE per push (hoisted from the per-row loop — adoption
-        // review), fail-closed via read_local_identity.
-        let (vault_uuid, _epoch) = crate::vault::envelope_ops::read_local_identity(conn)?;
+        // nonce/tag columns). Per-row skip-and-warn: one unreadable row
+        // must not wedge the whole push.
         let private_key = if private_key_encrypted.starts_with(crate::crypto::ENVELOPE_MAGIC) {
             crate::vault::envelope_ops::open_object_field(
                 dek,
@@ -269,15 +281,29 @@ pub fn collect_pending_ssh_key_blobs(
                 crate::crypto::aad::ObjectType::SshKey,
                 crate::crypto::aad::EnvelopePurpose::Secret,
                 &private_key_encrypted,
-            )?
+            )
         } else {
-            Zeroizing::new(crate::ssh::SshKey::decrypt_private_key(
-                dek,
-                &private_key_encrypted,
-                &nonce,
-                &auth_tag,
-            )?)
+            crate::ssh::SshKey::decrypt_private_key(dek, &private_key_encrypted, &nonce, &auth_tag)
+                .map(Zeroizing::new)
         };
+        let private_key = match private_key {
+            Ok(pk) => pk,
+            Err(e) => {
+                tracing::warn!(
+                    sync_id = %sync_id_str,
+                    error = %e,
+                    "push: skipping unreadable SSH key (row stays pending)"
+                );
+                continue;
+            }
+        };
+
+        // v0.8.x peers require the OLD wire fields (required Vec<u8>s, no
+        // defaults): emit a context-free v1-style encryption of the same
+        // plaintext so mixed fleets keep working in BOTH directions. New
+        // peers prefer `private_key` and ignore these.
+        let legacy_enc = crate::crypto::cipher::encrypt_string(dek, private_key.as_str())
+            .map_err(crate::PasswordManagerError::Crypto)?;
 
         let payload = SshKeyPayload {
             name,
@@ -286,9 +312,9 @@ pub fn collect_pending_ssh_key_blobs(
             key_size,
             public_key,
             private_key,
-            private_key_encrypted: None,
-            legacy_nonce: None,
-            legacy_auth_tag: None,
+            private_key_encrypted: Some(legacy_enc.ciphertext),
+            legacy_nonce: Some(legacy_enc.nonce.to_vec()),
+            legacy_auth_tag: Some(legacy_enc.auth_tag.to_vec()),
             fingerprint,
             created_at,
             modified_at,
@@ -398,7 +424,8 @@ pub fn collect_pending_totp_blobs(
         // Fetched ONCE per push (hoisted — see SSH collector).
         let (vault_uuid, _epoch) = crate::vault::envelope_ops::read_local_identity(conn)?;
         // Class-aware dual-read (see SSH above): TOTP v1 rows are
-        // ct + separate nonce/tag columns.
+        // ct + separate nonce/tag columns. Per-row skip-and-warn: one
+        // unreadable row must not wedge the whole push.
         let secret = if secret_encrypted.starts_with(crate::crypto::ENVELOPE_MAGIC) {
             crate::vault::envelope_ops::open_object_field(
                 dek,
@@ -407,21 +434,33 @@ pub fn collect_pending_totp_blobs(
                 crate::crypto::aad::ObjectType::TotpSecret,
                 crate::crypto::aad::EnvelopePurpose::Secret,
                 &secret_encrypted,
-            )?
+            )
         } else {
-            Zeroizing::new(crate::totp::decrypt_totp_secret(
-                dek,
-                &secret_encrypted,
-                &nonce,
-                &auth_tag,
-            )?)
+            crate::totp::decrypt_totp_secret(dek, &secret_encrypted, &nonce, &auth_tag)
+                .map(Zeroizing::new)
         };
+        let secret = match secret {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::warn!(
+                    sync_id = %sync_id_str,
+                    error = %e,
+                    "push: skipping unreadable TOTP secret (row stays pending)"
+                );
+                continue;
+            }
+        };
+
+        // v0.8.x peers require the OLD wire fields — emit a context-free
+        // v1-style encryption of the same plaintext (see SSH collector).
+        let legacy_enc = crate::crypto::cipher::encrypt_string(dek, secret.as_str())
+            .map_err(crate::PasswordManagerError::Crypto)?;
 
         let payload = TotpPayload {
             secret,
-            secret_encrypted: None,
-            legacy_nonce: None,
-            legacy_auth_tag: None,
+            secret_encrypted: Some(legacy_enc.ciphertext),
+            legacy_nonce: Some(legacy_enc.nonce.to_vec()),
+            legacy_auth_tag: Some(legacy_enc.auth_tag.to_vec()),
             algorithm,
             digits,
             period,

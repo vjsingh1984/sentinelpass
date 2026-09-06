@@ -954,20 +954,60 @@ impl VaultManager {
 
         // Row-level format policy (WBS-304): the row's stable sync_id is
         // required to seal v2 (it is the AAD's object identity); v1 rows —
-        // legacy imports with no sync_id — stay on the v1 write path so a
-        // row is never mixed-format. Bulk v1→v2 conversion is WBS-404.
+        // anything pre-adoption, sync-backed or not — stay on the v1 write
+        // path so a row is never mixed-format. Bulk v1→v2 conversion is
+        // WBS-404. Format is classified across ALL five blob columns, not
+        // just password: a "mixed" row (v2 columns alongside v1) is not a
+        // legacy row — it is tamper (e.g. a v1 blob planted into a v2
+        // row's password column to launder a downgrade through this very
+        // update path) and refuses (gate review, finding 4).
         let (sync_id, row_is_v2) = {
             let db = self.lock_db()?;
-            let row: (Option<String>, Vec<u8>) = db
+            // (sync_id, password, title, username, url, notes)
+            #[allow(clippy::type_complexity)]
+            let row: (Option<String>, Vec<u8>, Vec<u8>, Vec<u8>, Option<Vec<u8>>, Option<Vec<u8>>) = db
                 .conn()
                 .query_row(
-                    "SELECT sync_id, password FROM entries WHERE entry_id = ?1",
+                    "SELECT sync_id, password, title, username, url, notes FROM entries WHERE entry_id = ?1",
                     rusqlite::params![entry_id],
-                    |r| Ok((r.get(0)?, r.get(1)?)),
+                    |r| {
+                        Ok((
+                            r.get(0)?,
+                            r.get(1)?,
+                            r.get(2)?,
+                            r.get(3)?,
+                            r.get(4)?,
+                            r.get(5)?,
+                        ))
+                    },
                 )
                 .map_err(DatabaseError::Sqlite)?;
-            let v2 = row.1.starts_with(crate::crypto::ENVELOPE_MAGIC);
-            (row.0, v2)
+            let is_v2 = |blob: &Vec<u8>| blob.starts_with(crate::crypto::ENVELOPE_MAGIC);
+            let password_v2 = is_v2(&row.1);
+            // Format agreement across all PRESENT blob columns. A NULL
+            // optional column is format-NEUTRAL (absence is NULL — never
+            // a v1 blob), so only Some columns are compared; counting
+            // NULL as "v1" would flag every legitimate v2 row that has no
+            // url/notes (found by the registry rotation test).
+            let mismatch = |blob: Option<&Vec<u8>>| -> bool {
+                match blob {
+                    Some(b) => is_v2(b) != password_v2,
+                    None => false,
+                }
+            };
+            let mixed = mismatch(Some(&row.2))
+                || mismatch(Some(&row.3))
+                || mismatch(row.4.as_ref())
+                || mismatch(row.5.as_ref());
+            if mixed {
+                return Err(PasswordManagerError::InvalidInput(
+                    "entry row has mixed v1/v2 field formats — refusing to update; \\
+                     restore this entry from a verified backup (WBS-404 migration \\
+                     will normalize formats)"
+                        .to_string(),
+                ));
+            }
+            (row.0, password_v2)
         };
 
         let (
@@ -979,6 +1019,7 @@ impl VaultManager {
             nonce_blob,
             auth_tag_blob,
         ) = if row_is_v2 {
+            let (zero_nonce, zero_tag) = crate::vault::envelope_ops::zeroed_legacy_v1_columns();
             let sid = sync_id.as_deref().ok_or_else(|| {
                 PasswordManagerError::InvalidInput(
                     "v2 entry row has no sync_id — refusing update (identity cannot \
@@ -1010,10 +1051,8 @@ impl VaultManager {
                     .map(|n| seal(crate::crypto::aad::EnvelopePurpose::Secret, n))
                     .transpose()?,
                 // Deprecated v1 columns — zero-filled on v2 rows.
-                bincode::serialize(&[0u8; 12])
-                    .map_err(|e| DatabaseError::Serialization(e.to_string()))?,
-                bincode::serialize(&[0u8; 16])
-                    .map_err(|e| DatabaseError::Serialization(e.to_string()))?,
+                zero_nonce,
+                zero_tag,
             )
         } else {
             let dek = self.key_hierarchy.dek()?;

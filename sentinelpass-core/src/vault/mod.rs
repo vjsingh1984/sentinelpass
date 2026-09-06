@@ -1,6 +1,7 @@
 //! Vault management - coordinates crypto and database layers
 
 mod biometric_ops;
+pub(crate) mod domain_ops;
 pub(crate) mod envelope_ops;
 pub(crate) mod epoch_guard;
 mod health_ops;
@@ -8,6 +9,7 @@ pub mod recovery;
 mod registry_ops;
 pub(crate) mod slot_ops;
 
+pub use domain_ops::DomainSweepReport;
 pub use slot_ops::{SlotSummary, SlotType};
 mod ssh_ops;
 mod sync_ops;
@@ -378,6 +380,20 @@ impl VaultManager {
                 tracing::warn!(
                     error = %e,
                     "registry index backfill failed; will retry on next open"
+                );
+            }
+        }
+
+        // Domain-mapping index backfill (WBS-306): seal legacy plaintext
+        // mappings + write their lookup tags post-unlock (the migration is
+        // pure DDL — no DEK exists at migration time). Count-triggered and
+        // idempotent; a failed sweep retries on the next open. Best-effort:
+        // unbackfilled rows stay findable via the legacy plaintext fallback.
+        if vault_manager.domain_backfill_needed().unwrap_or(false) {
+            if let Err(e) = vault_manager.sweep_domain_mappings() {
+                tracing::warn!(
+                    error = %e,
+                    "domain-mapping index backfill failed; will retry on next open"
                 );
             }
         }
@@ -792,26 +808,12 @@ impl VaultManager {
         Ok(entries)
     }
 
-    /// Find entries matching a domain via the `domain_mappings` index.
-    ///
-    /// Returns only entries that have a domain mapping for the given domain.
-    /// Falls back to an empty list when no mappings exist (callers should
-    /// fall back to a full scan when domain_mappings are not yet populated).
+    /// Find entries matching a domain via the encrypted `domain_mappings`
+    /// index (WBS-306). Implemented in `domain_ops`: tag-set intersection
+    /// pre-filter, sealed-domain envelope verification, and a legacy
+    /// plaintext fallback for rows not yet backfilled.
     pub fn find_entries_by_domain(&self, domain: &str) -> Result<Vec<Entry>> {
-        if !self.is_unlocked() {
-            return Err(PasswordManagerError::VaultLocked);
-        }
-
-        let db = self.lock_db()?;
-        let repo = SqliteEntryRepository::new(&db);
-        let raw_rows = repo.find_by_domain(domain)?;
-
-        drop(db);
-
-        raw_rows
-            .iter()
-            .map(|row| self.decrypt_entry_row(row))
-            .collect::<Result<Vec<_>>>()
+        self.domain_lookup(domain)
     }
 
     /// List entries with pagination to prevent performance issues with large vaults.

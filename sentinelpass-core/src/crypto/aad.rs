@@ -50,6 +50,12 @@ pub enum EnvelopePurpose {
 /// What kind of object this envelope belongs to. Deliberately covers every
 /// envelope-bearing object family in the vault, not just password entries —
 /// consumers (WBS-304+) pick the variant that matches their record.
+///
+/// `DomainMapping` (WBS-306) seals the autofill domain string of a
+/// `domain_mappings` row; its object identity is the row's mapping-local
+/// `sync_id`. Adding a variant is not an AAD wire break: existing contexts
+/// never contain the new tag, and golden vectors pin only the variants they
+/// name.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ObjectType {
@@ -60,6 +66,7 @@ pub enum ObjectType {
     TotpSecret,
     RegistryEntity,
     KeySlot,
+    DomainMapping,
 }
 
 /// Typed AAD inputs: every field GCM's tag will bind this envelope to.

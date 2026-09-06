@@ -9,6 +9,7 @@ pub mod biometric;
 pub mod crypto;
 pub mod daemon;
 pub mod database;
+pub mod domain;
 pub mod external_secret_access;
 pub mod import_export;
 pub mod keepass;

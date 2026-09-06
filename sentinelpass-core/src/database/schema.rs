@@ -6,7 +6,12 @@ use std::path::Path;
 use tracing::warn;
 
 /// Current schema version. Incremented when the schema changes.
-pub const CURRENT_SCHEMA_VERSION: i32 = 7;
+///
+/// v8 (WBS-306 / ADR-005 rev 4): `domain_mappings.domain_enc` (sealed
+/// domain) + the `domain_mapping_tags` keyed-lookup table; the plaintext
+/// domain INDEX is dropped (lookups move to tags). The legacy plaintext
+/// `domain` COLUMN remains until the WBS-404 bulk migration clears it.
+pub const CURRENT_SCHEMA_VERSION: i32 = 8;
 
 /// Main database connection and schema manager
 pub struct Database {
@@ -81,6 +86,7 @@ impl Database {
         self.create_key_slots_table()?;
         self.create_entries_table()?;
         self.create_domain_mappings_table()?;
+        self.create_domain_mapping_tags_table()?;
         self.create_failed_attempts_table()?;
         self.create_ssh_keys_table()?;
         self.create_totp_secrets_table()?;
@@ -178,7 +184,34 @@ impl Database {
                 sync_version INTEGER NOT NULL DEFAULT 0,
                 sync_state TEXT NOT NULL DEFAULT 'pending',
                 last_synced_at INTEGER,
+                domain_enc BLOB,
                 FOREIGN KEY (entry_id) REFERENCES entries(entry_id) ON DELETE CASCADE
+            )",
+                [],
+            )
+            .map_err(DatabaseError::Sqlite)?;
+        Ok(())
+    }
+
+    /// Keyed equality tags for encrypted domain lookups (WBS-306 /
+    /// ADR-005 rev 4): one HMAC-SHA256 per label-chain suffix of the
+    /// mapping's normalized host, under the DEK-derived domain-tag key.
+    /// `is_chain_root` marks the FULL-host tag (the suffix-match predicate
+    /// needs the root/suffix distinction — shared suffix chains alone, e.g.
+    /// `com`, must never produce matches). Tags make the sealed
+    /// `domain_enc` column searchable WITHOUT a plaintext index; rows die
+    /// with their mapping (FK CASCADE).
+    fn create_domain_mapping_tags_table(&self) -> Result<()> {
+        self.conn
+            .execute(
+                "CREATE TABLE IF NOT EXISTS domain_mapping_tags (
+                tag_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                mapping_id INTEGER NOT NULL,
+                tag BLOB NOT NULL,
+                is_chain_root INTEGER NOT NULL DEFAULT 0,
+                equality_key_id INTEGER NOT NULL DEFAULT 1,
+                FOREIGN KEY (mapping_id) REFERENCES domain_mappings(mapping_id)
+                    ON DELETE CASCADE
             )",
                 [],
             )
@@ -368,7 +401,11 @@ impl Database {
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_entries_sync_id ON entries(sync_id)",
             "CREATE INDEX IF NOT EXISTS idx_entries_sync_state ON entries(sync_state)",
             "CREATE INDEX IF NOT EXISTS idx_domain_mappings_entry_id ON domain_mappings(entry_id)",
-            "CREATE INDEX IF NOT EXISTS idx_domain_mappings_domain ON domain_mappings(domain)",
+            // v8 (WBS-306): lookups run through keyed equality tags; the
+            // plaintext domain index is gone (dropped by migrate_v7_to_v8).
+            "CREATE INDEX IF NOT EXISTS idx_domain_mapping_tags_tag ON domain_mapping_tags(tag)",
+            "CREATE INDEX IF NOT EXISTS idx_domain_mapping_tags_root ON domain_mapping_tags(tag, is_chain_root)",
+            "CREATE INDEX IF NOT EXISTS idx_domain_mapping_tags_mapping ON domain_mapping_tags(mapping_id)",
             "CREATE INDEX IF NOT EXISTS idx_totp_secrets_entry_id ON totp_secrets(entry_id)",
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_ssh_keys_sync_id ON ssh_keys(sync_id)",
             "CREATE INDEX IF NOT EXISTS idx_ssh_keys_sync_state ON ssh_keys(sync_state)",
@@ -526,7 +563,12 @@ mod tests {
         assert!(index_names.contains(&"idx_entries_vault_id".to_string()));
         assert!(index_names.contains(&"idx_entries_favorite".to_string()));
         assert!(index_names.contains(&"idx_domain_mappings_entry_id".to_string()));
-        assert!(index_names.contains(&"idx_domain_mappings_domain".to_string()));
+        // v8 (WBS-306): the plaintext domain index is replaced by the
+        // keyed tag indexes.
+        assert!(index_names.contains(&"idx_domain_mapping_tags_tag".to_string()));
+        assert!(index_names.contains(&"idx_domain_mapping_tags_root".to_string()));
+        assert!(index_names.contains(&"idx_domain_mapping_tags_mapping".to_string()));
+        assert!(!index_names.contains(&"idx_domain_mappings_domain".to_string()));
         assert!(index_names.contains(&"idx_totp_secrets_entry_id".to_string()));
         // v3 indexes must be present for new vaults too
         assert!(index_names.contains(&"idx_entries_modified_at".to_string()));

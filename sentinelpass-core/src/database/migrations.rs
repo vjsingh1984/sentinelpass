@@ -509,6 +509,75 @@ pub fn migrate_v3_to_v4(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+/// v7 → v8 (WBS-306 / ADR-005 rev 4): encrypted domain-mapping identity.
+///
+/// Adds `domain_mappings.domain_enc` (the sealed-domain envelope column)
+/// and the `domain_mapping_tags` keyed-lookup table, and DROPS the
+/// plaintext `idx_domain_mappings_domain` index — lookups move to tag
+/// intersection, so keeping a plaintext search structure would defeat the
+/// point (SR-CRYPTO-001 / SR-DATA-004). The legacy plaintext `domain`
+/// COLUMN stays populated until WBS-404's bulk migration clears it; reads
+/// are dual and the post-unlock sweep backfills envelopes + tags (migrations
+/// run before the DEK exists, so the crypto backfill CANNOT happen here —
+/// the same split as the v5 registry migration).
+///
+/// DDL only, in ONE transaction (ADR-005 rev 3): a failure rolls back to a
+/// consistent v7 state.
+pub fn migrate_v7_to_v8(conn: &Connection) -> Result<()> {
+    conn.execute_batch("BEGIN IMMEDIATE;")
+        .map_err(DatabaseError::Sqlite)?;
+
+    let inner = || -> Result<()> {
+        let existing_domain_cols: Vec<String> = {
+            let mut stmt = conn
+                .prepare("SELECT name FROM pragma_table_info('domain_mappings')")
+                .map_err(DatabaseError::Sqlite)?;
+            let rows = stmt
+                .query_map([], |r| r.get::<_, String>(0))
+                .map_err(DatabaseError::Sqlite)?;
+            rows.filter_map(|r| r.ok()).collect()
+        };
+
+        let mut stmts = String::from(
+            "CREATE TABLE IF NOT EXISTS domain_mapping_tags (
+                tag_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                mapping_id INTEGER NOT NULL,
+                tag BLOB NOT NULL,
+                is_chain_root INTEGER NOT NULL DEFAULT 0,
+                equality_key_id INTEGER NOT NULL DEFAULT 1,
+                FOREIGN KEY (mapping_id) REFERENCES domain_mappings(mapping_id)
+                    ON DELETE CASCADE
+            );
+            CREATE INDEX IF NOT EXISTS idx_domain_mapping_tags_tag ON domain_mapping_tags(tag);
+            CREATE INDEX IF NOT EXISTS idx_domain_mapping_tags_root
+                ON domain_mapping_tags(tag, is_chain_root);
+            CREATE INDEX IF NOT EXISTS idx_domain_mapping_tags_mapping
+                ON domain_mapping_tags(mapping_id);
+            DROP INDEX IF EXISTS idx_domain_mappings_domain;
+            ",
+        );
+        // Column adds tolerate pre-existing columns (restores, hand-built
+        // fixtures) — the established probe pattern.
+        if !existing_domain_cols.iter().any(|c| c == "domain_enc") {
+            stmts.push_str("ALTER TABLE domain_mappings ADD COLUMN domain_enc BLOB;\n");
+        }
+        stmts.push_str("UPDATE db_metadata SET version = 8 WHERE id = 1;\n");
+        conn.execute_batch(&stmts).map_err(DatabaseError::Sqlite)?;
+        Ok(())
+    };
+
+    match inner() {
+        Ok(()) => conn
+            .execute_batch("COMMIT;")
+            .map(|_| ())
+            .map_err(|e| DatabaseError::Sqlite(e).into()),
+        Err(e) => {
+            let _ = conn.execute_batch("ROLLBACK;");
+            Err(e)
+        }
+    }
+}
+
 /// Run all pending migrations to bring the database up to the current version.
 pub fn run_migrations(conn: &Connection) -> Result<()> {
     let version: i32 = conn
@@ -539,6 +608,10 @@ pub fn run_migrations(conn: &Connection) -> Result<()> {
 
     if version < 7 {
         migrate_v6_to_v7(conn)?;
+    }
+
+    if version < 8 {
+        migrate_v7_to_v8(conn)?;
     }
 
     Ok(())
@@ -848,6 +921,96 @@ mod tests {
         let conn = create_v4_db();
         migrate_v4_to_v5(&conn).unwrap();
         conn
+    }
+
+    /// v7 database: everything through the key-slot registry migration.
+    fn create_v7_db() -> rusqlite::Connection {
+        let conn = create_v1_db();
+        migrate_v1_to_v2(&conn).unwrap();
+        migrate_v2_to_v3(&conn).unwrap();
+        migrate_v3_to_v4(&conn).unwrap();
+        migrate_v4_to_v5(&conn).unwrap();
+        migrate_v5_to_v6(&conn).unwrap();
+        migrate_v6_to_v7(&conn).unwrap();
+        conn
+    }
+
+    /// v8 (WBS-306): the sealed-domain column, the tag table, and its
+    /// indexes exist; the plaintext domain index is gone; existing
+    /// plaintext data is untouched (the crypto backfill is post-unlock).
+    #[test]
+    fn migrate_v7_to_v8_adds_encrypted_domain_columns_and_drops_plaintext_index() {
+        let conn = create_v7_db();
+
+        // A legacy mapping row exists before the migration.
+        conn.execute(
+            "INSERT INTO entries (vault_id, title, username, password, entry_nonce, auth_tag,
+                created_at, modified_at, credential_type)
+             VALUES (1, X'01', X'02', X'03', X'04', X'05', 0, 0, 'password')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO domain_mappings (entry_id, domain, is_primary) VALUES (1, 'example.com', 1)",
+            [],
+        )
+        .unwrap();
+
+        migrate_v7_to_v8(&conn).unwrap();
+        run_migrations(&conn).unwrap(); // idempotent continuation
+
+        let version: i32 = conn
+            .query_row("SELECT version FROM db_metadata WHERE id = 1", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(version, 8);
+
+        let has_domain_enc: bool = conn
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM pragma_table_info('domain_mappings') WHERE name='domain_enc')",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(has_domain_enc);
+
+        for object in [
+            ("table", "domain_mapping_tags"),
+            ("index", "idx_domain_mapping_tags_tag"),
+            ("index", "idx_domain_mapping_tags_mapping"),
+        ] {
+            let exists: bool = conn
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type=?1 AND name=?2)",
+                    rusqlite::params![object.0, object.1],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert!(exists, "{} {} must exist after v8", object.0, object.1);
+        }
+
+        // The plaintext index must be gone.
+        let plaintext_index: bool = conn
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='index' AND name='idx_domain_mappings_domain')",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(!plaintext_index);
+
+        // The legacy plaintext data survives untouched (backfill is
+        // post-unlock, not here).
+        let (domain, domain_enc): (String, Option<Vec<u8>>) = conn
+            .query_row(
+                "SELECT domain, domain_enc FROM domain_mappings WHERE mapping_id = 1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(domain, "example.com");
+        assert!(domain_enc.is_none());
     }
 
     #[test]

@@ -369,6 +369,17 @@ impl SyncEngine {
     ) -> Result<()> {
         let sync_id_str = blob.sync_id.to_string();
 
+        // Local identity + domain-tag key for v2 sealing (WBS-304/WBS-306):
+        // entry fields AND domain mappings seal under the LOCAL identity.
+        let (vault_uuid, epoch) = crate::vault::envelope_ops::read_local_identity(conn)?;
+        let domain_tag_key = crate::crypto::keyring::derive_domain_tag_key(dek)?;
+        let mapping_ctx = crate::vault::domain_ops::MappingSealCtx {
+            dek,
+            vault_uuid: &vault_uuid,
+            epoch,
+            tag_key: &domain_tag_key,
+        };
+
         // Check if we have this entry locally
         let local: Option<(i64, i64, i64)> = conn
             .query_row(
@@ -437,18 +448,21 @@ impl SyncEngine {
             )
             .map_err(DatabaseError::Sqlite)?;
 
-            // Update domain mappings
+            // Update domain mappings (sealed + tagged, WBS-306 — the
+            // mapping delete cascades its tag rows).
             conn.execute(
                 "DELETE FROM domain_mappings WHERE entry_id = ?1",
                 [entry_id],
             )
             .map_err(DatabaseError::Sqlite)?;
             for dm in &payload.domains {
-                conn.execute(
-                    "INSERT INTO domain_mappings (entry_id, domain, is_primary) VALUES (?1, ?2, ?3)",
-                    rusqlite::params![entry_id, dm.domain, dm.is_primary],
-                )
-                .map_err(DatabaseError::Sqlite)?;
+                crate::vault::domain_ops::insert_sealed_domain_mapping(
+                    conn,
+                    &mapping_ctx,
+                    entry_id,
+                    &dm.domain,
+                    dm.is_primary,
+                )?;
             }
 
             // Registry equality index (ADR-001): sync apply is a first-class
@@ -500,11 +514,13 @@ impl SyncEngine {
 
             let entry_id = conn.last_insert_rowid();
             for dm in &payload.domains {
-                conn.execute(
-                    "INSERT INTO domain_mappings (entry_id, domain, is_primary) VALUES (?1, ?2, ?3)",
-                    rusqlite::params![entry_id, dm.domain, dm.is_primary],
-                )
-                .map_err(DatabaseError::Sqlite)?;
+                crate::vault::domain_ops::insert_sealed_domain_mapping(
+                    conn,
+                    &mapping_ctx,
+                    entry_id,
+                    &dm.domain,
+                    dm.is_primary,
+                )?;
             }
 
             // Registry equality index for pulled-in entries (same rationale
@@ -580,6 +596,23 @@ impl SyncEngine {
             )?;
             let (nonce_blob, auth_tag_blob) =
                 crate::vault::envelope_ops::zeroed_legacy_v1_columns();
+            // Identity metadata sealed in place (WBS-306): the comment
+            // column carries a Summary envelope under the row's identity.
+            let comment_blob = payload
+                .comment
+                .as_deref()
+                .map(|c| {
+                    crate::vault::envelope_ops::seal_object_field(
+                        dek,
+                        &vault_uuid,
+                        &sync_id_str,
+                        crate::crypto::aad::ObjectType::SshKey,
+                        crate::crypto::aad::EnvelopePurpose::Summary,
+                        c,
+                        epoch,
+                    )
+                })
+                .transpose()?;
 
             let now = chrono::Utc::now().timestamp();
             conn.execute(
@@ -591,7 +624,7 @@ impl SyncEngine {
                  WHERE key_id = ?13",
                 rusqlite::params![
                     payload.name,
-                    payload.comment,
+                    comment_blob,
                     payload.key_type,
                     payload.key_size,
                     payload.public_key,
@@ -629,6 +662,22 @@ impl SyncEngine {
             )?;
             let (nonce_blob, auth_tag_blob) =
                 crate::vault::envelope_ops::zeroed_legacy_v1_columns();
+            // Identity metadata sealed in place (WBS-306 — see UPDATE arm).
+            let comment_blob = payload
+                .comment
+                .as_deref()
+                .map(|c| {
+                    crate::vault::envelope_ops::seal_object_field(
+                        dek,
+                        &vault_uuid,
+                        &sync_id_str,
+                        crate::crypto::aad::ObjectType::SshKey,
+                        crate::crypto::aad::EnvelopePurpose::Summary,
+                        c,
+                        epoch,
+                    )
+                })
+                .transpose()?;
             let now = chrono::Utc::now().timestamp();
             conn.execute(
                 "INSERT INTO ssh_keys (
@@ -639,7 +688,7 @@ impl SyncEngine {
                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, 'synced', ?14, 0)",
                 rusqlite::params![
                     payload.name,
-                    payload.comment,
+                    comment_blob,
                     payload.key_type,
                     payload.key_size,
                     payload.public_key,
@@ -726,6 +775,38 @@ impl SyncEngine {
             )?;
             let (nonce_blob, auth_tag_blob) =
                 crate::vault::envelope_ops::zeroed_legacy_v1_columns();
+            // Identity metadata sealed in place (WBS-306): issuer/
+            // account_name carry Summary envelopes under the row's identity.
+            let issuer_blob = payload
+                .issuer
+                .as_deref()
+                .map(|c| {
+                    crate::vault::envelope_ops::seal_object_field(
+                        dek,
+                        &vault_uuid,
+                        &sync_id_str,
+                        crate::crypto::aad::ObjectType::TotpSecret,
+                        crate::crypto::aad::EnvelopePurpose::Summary,
+                        c,
+                        epoch,
+                    )
+                })
+                .transpose()?;
+            let account_name_blob = payload
+                .account_name
+                .as_deref()
+                .map(|c| {
+                    crate::vault::envelope_ops::seal_object_field(
+                        dek,
+                        &vault_uuid,
+                        &sync_id_str,
+                        crate::crypto::aad::ObjectType::TotpSecret,
+                        crate::crypto::aad::EnvelopePurpose::Summary,
+                        c,
+                        epoch,
+                    )
+                })
+                .transpose()?;
 
             let Some(eid) = entry_id else {
                 // The parent credential has not landed locally (relay
@@ -757,8 +838,8 @@ impl SyncEngine {
                         payload.algorithm,
                         payload.digits as i32,
                         payload.period as i32,
-                        payload.issuer,
-                        payload.account_name,
+                        issuer_blob,
+                        account_name_blob,
                         blob.sync_version as i64,
                         now,
                         totp_id,
@@ -799,6 +880,37 @@ impl SyncEngine {
             )?;
             let (nonce_blob, auth_tag_blob) =
                 crate::vault::envelope_ops::zeroed_legacy_v1_columns();
+            // Identity metadata sealed in place (WBS-306 — see UPDATE arm).
+            let issuer_blob = payload
+                .issuer
+                .as_deref()
+                .map(|c| {
+                    crate::vault::envelope_ops::seal_object_field(
+                        dek,
+                        &vault_uuid,
+                        &sync_id_str,
+                        crate::crypto::aad::ObjectType::TotpSecret,
+                        crate::crypto::aad::EnvelopePurpose::Summary,
+                        c,
+                        epoch,
+                    )
+                })
+                .transpose()?;
+            let account_name_blob = payload
+                .account_name
+                .as_deref()
+                .map(|c| {
+                    crate::vault::envelope_ops::seal_object_field(
+                        dek,
+                        &vault_uuid,
+                        &sync_id_str,
+                        crate::crypto::aad::ObjectType::TotpSecret,
+                        crate::crypto::aad::EnvelopePurpose::Summary,
+                        c,
+                        epoch,
+                    )
+                })
+                .transpose()?;
 
             if entry_id.is_none() {
                 tracing::warn!(
@@ -825,8 +937,8 @@ impl SyncEngine {
                         payload.algorithm,
                         payload.digits as i32,
                         payload.period as i32,
-                        payload.issuer,
-                        payload.account_name,
+                        issuer_blob,
+                        account_name_blob,
                         payload.created_at,
                         sync_id_str,
                         blob.sync_version as i64,

@@ -2979,3 +2979,53 @@ fn entry_password_field_is_zeroizing() {
     };
     require_zeroing_string(&entry.password);
 }
+
+/// WBS-306: the post-unlock domain-mapping backfill runs at vault open —
+/// a legacy plaintext mapping (pre-v8 shape) becomes tag-searchable with
+/// suffix-chain semantics WITHOUT any explicit user action, right after
+/// the first open by a v8 binary.
+#[test]
+fn domain_mapping_backfill_runs_at_open() {
+    let temp = TempDir::new().unwrap();
+    let path = temp.path().join("domain-backfill.db");
+    let password = b"domain_backfill_password";
+
+    let vault = VaultManager::create(&path, password).unwrap();
+    let entry_id = vault
+        .add_entry(&Entry {
+            entry_id: None,
+            title: "Backfill".to_string(),
+            username: "user@example.com".to_string(),
+            password: "backfill-secret".to_string().into(),
+            url: None,
+            notes: None,
+            credential_type: CredentialType::Password,
+            created_at: Utc::now(),
+            modified_at: Utc::now(),
+            favorite: false,
+        })
+        .unwrap();
+    // Pre-v8 shape: plaintext-only mapping row (domain_enc NULL, no tags).
+    {
+        let db = vault.db.lock().unwrap();
+        db.conn()
+            .execute(
+                "INSERT INTO domain_mappings (entry_id, domain, is_primary) VALUES (?1, 'open.example', 1)",
+                [entry_id],
+            )
+            .unwrap();
+    }
+
+    // Pre-reopen: legacy fallback is exact-match only, so the suffix query
+    // must NOT match yet.
+    assert!(vault
+        .find_entries_by_domain("sub.open.example")
+        .unwrap()
+        .is_empty());
+    drop(vault);
+
+    let reopened = VaultManager::open(&path, password).unwrap();
+    let found = reopened.find_entries_by_domain("sub.open.example").unwrap();
+    assert_eq!(found.len(), 1, "open-time sweep must backfill tags");
+    assert_eq!(found[0].password.as_str(), "backfill-secret");
+}

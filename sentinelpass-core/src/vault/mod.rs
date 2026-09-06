@@ -982,7 +982,7 @@ impl VaultManager {
                     },
                 )
                 .map_err(DatabaseError::Sqlite)?;
-            let is_v2 = |blob: &Vec<u8>| blob.starts_with(crate::crypto::ENVELOPE_MAGIC);
+            let is_v2 = |blob: &Vec<u8>| crate::vault::envelope_ops::is_envelope_blob(blob);
             let password_v2 = is_v2(&row.1);
             // Format agreement across all PRESENT blob columns. A NULL
             // optional column is format-NEUTRAL (absence is NULL — never
@@ -1001,9 +1001,8 @@ impl VaultManager {
                 || mismatch(row.5.as_ref());
             if mixed {
                 return Err(PasswordManagerError::InvalidInput(
-                    "entry row has mixed v1/v2 field formats — refusing to update; \\
-                     restore this entry from a verified backup (WBS-404 migration \\
-                     will normalize formats)"
+                    "entry row has mixed v1/v2 field formats — refusing to update; \
+                     restore this entry from a verified backup"
                         .to_string(),
                 ));
             }

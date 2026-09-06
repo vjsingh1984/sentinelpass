@@ -2558,7 +2558,7 @@ fn entity_ssh_totp_fields_are_sealed_v2() {
                 |r| r.get(0),
             )
             .unwrap();
-        assert!(name_blob.starts_with(crate::crypto::ENVELOPE_MAGIC));
+        assert!(crate::vault::envelope_ops::is_envelope_blob(&name_blob));
     }
     let entities = vault.list_entities().unwrap();
     assert_eq!(entities.len(), 1);
@@ -2587,7 +2587,7 @@ fn entity_ssh_totp_fields_are_sealed_v2() {
                 |r| r.get(0),
             )
             .unwrap();
-        assert!(blob.starts_with(crate::crypto::ENVELOPE_MAGIC));
+        assert!(crate::vault::envelope_ops::is_envelope_blob(&blob));
         let sync_id: Option<String> = db
             .conn()
             .query_row(
@@ -2637,7 +2637,7 @@ fn entity_ssh_totp_fields_are_sealed_v2() {
                 |r| r.get(0),
             )
             .unwrap();
-        assert!(blob.starts_with(crate::crypto::ENVELOPE_MAGIC));
+        assert!(crate::vault::envelope_ops::is_envelope_blob(&blob));
     }
     let code = vault.generate_totp_code(entry_id).unwrap();
     assert_eq!(code.code.len(), 6);

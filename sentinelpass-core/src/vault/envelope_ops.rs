@@ -119,6 +119,13 @@ pub(crate) fn read_local_identity(conn: &rusqlite::Connection) -> Result<(String
     Ok((vault_uuid, epoch))
 }
 
+/// The versioned v2 marker test — the ONE owner of "is this blob an
+/// envelope" row-format policy (a second accepted prefix, e.g. a v3
+/// magic, changes here and nowhere else; adoption review, gate round).
+pub(crate) fn is_envelope_blob(blob: &[u8]) -> bool {
+    blob.starts_with(ENVELOPE_MAGIC)
+}
+
 /// The zero-filled placeholders for the DEPRECATED v1 nonce/auth_tag
 /// columns on v2 rows (v1 readers are gone; the columns are NOT NULL
 /// until the v2 schema migration drops them). One helper owns the policy

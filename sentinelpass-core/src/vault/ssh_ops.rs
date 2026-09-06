@@ -53,10 +53,7 @@ impl VaultManager {
         // add_ssh_key_plaintext). Refuse with guidance instead of
         // AES-GCM-ing the JSON document with a zero nonce (adoption
         // review: the get→add round trip regression).
-        if key
-            .private_key_encrypted
-            .starts_with(crate::crypto::ENVELOPE_MAGIC)
-        {
+        if crate::vault::envelope_ops::is_envelope_blob(&key.private_key_encrypted) {
             return Err(PasswordManagerError::InvalidInput(
                 "this SSH key's private-key field is already a v2 envelope from another \
                  row; to copy a key, export its plaintext and add via \
@@ -377,7 +374,7 @@ impl VaultManager {
             Ok((private_key_encrypted, nonce, auth_tag, sync_id)) => {
                 // Dual-read (WBS-304): a v2 envelope opens against the
                 // row's identity; legacy rows take the v1 three-part path.
-                if private_key_encrypted.starts_with(crate::crypto::ENVELOPE_MAGIC) {
+                if crate::vault::envelope_ops::is_envelope_blob(&private_key_encrypted) {
                     crate::vault::envelope_ops::open_object_field(
                         dek,
                         self.vault_uuid.as_deref(),

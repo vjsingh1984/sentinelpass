@@ -137,25 +137,24 @@ pub fn collect_pending_credential_blobs(
         let url = url_blob
             .filter(|b| !b.is_empty())
             .map(|b| open(crate::crypto::aad::EnvelopePurpose::Secret, &b))
-            .transpose()
-            .map_err(|e| {
-                tracing::warn!(entry_id, error = %e, "push: skipping entry (unreadable url)");
-                e
-            })?;
+            .transpose();
         let notes = notes_blob
             .filter(|b| !b.is_empty())
             .map(|b| open(crate::crypto::aad::EnvelopePurpose::Secret, &b))
-            .transpose()
-            .map_err(|e| {
-                tracing::warn!(entry_id, error = %e, "push: skipping entry (unreadable notes)");
-                e
-            })?;
+            .transpose();
+        let (url, notes) = match (url, notes) {
+            (Ok(u), Ok(n)) => (u, n),
+            (Err(e), _) | (_, Err(e)) => {
+                tracing::warn!(entry_id, error = %e, "push: skipping entry (unreadable url/notes)");
+                continue;
+            }
+        };
 
         let payload = CredentialPayload {
             title,
             username,
             password,
-            credential_type: CredentialType::parse(&credential_type)?,
+            credential_type: cred,
             url,
             notes,
             favorite,
@@ -273,7 +272,7 @@ pub fn collect_pending_ssh_key_blobs(
         // identity. v1 rows are the SSH three-part shape (ct + separate
         // nonce/tag columns). Per-row skip-and-warn: one unreadable row
         // must not wedge the whole push.
-        let private_key = if private_key_encrypted.starts_with(crate::crypto::ENVELOPE_MAGIC) {
+        let private_key = if crate::vault::envelope_ops::is_envelope_blob(&private_key_encrypted) {
             crate::vault::envelope_ops::open_object_field(
                 dek,
                 Some(vault_uuid.as_str()),
@@ -380,6 +379,9 @@ pub fn collect_pending_totp_blobs(
 
     let mut blobs = Vec::new();
 
+    // Fetched ONCE per push (fail-closed) — hoisted from the per-row loop.
+    let (vault_uuid, _epoch) = crate::vault::envelope_ops::read_local_identity(conn)?;
+
     for row in rows {
         let (
             sync_id_str,
@@ -421,12 +423,11 @@ pub fn collect_pending_totp_blobs(
         let parent_credential_sync_id = parent_sync_id_str.and_then(|s| Uuid::parse_str(&s).ok());
 
         // Decrypt for the wire payload (dual-read, WBS-304 — see SSH).
-        // Fetched ONCE per push (hoisted — see SSH collector).
-        let (vault_uuid, _epoch) = crate::vault::envelope_ops::read_local_identity(conn)?;
         // Class-aware dual-read (see SSH above): TOTP v1 rows are
         // ct + separate nonce/tag columns. Per-row skip-and-warn: one
-        // unreadable row must not wedge the whole push.
-        let secret = if secret_encrypted.starts_with(crate::crypto::ENVELOPE_MAGIC) {
+        // unreadable row must not wedge the whole push. (Identity was
+        // fetched once above the loop, with the SSH collector.)
+        let secret = if crate::vault::envelope_ops::is_envelope_blob(&secret_encrypted) {
             crate::vault::envelope_ops::open_object_field(
                 dek,
                 Some(vault_uuid.as_str()),
@@ -905,6 +906,30 @@ mod tests {
         assert_eq!(blobs[0].sync_id, sync_id);
         assert_eq!(blobs[0].entry_type, SyncEntryType::SshKey);
         assert!(!blobs[0].is_tombstone);
+
+        // Gate-review finding 6: the EMITTED wire payload must carry BOTH
+        // shapes — the current plaintext (for upgraded peers) AND the
+        // populated legacy triplet (for v0.8.x peers, whose structs
+        // require these fields). A collector refactor dropping either
+        // shape fails here instead of wedging a mixed fleet.
+        let payload_json =
+            crate::sync::crypto::decrypt_from_sync(&dek, &blobs[0].encrypted_payload).unwrap();
+        let payload: SshKeyPayload = serde_json::from_slice(&payload_json).unwrap();
+        assert!(!payload.private_key.is_empty(), "plaintext must be present");
+        let legacy = payload
+            .private_key_encrypted
+            .expect("legacy triplet must be emitted for v0.8.x peers");
+        assert!(!legacy.is_empty());
+        assert!(payload
+            .legacy_nonce
+            .as_deref()
+            .map(|n| n.len() == 12)
+            .unwrap_or(false));
+        assert!(payload
+            .legacy_auth_tag
+            .as_deref()
+            .map(|t| t.len() == 16)
+            .unwrap_or(false));
     }
 
     #[test]

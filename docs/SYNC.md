@@ -326,13 +326,17 @@ Sync v1 (experimental) degrades per-blob, not per-vault:
   deliberate tradeoff: the alternative (aborting the page) let ONE bad
   blob wedge a device's entire sync forever. Sync v2 (ADR-006) replaces
   this with a requeue/dead-letter mechanism.
-- **Mixed versions**: v0.8.x peers emit/require the legacy SSH/TOTP
-  payload shape. This build emits BOTH shapes for SSH/TOTP (current
-  plaintext + legacy context-free encryption) and accepts BOTH on pull,
-  so mixed fleets keep syncing entries — but an OLD peer receiving a
-  this-build SSH/TOTP blob wedges its pull (old builds abort the page on
-  unknown fields); upgrade both sides of a pairing when SSH/TOTP sync is
-  in use. Credential payloads are unchanged and interoperate freely.
+- **Mixed versions**: SSH/TOTP payloads interoperate in BOTH directions
+  with v0.8.x peers. This build emits the legacy triplet
+  (`private_key_encrypted`/`nonce`/`auth_tag` — a context-free
+  encryption of the same plaintext) alongside the current plaintext
+  fields, so an old peer applies the triplet and ignores the unknown
+  plaintext fields (plain serde derives, no `deny_unknown_fields`); and
+  this build accepts an old peer's legacy-only payload, decrypting the
+  triplet with the shared DEK. Credential payloads are unchanged. Note
+  an old peer stores/re-emits the context-free form (no envelope
+  identity) — upgrade both sides of a pairing so stored copies gain
+  the identity binding.
 
 ## Conflict Resolution
 

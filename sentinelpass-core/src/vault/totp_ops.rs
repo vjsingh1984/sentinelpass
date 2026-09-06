@@ -243,7 +243,7 @@ impl VaultManager {
 
         // Dual-read (WBS-304): v2 envelope against the row's identity,
         // else the v1 three-part path. Both normalize the base32.
-        let secret = if secret_encrypted.starts_with(crate::crypto::ENVELOPE_MAGIC) {
+        let secret = if crate::vault::envelope_ops::is_envelope_blob(&secret_encrypted) {
             let plaintext = crate::vault::envelope_ops::open_object_field(
                 dek,
                 self.vault_uuid.as_deref(),

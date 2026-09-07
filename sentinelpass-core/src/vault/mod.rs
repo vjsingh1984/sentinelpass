@@ -133,21 +133,29 @@ impl VaultManager {
         // `initialize_schema` merges our tables into the foreign file with
         // IF NOT EXISTS and the probe passes. A zero-byte file is allowed:
         // there is no data to destroy and SQLite treats it as a fresh
-        // database. `:memory:` passes naturally (the path never exists), so
-        // the dev/in-memory flow is unaffected.
-        match std::fs::metadata(&vault_path) {
-            Ok(meta) if meta.is_file() && meta.len() > 0 => {
-                return Err(PasswordManagerError::InvalidInput(format!(
-                    "a database file already exists at {} ({} bytes); refusing to \
-                     initialize a new vault over it — remove the file explicitly or \
-                     choose a different path",
-                    vault_path.display(),
-                    meta.len()
-                )));
+        // database. `:memory:` is skipped explicitly: on Unix its stat
+        // simply returns NotFound, but Windows rejects the reserved colon
+        // with ERROR_INVALID_NAME (code 123), which is NOT NotFound — the
+        // generic error arm would have refused every in-memory/dev vault
+        // (found by the Windows CI run of the WBS-306/308/315 cycle). A
+        // stat error on a real path is allowed through: we cannot confirm
+        // a file exists there, and Database::open below surfaces any
+        // genuine problem; the db_metadata probe inside the open still
+        // refuses resurrection of an existing SentinelPass vault.
+        if vault_path != std::path::Path::new(":memory:") {
+            match std::fs::metadata(&vault_path) {
+                Ok(meta) if meta.is_file() && meta.len() > 0 => {
+                    return Err(PasswordManagerError::InvalidInput(format!(
+                        "a database file already exists at {} ({} bytes); refusing to \
+                         initialize a new vault over it — remove the file explicitly or \
+                         choose a different path",
+                        vault_path.display(),
+                        meta.len()
+                    )));
+                }
+                Ok(_) => {}
+                Err(_) => {}
             }
-            Ok(_) => {}
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => return Err(PasswordManagerError::Io(e)),
         }
 
         // Create and initialize database

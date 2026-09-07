@@ -75,6 +75,39 @@ impl VaultManager {
         // Deprecated v1 columns — zero-filled on v2 rows (see envelope_ops).
         let (nonce, auth_tag) = crate::vault::envelope_ops::zeroed_legacy_v1_columns();
 
+        // Identity metadata sealed in place (WBS-306): issuer/account_name
+        // are user-identifying, so the columns now carry Summary-purpose
+        // envelopes under the row's own identity. NULL stays NULL (absence
+        // is a NULL, never an empty envelope). Legacy plaintext values in
+        // these columns are overwritten here — sealing is the write-path
+        // policy; the post-unlock sweep seals legacy rows.
+        let issuer_blob = issuer
+            .map(|value| {
+                crate::vault::envelope_ops::seal_object_field(
+                    dek,
+                    self.vault_uuid_str()?,
+                    &sync_id,
+                    crate::crypto::aad::ObjectType::TotpSecret,
+                    crate::crypto::aad::EnvelopePurpose::Summary,
+                    value,
+                    self.session_epoch(),
+                )
+            })
+            .transpose()?;
+        let account_name_blob = account_name
+            .map(|value| {
+                crate::vault::envelope_ops::seal_object_field(
+                    dek,
+                    self.vault_uuid_str()?,
+                    &sync_id,
+                    crate::crypto::aad::ObjectType::TotpSecret,
+                    crate::crypto::aad::EnvelopePurpose::Summary,
+                    value,
+                    self.session_epoch(),
+                )
+            })
+            .transpose()?;
+
         let now = Utc::now().timestamp();
 
         db.conn()
@@ -102,8 +135,8 @@ impl VaultManager {
                     algorithm.as_db_value(),
                     digits,
                     period,
-                    issuer,
-                    account_name,
+                    issuer_blob,
+                    account_name_blob,
                     now,
                     &sync_id,
                 ),
@@ -128,12 +161,15 @@ impl VaultManager {
             return Err(PasswordManagerError::VaultLocked);
         }
 
+        let dek = self.key_hierarchy.dek()?;
         let db = self.lock_db()?;
 
+        // issuer/account_name are dual-read (WBS-306): a v2 envelope opens
+        // against the row's identity; legacy plaintext bytes pass through.
         let mut stmt = db
             .conn()
             .prepare(
-                "SELECT totp_id, entry_id, algorithm, digits, period, issuer, account_name
+                "SELECT totp_id, entry_id, algorithm, digits, period, issuer, account_name, sync_id
                  FROM totp_secrets WHERE entry_id = ?1",
             )
             .map_err(|e| PasswordManagerError::from(DatabaseError::Sqlite(e)))?;
@@ -144,8 +180,11 @@ impl VaultManager {
             let algorithm: String = row.get(2)?;
             let digits: u8 = row.get(3)?;
             let period: u32 = row.get(4)?;
-            let issuer: Option<String> = row.get(5)?;
-            let account_name: Option<String> = row.get(6)?;
+            // Storage-polymorphic since WBS-306 (legacy TEXT vs envelope
+            // BLOB) — read dynamically, decode in open_metadata_text_field.
+            let issuer: Option<rusqlite::types::Value> = row.get(5)?;
+            let account_name: Option<rusqlite::types::Value> = row.get(6)?;
+            let sync_id: Option<String> = row.get(7)?;
             Ok((
                 totp_id,
                 entry_id,
@@ -154,11 +193,21 @@ impl VaultManager {
                 period,
                 issuer,
                 account_name,
+                sync_id,
             ))
         });
 
         match row {
-            Ok((totp_id, entry_id, algorithm_raw, digits, period, issuer, account_name)) => {
+            Ok((
+                totp_id,
+                entry_id,
+                algorithm_raw,
+                digits,
+                period,
+                issuer_blob,
+                account_blob,
+                sync_id,
+            )) => {
                 let algorithm = algorithm_raw
                     .parse::<crate::totp::TotpAlgorithm>()
                     .map_err(|_| {
@@ -167,6 +216,21 @@ impl VaultManager {
                             algorithm_raw
                         )))
                     })?;
+
+                let issuer = crate::vault::envelope_ops::open_metadata_text_field(
+                    dek,
+                    self.vault_uuid.as_deref(),
+                    sync_id.as_deref(),
+                    crate::crypto::aad::ObjectType::TotpSecret,
+                    issuer_blob,
+                )?;
+                let account_name = crate::vault::envelope_ops::open_metadata_text_field(
+                    dek,
+                    self.vault_uuid.as_deref(),
+                    sync_id.as_deref(),
+                    crate::crypto::aad::ObjectType::TotpSecret,
+                    account_blob,
+                )?;
 
                 Ok(crate::totp::TotpSecretMetadata {
                     totp_id,
@@ -287,5 +351,165 @@ impl VaultManager {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::totp::TotpAlgorithm;
+
+    const SECRET: &str = "JBSWY3DPEHPK3PXP";
+
+    fn test_vault() -> VaultManager {
+        VaultManager::create(":memory:", b"totp_test_password").unwrap()
+    }
+
+    fn add_entry(vault: &VaultManager) -> i64 {
+        vault
+            .add_entry(&crate::vault::Entry {
+                entry_id: None,
+                title: "TOTP entry".to_string(),
+                username: "user".to_string(),
+                password: "pw".to_string().into(),
+                url: None,
+                notes: None,
+                credential_type: crate::vault::CredentialType::Password,
+                created_at: Utc::now(),
+                modified_at: Utc::now(),
+                favorite: false,
+            })
+            .unwrap()
+    }
+
+    fn raw_metadata_columns(vault: &VaultManager) -> (Option<Vec<u8>>, Option<Vec<u8>>) {
+        let db = vault.db.lock().unwrap();
+        db.conn()
+            .query_row(
+                "SELECT issuer, account_name FROM totp_secrets LIMIT 1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap()
+    }
+
+    #[test]
+    fn issuer_and_account_are_sealed_and_round_trip() {
+        let vault = test_vault();
+        let entry_id = add_entry(&vault);
+        vault
+            .add_totp_secret(
+                entry_id,
+                SECRET,
+                TotpAlgorithm::Sha1,
+                6,
+                30,
+                Some("GitHub"),
+                Some("user@example.com"),
+            )
+            .unwrap();
+
+        // At rest: envelope documents, plaintext nowhere in the columns.
+        let (issuer, account) = raw_metadata_columns(&vault);
+        let issuer = issuer.expect("issuer was set");
+        assert!(issuer.starts_with(crate::crypto::ENVELOPE_MAGIC));
+        assert!(!String::from_utf8_lossy(&issuer).contains("GitHub"));
+        let account = account.expect("account_name was set");
+        assert!(account.starts_with(crate::crypto::ENVELOPE_MAGIC));
+        assert!(!String::from_utf8_lossy(&account).contains("user@example.com"));
+
+        // Reads return the exact values (dual-read, v2 arm).
+        let meta = vault.get_totp_metadata(entry_id).unwrap();
+        assert_eq!(meta.issuer.as_deref(), Some("GitHub"));
+        assert_eq!(meta.account_name.as_deref(), Some("user@example.com"));
+    }
+
+    #[test]
+    fn absent_issuer_stays_absent() {
+        let vault = test_vault();
+        let entry_id = add_entry(&vault);
+        vault
+            .add_totp_secret(entry_id, SECRET, TotpAlgorithm::Sha1, 6, 30, None, None)
+            .unwrap();
+        let (issuer, account) = raw_metadata_columns(&vault);
+        assert!(issuer.is_none() && account.is_none());
+        let meta = vault.get_totp_metadata(entry_id).unwrap();
+        assert!(meta.issuer.is_none() && meta.account_name.is_none());
+    }
+
+    #[test]
+    fn legacy_plaintext_metadata_still_reads() {
+        let vault = test_vault();
+        let entry_id = add_entry(&vault);
+        vault
+            .add_totp_secret(
+                entry_id,
+                SECRET,
+                TotpAlgorithm::Sha1,
+                6,
+                30,
+                Some("GitHub"),
+                Some("user@example.com"),
+            )
+            .unwrap();
+
+        // Pre-WBS-306 rows: plaintext TEXT in the columns.
+        {
+            let db = vault.db.lock().unwrap();
+            db.conn()
+                .execute(
+                    "UPDATE totp_secrets SET issuer = 'PlainIssuer', account_name = 'plain@example.com'",
+                    [],
+                )
+                .unwrap();
+        }
+        let meta = vault.get_totp_metadata(entry_id).unwrap();
+        assert_eq!(meta.issuer.as_deref(), Some("PlainIssuer"));
+        assert_eq!(meta.account_name.as_deref(), Some("plain@example.com"));
+    }
+
+    #[test]
+    fn tampered_issuer_envelope_fails_closed() {
+        let vault = test_vault();
+        let entry_id = add_entry(&vault);
+        vault
+            .add_totp_secret(
+                entry_id,
+                SECRET,
+                TotpAlgorithm::Sha1,
+                6,
+                30,
+                Some("GitHub"),
+                None,
+            )
+            .unwrap();
+
+        {
+            let db = vault.db.lock().unwrap();
+            let mut blob: Vec<u8> = db
+                .conn()
+                .query_row(
+                    "SELECT issuer FROM totp_secrets WHERE entry_id = ?1",
+                    [entry_id],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            let idx = blob.len() - 2;
+            blob[idx] ^= 0x01;
+            db.conn()
+                .execute(
+                    "UPDATE totp_secrets SET issuer = ?1 WHERE entry_id = ?2",
+                    rusqlite::params![&blob, entry_id],
+                )
+                .unwrap();
+        }
+
+        let err = vault.get_totp_metadata(entry_id).unwrap_err();
+        assert!(
+            err.to_string().to_lowercase().contains("envelope")
+                || err.to_string().contains("decrypt")
+                || err.to_string().contains("auth"),
+            "tamper must fail closed, got: {err}"
+        );
     }
 }

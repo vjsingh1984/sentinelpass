@@ -1,6 +1,7 @@
 //! Vault management - coordinates crypto and database layers
 
 mod biometric_ops;
+pub(crate) mod domain_ops;
 pub(crate) mod envelope_ops;
 pub(crate) mod epoch_guard;
 mod health_ops;
@@ -8,6 +9,7 @@ pub mod recovery;
 mod registry_ops;
 pub(crate) mod slot_ops;
 
+pub use domain_ops::DomainSweepReport;
 pub use slot_ops::{SlotSummary, SlotType};
 mod ssh_ops;
 mod sync_ops;
@@ -123,6 +125,39 @@ impl VaultManager {
         // Ensure data directory exists
         ensure_data_dir()?;
 
+        // Refuse to initialize over ANY existing non-empty database file
+        // (WBS-402 / ADR-005 rev 3). The db_metadata probe below only
+        // recognizes SentinelPass-shaped vaults; a legacy/foreign database
+        // (no db_metadata table) or an empty-schema one (db_metadata table
+        // present but zero rows) would otherwise be silently resurrected —
+        // `initialize_schema` merges our tables into the foreign file with
+        // IF NOT EXISTS and the probe passes. A zero-byte file is allowed:
+        // there is no data to destroy and SQLite treats it as a fresh
+        // database. `:memory:` is skipped explicitly: on Unix its stat
+        // simply returns NotFound, but Windows rejects the reserved colon
+        // with ERROR_INVALID_NAME (code 123), which is NOT NotFound — the
+        // generic error arm would have refused every in-memory/dev vault
+        // (found by the Windows CI run of the WBS-306/308/315 cycle). A
+        // stat error on a real path is allowed through: we cannot confirm
+        // a file exists there, and Database::open below surfaces any
+        // genuine problem; the db_metadata probe inside the open still
+        // refuses resurrection of an existing SentinelPass vault.
+        if vault_path != std::path::Path::new(":memory:") {
+            match std::fs::metadata(&vault_path) {
+                Ok(meta) if meta.is_file() && meta.len() > 0 => {
+                    return Err(PasswordManagerError::InvalidInput(format!(
+                        "a database file already exists at {} ({} bytes); refusing to \
+                         initialize a new vault over it — remove the file explicitly or \
+                         choose a different path",
+                        vault_path.display(),
+                        meta.len()
+                    )));
+                }
+                Ok(_) => {}
+                Err(_) => {}
+            }
+        }
+
         // Create and initialize database
         let db = Database::open(&vault_path)?;
         db.initialize_schema()?;
@@ -134,11 +169,13 @@ impl VaultManager {
         // Durable vault identity (WBS-301 / ADR-004 rev 4)
         let vault_uuid = uuid::Uuid::new_v4().to_string();
 
-        // Refuse to initialize over an existing vault: all in-repo creators
-        // guard with path-exists checks, but TOCTOU (a restore/copy racing
-        // init) or a direct embedder call would otherwise overwrite the old
-        // vault's rollback protection and then fail the INSERT — bricking
-        // the pre-existing vault (adversarial-review finding).
+        // Second create-guard layer (the file check above ran before the
+        // database existed): refuse if a db_metadata row appeared in the
+        // race window between the file check and this probe — TOCTOU (a
+        // restore/copy racing init) or a direct embedder call would
+        // otherwise overwrite the old vault's rollback protection and then
+        // fail the INSERT — bricking the pre-existing vault
+        // (adversarial-review finding).
         {
             let existing: bool = db
                 .conn()
@@ -378,6 +415,20 @@ impl VaultManager {
                 tracing::warn!(
                     error = %e,
                     "registry index backfill failed; will retry on next open"
+                );
+            }
+        }
+
+        // Domain-mapping index backfill (WBS-306): seal legacy plaintext
+        // mappings + write their lookup tags post-unlock (the migration is
+        // pure DDL — no DEK exists at migration time). Count-triggered and
+        // idempotent; a failed sweep retries on the next open. Best-effort:
+        // unbackfilled rows stay findable via the legacy plaintext fallback.
+        if vault_manager.domain_backfill_needed().unwrap_or(false) {
+            if let Err(e) = vault_manager.sweep_domain_mappings() {
+                tracing::warn!(
+                    error = %e,
+                    "domain-mapping index backfill failed; will retry on next open"
                 );
             }
         }
@@ -792,26 +843,12 @@ impl VaultManager {
         Ok(entries)
     }
 
-    /// Find entries matching a domain via the `domain_mappings` index.
-    ///
-    /// Returns only entries that have a domain mapping for the given domain.
-    /// Falls back to an empty list when no mappings exist (callers should
-    /// fall back to a full scan when domain_mappings are not yet populated).
+    /// Find entries matching a domain via the encrypted `domain_mappings`
+    /// index (WBS-306). Implemented in `domain_ops`: tag-set intersection
+    /// pre-filter, sealed-domain envelope verification, and a legacy
+    /// plaintext fallback for rows not yet backfilled.
     pub fn find_entries_by_domain(&self, domain: &str) -> Result<Vec<Entry>> {
-        if !self.is_unlocked() {
-            return Err(PasswordManagerError::VaultLocked);
-        }
-
-        let db = self.lock_db()?;
-        let repo = SqliteEntryRepository::new(&db);
-        let raw_rows = repo.find_by_domain(domain)?;
-
-        drop(db);
-
-        raw_rows
-            .iter()
-            .map(|row| self.decrypt_entry_row(row))
-            .collect::<Result<Vec<_>>>()
+        self.domain_lookup(domain)
     }
 
     /// List entries with pagination to prevent performance issues with large vaults.
@@ -1597,7 +1634,13 @@ impl VaultManager {
 }
 
 /// A password entry
-#[derive(Debug, Clone, Serialize, Deserialize)]
+///
+/// Debug is HAND-WRITTEN to redact the password (CLAUDE.md NEVER 1: log
+/// secrets). `Zeroizing`'s own `Debug` impl is transparent — it prints the
+/// INNER string — so the derived `Debug` this struct previously had would
+/// emit the plaintext password on the first accidental `{:?}` (WBS-308 /
+/// SR-CRYPTO-004).
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Entry {
     pub entry_id: Option<i64>,
     pub title: String,
@@ -1610,6 +1653,23 @@ pub struct Entry {
     pub created_at: DateTime<Utc>,
     pub modified_at: DateTime<Utc>,
     pub favorite: bool,
+}
+
+impl std::fmt::Debug for Entry {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Entry")
+            .field("entry_id", &self.entry_id)
+            .field("title", &self.title)
+            .field("username", &self.username)
+            .field("password", &"[REDACTED]")
+            .field("url", &self.url)
+            .field("notes", &self.notes)
+            .field("credential_type", &self.credential_type)
+            .field("created_at", &self.created_at)
+            .field("modified_at", &self.modified_at)
+            .field("favorite", &self.favorite)
+            .finish()
+    }
 }
 
 /// Read-only vault metadata (schema version, key epoch) obtainable

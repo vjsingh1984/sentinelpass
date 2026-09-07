@@ -24,7 +24,7 @@
 //! The display string IS the key material. Handlers must show it once,
 //! never log it, and drop it promptly.
 
-use zeroize::Zeroizing;
+use zeroize::{Zeroize, Zeroizing};
 
 use crate::{PasswordManagerError, Result};
 
@@ -146,10 +146,14 @@ impl RecoveryKey {
 /// characters (including U), padding-bit corruption, and ANY checksum
 /// mismatch — which includes every single-character substitution.
 pub fn parse_recovery_key(input: &str) -> Result<RecoveryKey> {
-    let normalized: Vec<u8> = input
-        .bytes()
-        .filter(|b| !b.is_ascii_whitespace() && *b != b'-')
-        .collect();
+    // The display form IS the key material (module docs): the normalized
+    // symbol buffer is zeroize-on-drop (WBS-308 / SR-CRYPTO-004).
+    let normalized = Zeroizing::new(
+        input
+            .bytes()
+            .filter(|b| !b.is_ascii_whitespace() && *b != b'-')
+            .collect::<Vec<u8>>(),
+    );
 
     if normalized.len() != TOTAL_SYMBOLS {
         return Err(PasswordManagerError::InvalidInput(format!(
@@ -159,21 +163,29 @@ pub fn parse_recovery_key(input: &str) -> Result<RecoveryKey> {
         )));
     }
 
+    // `values` are 5-bit slices of the key — key-derived material. They are
+    // zeroized before EVERY return below (the two validation errors cannot
+    // use a guard on a plain stack array).
     let mut values = [0u8; TOTAL_SYMBOLS];
     for (i, &c) in normalized.iter().enumerate() {
-        values[i] = symbol_value(c).ok_or_else(|| {
-            PasswordManagerError::InvalidInput(format!(
-                "recovery key contains invalid character {:?} at position {}",
-                c as char,
-                i + 1
-            ))
-        })?;
+        values[i] = match symbol_value(c) {
+            Some(v) => v,
+            None => {
+                values.zeroize();
+                return Err(PasswordManagerError::InvalidInput(format!(
+                    "recovery key contains invalid character {:?} at position {}",
+                    c as char,
+                    i + 1
+                )));
+            }
+        };
     }
 
     // Reconstruct the 32 body bytes from 52 × 5 bits. 52 × 5 = 260 bits:
     // the first 256 are the key; the FINAL symbol's low 4 bits are padding
     // and live past the last byte — checked on the symbol, not the byte.
     if values[BODY_SYMBOLS - 1] & 0x0F != 0 {
+        values.zeroize();
         return Err(PasswordManagerError::InvalidInput(
             "recovery key is malformed (padding bits set) — re-check the characters".to_string(),
         ));
@@ -197,6 +209,8 @@ pub fn parse_recovery_key(input: &str) -> Result<RecoveryKey> {
     let expected = crc10(&bytes);
     let provided = ((values[BODY_SYMBOLS] as u16) << 5) | values[BODY_SYMBOLS + 1] as u16;
     if expected != provided {
+        values.zeroize();
+        bytes.zeroize();
         return Err(PasswordManagerError::InvalidInput(
             "recovery key checksum mismatch — at least one character is wrong; \
              re-check the key against what was displayed"
@@ -204,6 +218,7 @@ pub fn parse_recovery_key(input: &str) -> Result<RecoveryKey> {
         ));
     }
 
+    values.zeroize();
     Ok(RecoveryKey::from_bytes(bytes))
 }
 

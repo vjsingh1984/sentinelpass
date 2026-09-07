@@ -194,9 +194,8 @@ pub(crate) fn open_object_field(
         // v1 legacy path: context-free bincode EncryptedEntry.
         let encrypted: crate::crypto::EncryptedEntry = bincode::deserialize(blob)
             .map_err(|e| PasswordManagerError::from(DatabaseError::Serialization(e.to_string())))?;
-        let s = crate::crypto::cipher::decrypt_to_string(dek, &encrypted)
-            .map_err(PasswordManagerError::from)?;
-        Ok(Zeroizing::new(s))
+        crate::crypto::cipher::decrypt_to_string(dek, &encrypted)
+            .map_err(PasswordManagerError::from)
     }
 }
 
@@ -217,6 +216,62 @@ pub(crate) fn open_entry_field_with_identity(
         None => (None, None, ObjectType::Password),
     };
     open_object_field(dek, vault_uuid, object_id, object_type, purpose, blob)
+}
+
+/// Dual-read a FORMERLY-plaintext TEXT metadata column (WBS-306: totp
+/// issuer/account_name, ssh comment) that may now hold a NULL, a legacy
+/// plaintext string, or a v2 envelope document.
+///
+/// The column value arrives as a DYNAMIC [`rusqlite::types::Value`]
+/// because the column is storage-polymorphic since WBS-306: legacy rows
+/// hold TEXT, v2 rows hold a BLOB envelope document. A typed
+/// `Option<Vec<u8>>` read would ERROR on the legacy TEXT rows (rusqlite is
+/// strictly typed even though SQLite is not) — the dynamic read is what
+/// makes dual-read actually dual.
+///
+/// - NULL → absent stays absent;
+/// - BLOB with the SPENV prefix → opened as a v2 envelope against the
+///   row's identity (Summary purpose — these are listing-time metadata);
+///   a v2 blob with no stable identity is tamper, not fallback;
+/// - TEXT → the legacy plaintext, passed through;
+/// - BLOB without the SPENV prefix → legacy bytes, UTF-8 decoded;
+/// - any other storage class → refused (never silently coerced).
+pub(crate) fn open_metadata_text_field(
+    dek: &crate::crypto::DataEncryptionKey,
+    vault_uuid: Option<&str>,
+    object_id: Option<&str>,
+    object_type: ObjectType,
+    value: Option<rusqlite::types::Value>,
+) -> Result<Option<String>> {
+    use rusqlite::types::Value;
+    match value {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::Text(s)) => Ok(Some(s)),
+        Some(Value::Blob(blob)) => {
+            if blob.starts_with(ENVELOPE_MAGIC) {
+                open_object_field(
+                    dek,
+                    vault_uuid,
+                    object_id,
+                    object_type,
+                    EnvelopePurpose::Summary,
+                    &blob,
+                )
+                .map(|z| Some(z.to_string()))
+            } else {
+                String::from_utf8(blob).map(Some).map_err(|_| {
+                    PasswordManagerError::from(DatabaseError::Serialization(
+                        "legacy metadata column is not valid UTF-8".to_string(),
+                    ))
+                })
+            }
+        }
+        Some(Value::Integer(_) | Value::Real(_)) => {
+            Err(PasswordManagerError::from(DatabaseError::Serialization(
+                "metadata column holds an unexpected storage class (integer/real)".to_string(),
+            )))
+        }
+    }
 }
 
 /// The sealed five-field blob set for one entry row (v2), with the

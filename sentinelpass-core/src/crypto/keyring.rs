@@ -38,6 +38,35 @@ pub fn derive_equality_key(dek: &DataEncryptionKey) -> Result<Zeroizing<Vec<u8>>
     Ok(okm)
 }
 
+/// HKDF `info` label binding the domain-mapping equality-tag key to its
+/// purpose (WBS-306 / ADR-005 rev 4).
+///
+/// Same derivation discipline as [`EQUALITY_KEY_INFO`]: HKDF-SHA256 over the
+/// DEK, empty salt, 32-byte output, purpose-bound label so the registry
+/// equality domain and the domain-lookup tag domain never share key input
+/// space (one PRF key per input domain — the reason this is a SECOND label
+/// rather than a reuse of `derive_equality_key`).
+///
+/// This value is part of the tag semantics: changing it changes every
+/// domain tag. Any change must ship together with a bump of
+/// `domain::DOMAIN_TAG_KEY_ID` so existing tag rows are rewritten under the
+/// new key instead of silently going unmatched.
+pub const DOMAIN_TAG_KEY_INFO: &[u8] = b"sentinelpass-domain-tag-v1";
+
+/// Derive the domain-mapping equality-tag key from a DEK.
+///
+/// Deterministic for a given DEK — which is what makes domain tags
+/// comparable across writes, lookups, and (paired) devices sharing that
+/// DEK. The returned buffer is zeroized on drop, is never persisted, and
+/// must not be cached across lock.
+pub fn derive_domain_tag_key(dek: &DataEncryptionKey) -> Result<Zeroizing<Vec<u8>>> {
+    let hk = Hkdf::<Sha256>::new(None, dek.as_bytes());
+    let mut okm = Zeroizing::new(vec![0u8; 32]);
+    hk.expand(DOMAIN_TAG_KEY_INFO, okm.as_mut_slice())
+        .map_err(|e| CryptoError::KdfFailed(format!("domain tag key derivation failed: {}", e)))?;
+    Ok(okm)
+}
+
 /// The master key derived from the master password
 ///
 /// This key is used to wrap/unwrap the data encryption key (DEK).
@@ -275,6 +304,16 @@ impl KeyHierarchy {
         derive_equality_key(self.dek()?)
     }
 
+    /// Derive the purpose-bound domain-tag key for encrypted domain lookups
+    /// (see [`derive_domain_tag_key`]).
+    ///
+    /// Available on every unlock path — biometric unlock reaches the same
+    /// DEK, so domain tags are computable regardless of how the vault was
+    /// unlocked.
+    pub fn domain_tag_key(&self) -> Result<Zeroizing<Vec<u8>>> {
+        derive_domain_tag_key(self.dek()?)
+    }
+
     /// Wrap the DEK with the master key
     fn wrap_dek(&self) -> Result<WrappedKey> {
         let master_key = self
@@ -366,15 +405,21 @@ impl KeyHierarchy {
         let mut ciphertext_with_tag = wrapped.wrapped_dek.clone();
         ciphertext_with_tag.extend_from_slice(&wrapped.auth_tag);
 
-        let dek_bytes = cipher
-            .decrypt(
-                &nonce,
-                aes_gcm::aead::Payload {
-                    msg: ciphertext_with_tag.as_ref(),
-                    aad: aad.unwrap_or(&[]),
-                },
-            )
-            .map_err(|_| CryptoError::AuthenticationFailed)?;
+        // The unwrapped DEK is raw key material (WBS-308 / SR-CRYPTO-004):
+        // the plaintext buffer is zeroized on drop, covering both the
+        // success path (after the copy into the fixed-size key below) and
+        // the length-mismatch error path.
+        let dek_bytes = Zeroizing::new(
+            cipher
+                .decrypt(
+                    &nonce,
+                    aes_gcm::aead::Payload {
+                        msg: ciphertext_with_tag.as_ref(),
+                        aad: aad.unwrap_or(&[]),
+                    },
+                )
+                .map_err(|_| CryptoError::AuthenticationFailed)?,
+        );
 
         if dek_bytes.len() != 32 {
             return Err(CryptoError::DecryptionFailed(format!(
@@ -383,11 +428,11 @@ impl KeyHierarchy {
             )));
         }
 
-        let dek_array: [u8; 32] = dek_bytes
-            .try_into()
-            .map_err(|_| CryptoError::DecryptionFailed("Invalid DEK format".to_string()))?;
+        let mut dek_array = [0u8; 32];
+        dek_array.copy_from_slice(&dek_bytes);
 
-        Ok(DataEncryptionKey::from_bytes(&mut { dek_array }))
+        // `from_bytes` zeroizes the stack array after copying into the key.
+        Ok(DataEncryptionKey::from_bytes(&mut dek_array))
     }
 }
 

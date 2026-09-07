@@ -458,6 +458,21 @@ mod tests {
         }
     }
 
+    /// WBS-308 / SR-CRYPTO-004 type-level guard: `open_envelope` (both
+    /// epoch modes) must return a zeroizing plaintext buffer. Relaxing the
+    /// signature to a bare `Vec<u8>` stops this test from compiling.
+    #[test]
+    fn open_envelope_returns_zeroizing_plaintext() {
+        fn require_zeroing_vec(_: &Zeroizing<Vec<u8>>) {}
+
+        let dek = DataEncryptionKey::new().unwrap();
+        let doc = seal_envelope(&dek, ctx(EnvelopePurpose::Secret), b"guard", 64).unwrap();
+        require_zeroing_vec(&open_envelope(&dek, ctx(EnvelopePurpose::Secret), &doc).unwrap());
+        require_zeroing_vec(
+            &open_envelope_relaxed_epoch(&dek, ctx(EnvelopePurpose::Secret), &doc).unwrap(),
+        );
+    }
+
     #[test]
     fn empty_plaintext_is_present_not_absent() {
         // A zero-length plaintext round-trips — it models a field that IS

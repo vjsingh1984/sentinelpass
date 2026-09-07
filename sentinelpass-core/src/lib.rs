@@ -9,6 +9,7 @@ pub mod biometric;
 pub mod crypto;
 pub mod daemon;
 pub mod database;
+pub mod domain;
 pub mod external_secret_access;
 pub mod import_export;
 pub mod keepass;
@@ -82,6 +83,14 @@ pub enum DatabaseError {
 
     #[error("Schema mismatch: expected {expected}, found {found}")]
     SchemaMismatch { expected: i32, found: i32 },
+
+    #[error(
+        "vault schema version {found} is newer than this build supports ({supported}). \
+         The vault was created or migrated by a newer version of SentinelPass; \
+         upgrade this application and retry. The vault was NOT opened: no entry \
+         data was read or modified (fail-closed, WBS-315 / SR-CRYPTO-005)"
+    )]
+    UnsupportedFutureSchema { found: i32, supported: i32 },
 
     #[error("{0}")]
     Other(String),

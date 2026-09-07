@@ -282,7 +282,7 @@ fn test_ssh_key_encrypt_decrypt_roundtrip() {
     let decrypted =
         crate::ssh::SshKey::decrypt_private_key(&dek, &encrypted, &nonce, &auth_tag).unwrap();
 
-    assert_eq!(decrypted, private_key);
+    assert_eq!(decrypted.as_str(), private_key);
 }
 
 #[test]
@@ -2645,4 +2645,387 @@ fn entity_ssh_totp_fields_are_sealed_v2() {
     drop(vault);
     let _ = fs::remove_file(&path);
     let _ = fs::remove_file(crate::vault::epoch_guard::sidecar_path(&path));
+}
+
+/// WBS-315 (fail closed on newer vault versions) and WBS-402 (create guard
+/// over legacy/empty-schema databases) acceptance evidence.
+mod wbs315_wbs402_fail_closed {
+    use super::*;
+    use crate::database::schema::CURRENT_SCHEMA_VERSION;
+    use std::fs;
+    use tempfile::TempDir;
+
+    fn test_entry(title: &str) -> Entry {
+        Entry {
+            entry_id: None,
+            title: title.to_string(),
+            username: "user@example.com".to_string(),
+            password: "secret123".to_string().into(),
+            url: Some("https://example.com".to_string()),
+            notes: None,
+            credential_type: CredentialType::Password,
+            created_at: Utc::now(),
+            modified_at: Utc::now(),
+            favorite: false,
+        }
+    }
+
+    // --- WBS-402(a): create() refuses over ANY existing non-empty database --
+
+    /// The db_metadata EXISTS probe alone only recognizes SentinelPass-shaped
+    /// vaults. A legacy/foreign database (no db_metadata table) or an
+    /// empty-schema one (db_metadata present but zero rows) must ALSO be
+    /// refused, and the pre-existing file must be left alone (no schema
+    /// merging, no resurrection).
+    #[test]
+    fn create_refuses_legacy_and_empty_schema_databases() {
+        let password = b"test_password";
+
+        // Case A: a foreign database with no db_metadata table at all.
+        let dir_a = TempDir::new().unwrap();
+        let foreign_path = dir_a.path().join("foreign.db");
+        {
+            let conn = rusqlite::Connection::open(&foreign_path).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE legacy_notes (note TEXT);
+                 INSERT INTO legacy_notes VALUES ('keep me');",
+            )
+            .unwrap();
+        }
+        let Err(err) = VaultManager::create(&foreign_path, password) else {
+            panic!("foreign database must be refused");
+        };
+        assert!(
+            matches!(err, PasswordManagerError::InvalidInput(ref m) if m.contains("already exists")),
+            "foreign database must be refused, got: {err}"
+        );
+        {
+            let conn = rusqlite::Connection::open(&foreign_path).unwrap();
+            let note: String = conn
+                .query_row("SELECT note FROM legacy_notes LIMIT 1", [], |r| r.get(0))
+                .unwrap();
+            assert_eq!(note, "keep me", "pre-existing data must be untouched");
+            let metadata_table: bool = conn
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='db_metadata')",
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert!(
+                !metadata_table,
+                "create must not merge its schema into the refused file"
+            );
+        }
+
+        // Case B: a SentinelPass-shaped database whose db_metadata exists but
+        // has ZERO rows (the gap the row-level probe could not close).
+        let dir_b = TempDir::new().unwrap();
+        let empty_schema_path = dir_b.path().join("empty_schema.db");
+        {
+            let conn = rusqlite::Connection::open(&empty_schema_path).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE db_metadata (
+                    id INTEGER PRIMARY KEY CHECK (id = 1),
+                    version INTEGER NOT NULL,
+                    kdf_params BLOB NOT NULL,
+                    wrapped_dek BLOB NOT NULL,
+                    dek_nonce BLOB NOT NULL,
+                    created_at INTEGER NOT NULL,
+                    last_modified INTEGER NOT NULL,
+                    biometric_ref TEXT
+                );",
+            )
+            .unwrap();
+        }
+        let Err(err) = VaultManager::create(&empty_schema_path, password) else {
+            panic!("empty-schema database must be refused");
+        };
+        assert!(
+            matches!(err, PasswordManagerError::InvalidInput(ref m) if m.contains("already exists")),
+            "empty-schema database must be refused, got: {err}"
+        );
+        {
+            let conn = rusqlite::Connection::open(&empty_schema_path).unwrap();
+            let row_count: i64 = conn
+                .query_row("SELECT COUNT(*) FROM db_metadata", [], |r| r.get(0))
+                .unwrap();
+            assert_eq!(row_count, 0, "refused file must stay empty");
+            let key_slots: bool = conn
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='key_slots')",
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert!(
+                !key_slots,
+                "create must not merge its schema into the refused file"
+            );
+        }
+    }
+
+    /// A real vault at the path is refused on re-create and remains fully
+    /// intact and openable — the guard must not damage what it protects.
+    #[test]
+    fn create_refuses_over_existing_vault_preserving_it() {
+        let dir = TempDir::new().unwrap();
+        let vault_path = dir.path().join("vault.db");
+        let password = b"correct horse battery";
+
+        {
+            let vault = VaultManager::create(&vault_path, password).unwrap();
+            vault.add_entry(&test_entry("keep me")).unwrap();
+        }
+
+        let Err(err) = VaultManager::create(&vault_path, password) else {
+            panic!("re-create over a real vault must be refused");
+        };
+        assert!(
+            matches!(err, PasswordManagerError::InvalidInput(ref m) if m.contains("already exists")),
+            "re-create over a real vault must be refused, got: {err}"
+        );
+
+        // The refused-create attempt must not have touched the vault.
+        let reopened = VaultManager::open(&vault_path, password).unwrap();
+        assert_eq!(reopened.list_entries().unwrap().len(), 1);
+    }
+
+    /// Positive controls: the guard must never block legitimate creates — a
+    /// fresh path, a pre-existing ZERO-byte file (no data to destroy), and
+    /// the in-memory/`--dev` flow.
+    #[test]
+    fn create_allows_fresh_zero_byte_and_memory_paths() {
+        let password = b"test_password";
+        let dir = TempDir::new().unwrap();
+
+        // Fresh path.
+        let fresh = dir.path().join("fresh.db");
+        assert!(VaultManager::create(&fresh, password).is_ok());
+
+        // Zero-byte file (e.g. touch(1) leftover): SQLite treats it as a new
+        // database; there is nothing to destroy.
+        let touched = dir.path().join("touched.db");
+        fs::write(&touched, b"").unwrap();
+        {
+            let vault = VaultManager::create(&touched, password).unwrap();
+            vault.add_entry(&test_entry("ok")).unwrap();
+        }
+        assert!(VaultManager::open(&touched, password).is_ok());
+
+        // In-memory (`:memory:` — also what the CLI `--dev` flow passes).
+        assert!(VaultManager::create(":memory:", password).is_ok());
+    }
+
+    // --- WBS-315: open fails closed on a newer schema version --------------
+
+    /// End-to-end: a vault whose db_metadata version is CURRENT+1 is refused
+    /// with the TYPED compatibility error on VaultManager::open, before any
+    /// entry-table read (the entries table is renamed away — any attempt to
+    /// read it would surface as a Sqlite error, not the typed version error)
+    /// and without mutating the file (version and entry data unchanged).
+    #[test]
+    fn open_refuses_newer_schema_version_without_reading_or_mutating_entries() {
+        let dir = TempDir::new().unwrap();
+        let vault_path = dir.path().join("future.db");
+        let password = b"test_password";
+
+        {
+            let vault = VaultManager::create(&vault_path, password).unwrap();
+            vault
+                .add_entry(&test_entry("sealed before the future"))
+                .unwrap();
+        }
+
+        let future = CURRENT_SCHEMA_VERSION + 1;
+        {
+            let conn = rusqlite::Connection::open(&vault_path).unwrap();
+            conn.execute(
+                "UPDATE db_metadata SET version = ?1 WHERE id = 1",
+                rusqlite::params![future],
+            )
+            .unwrap();
+            // Malform the entry store: if the open read entries BEFORE the
+            // version gate, the failure mode would be a Sqlite error instead
+            // of the typed compatibility error.
+            conn.execute_batch("ALTER TABLE entries RENAME TO entries_evolved;")
+                .unwrap();
+        }
+
+        let Err(err) = VaultManager::open(&vault_path, password) else {
+            panic!("newer-version vault must fail closed");
+        };
+        match err {
+            PasswordManagerError::Database(DatabaseError::UnsupportedFutureSchema {
+                found,
+                supported,
+            }) => {
+                assert_eq!(found, future);
+                assert_eq!(supported, CURRENT_SCHEMA_VERSION);
+            }
+            other => panic!(
+                "newer-version vault must fail closed with UnsupportedFutureSchema, got {other}"
+            ),
+        }
+
+        // The refused open must not have mutated anything: the version row is
+        // untouched and the entry data is still there for the newer binary.
+        {
+            let conn = rusqlite::Connection::open(&vault_path).unwrap();
+            let version: i32 = conn
+                .query_row("SELECT version FROM db_metadata WHERE id = 1", [], |r| {
+                    r.get(0)
+                })
+                .unwrap();
+            assert_eq!(version, future, "the refused open must not write");
+            let title: Vec<u8> = conn
+                .query_row("SELECT title FROM entries_evolved LIMIT 1", [], |r| {
+                    r.get(0)
+                })
+                .unwrap();
+            assert!(
+                crate::vault::envelope_ops::is_envelope_blob(&title),
+                "entry data must be untouched by the refused open"
+            );
+        }
+    }
+
+    /// WBS-315 composition with the envelope layer: in an otherwise-CURRENT
+    /// vault, a stored entry field whose envelope document claims a NEWER
+    /// envelope_version is refused on read with the typed
+    /// UnsupportedCryptoVersion error — not a generic authentication failure,
+    /// and never silently ignored.
+    #[test]
+    fn future_envelope_version_refused_when_reading_current_vault() {
+        let password = b"test_password";
+        let vault = VaultManager::create(":memory:", password).unwrap();
+        let entry_id = vault.add_entry(&test_entry("tamper target")).unwrap();
+
+        {
+            let db = vault.lock_db().unwrap();
+            db.conn()
+                .execute(
+                    "UPDATE entries SET title = CAST(replace(CAST(title AS TEXT),
+                        '\"envelope_version\":2', '\"envelope_version\":3') AS BLOB)
+                     WHERE entry_id = ?1",
+                    rusqlite::params![entry_id],
+                )
+                .unwrap();
+        }
+
+        match vault.get_entry(entry_id) {
+            Err(PasswordManagerError::Crypto(
+                crate::crypto::CryptoError::UnsupportedCryptoVersion { found, supported },
+            )) => {
+                assert_eq!(found, 3);
+                assert_eq!(supported, 2);
+            }
+            other => panic!(
+                "future envelope_version must fail closed as UnsupportedCryptoVersion, got {other:?}"
+            ),
+        }
+    }
+}
+
+// --- WBS-308 / SR-CRYPTO-004: secret redaction & zeroizing shape ---------
+
+/// `Zeroizing`'s own `Debug` PRINTS the inner string, so `Entry`'s Debug
+/// must be hand-redacted. If anyone re-derives `Debug` on `Entry` (or makes
+/// `password` a bare `String` again), the password reappears in `{:?}` and
+/// this test fails.
+#[test]
+fn entry_debug_never_contains_the_password() {
+    let entry = Entry {
+        entry_id: Some(1),
+        title: "Bank Portal".to_string(),
+        username: "user1".to_string(),
+        password: "s3cr3t-p4ssw0rd".to_string().into(),
+        url: Some("https://bank.example".to_string()),
+        notes: Some("note".to_string()),
+        credential_type: crate::CredentialType::Password,
+        created_at: chrono::Utc::now(),
+        modified_at: chrono::Utc::now(),
+        favorite: false,
+    };
+
+    let dbg = format!("{entry:?}");
+    assert!(
+        !dbg.contains("s3cr3t-p4ssw0rd"),
+        "Entry Debug leaked the password: {dbg}"
+    );
+    assert!(
+        dbg.contains("[REDACTED]"),
+        "redaction marker expected: {dbg}"
+    );
+}
+
+/// Type-level guard: `Entry.password` must remain a zeroizing type. The
+/// helper call below only compiles while the field is `Zeroizing<String>`.
+#[test]
+fn entry_password_field_is_zeroizing() {
+    fn require_zeroing_string(_: &Zeroizing<String>) {}
+
+    let entry = Entry {
+        entry_id: None,
+        title: "t".to_string(),
+        username: "u".to_string(),
+        password: "p".to_string().into(),
+        url: None,
+        notes: None,
+        credential_type: crate::CredentialType::Password,
+        created_at: chrono::Utc::now(),
+        modified_at: chrono::Utc::now(),
+        favorite: false,
+    };
+    require_zeroing_string(&entry.password);
+}
+
+/// WBS-306: the post-unlock domain-mapping backfill runs at vault open —
+/// a legacy plaintext mapping (pre-v8 shape) becomes tag-searchable with
+/// suffix-chain semantics WITHOUT any explicit user action, right after
+/// the first open by a v8 binary.
+#[test]
+fn domain_mapping_backfill_runs_at_open() {
+    let temp = TempDir::new().unwrap();
+    let path = temp.path().join("domain-backfill.db");
+    let password = b"domain_backfill_password";
+
+    let vault = VaultManager::create(&path, password).unwrap();
+    let entry_id = vault
+        .add_entry(&Entry {
+            entry_id: None,
+            title: "Backfill".to_string(),
+            username: "user@example.com".to_string(),
+            password: "backfill-secret".to_string().into(),
+            url: None,
+            notes: None,
+            credential_type: CredentialType::Password,
+            created_at: Utc::now(),
+            modified_at: Utc::now(),
+            favorite: false,
+        })
+        .unwrap();
+    // Pre-v8 shape: plaintext-only mapping row (domain_enc NULL, no tags).
+    {
+        let db = vault.db.lock().unwrap();
+        db.conn()
+            .execute(
+                "INSERT INTO domain_mappings (entry_id, domain, is_primary) VALUES (?1, 'open.example', 1)",
+                [entry_id],
+            )
+            .unwrap();
+    }
+
+    // Pre-reopen: legacy fallback is exact-match only, so the suffix query
+    // must NOT match yet.
+    assert!(vault
+        .find_entries_by_domain("sub.open.example")
+        .unwrap()
+        .is_empty());
+    drop(vault);
+
+    let reopened = VaultManager::open(&path, password).unwrap();
+    let found = reopened.find_entries_by_domain("sub.open.example").unwrap();
+    assert_eq!(found.len(), 1, "open-time sweep must backfill tags");
+    assert_eq!(found[0].password.as_str(), "backfill-secret");
 }
